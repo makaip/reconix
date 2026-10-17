@@ -1,15 +1,19 @@
-import { useState } from 'react'
+import { useState, type CSSProperties } from 'react'
 import plus from '../../assets/icons/plus.svg'
 import { findings, sitemap } from '../../mock/data'
 import FindingCard from './FindingCard'
 import SectionHeader from './SectionHeader'
 import SitemapRow from './SitemapRow'
 
-function Sidebar(): JSX.Element {
+type SidebarProps = {
+  style?: CSSProperties
+}
+
+function Sidebar({ style }: SidebarProps): JSX.Element {
   const [selectedId, setSelectedId] = useState('dashboard')
 
   return (
-    <aside className="sidebar" aria-label="Sitemap and findings">
+    <aside className="sidebar" aria-label="Sitemap and findings" style={style}>
       <div className="sidebar__scroll">
         <SectionHeader label="Sitemap" count={sitemap.length} />
         {sitemap.map((node) => (

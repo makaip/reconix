@@ -1,0 +1,52 @@
+import { useCallback, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
+
+type Axis = 'x' | 'y'
+
+type UseResizableOptions = {
+  axis: Axis
+  initial: number
+  min: number
+  max: number
+  /** Flip the drag direction — for a handle on a panel's trailing edge (right sidebar,
+   *  bottom panel) where dragging toward the panel should still grow it. */
+  invert?: boolean
+}
+
+export type Resizable = {
+  size: number
+  dragging: boolean
+  onHandlePointerDown: (event: ReactPointerEvent<HTMLDivElement>) => void
+}
+
+/** Drag-to-resize for a single flex panel. Size is held in state, not persisted. */
+export function useResizable({ axis, initial, min, max, invert = false }: UseResizableOptions): Resizable {
+  const [size, setSize] = useState(initial)
+  const [dragging, setDragging] = useState(false)
+  const startSize = useRef(initial)
+  const startPos = useRef(0)
+
+  const onHandlePointerDown = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      event.preventDefault()
+      startSize.current = size
+      startPos.current = axis === 'x' ? event.clientX : event.clientY
+      setDragging(true)
+
+      const onMove = (moveEvent: PointerEvent): void => {
+        const pos = axis === 'x' ? moveEvent.clientX : moveEvent.clientY
+        const delta = (pos - startPos.current) * (invert ? -1 : 1)
+        setSize(Math.min(max, Math.max(min, startSize.current + delta)))
+      }
+      const onUp = (): void => {
+        setDragging(false)
+        window.removeEventListener('pointermove', onMove)
+        window.removeEventListener('pointerup', onUp)
+      }
+      window.addEventListener('pointermove', onMove)
+      window.addEventListener('pointerup', onUp)
+    },
+    [axis, invert, max, min, size]
+  )
+
+  return { size, dragging, onHandlePointerDown }
+}

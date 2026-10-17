@@ -3,11 +3,13 @@ import CopilotPanel from './components/copilot/CopilotPanel'
 import DevToolsPanel from './components/devtools/DevToolsPanel'
 import Sidebar from './components/sidebar/Sidebar'
 import ViewSlot from './components/ViewSlot'
+import ResizeHandle from './components/chrome/ResizeHandle'
 import StatusBar from './components/chrome/StatusBar'
 import TabBar from './components/chrome/TabBar'
 import Toolbar from './components/chrome/Toolbar'
 import { useCopilot, type NodeRef } from './hooks/useCopilot'
 import { useNetworkStats } from './hooks/useNetworkStats'
+import { useResizable } from './hooks/useResizable'
 import { useTabs } from './hooks/useTabs'
 
 const setTargetBounds = window.reconix.target.setBounds
@@ -18,6 +20,11 @@ function App(): JSX.Element {
   const network = useNetworkStats()
   const [draggedNode, setDraggedNode] = useState<NodeRef | null>(null)
   const [copilotOpen, setCopilotOpen] = useState(true)
+
+  // Panel sizes are drag-resizable; see shell.css for the matching defaults these fall back to.
+  const sidebarResize = useResizable({ axis: 'x', initial: 240, min: 180, max: 480 })
+  const copilotResize = useResizable({ axis: 'x', initial: 360, min: 280, max: 560, invert: true })
+  const devtoolsResize = useResizable({ axis: 'y', initial: 380, min: 160, max: 640, invert: true })
 
   const activeTab = tabs.tabs.find((tab) => tab.id === tabs.activeId)
   const requestCount = tabs.activeId === null ? 0 : (network.perTab[tabs.activeId] ?? 0)
@@ -40,27 +47,46 @@ function App(): JSX.Element {
       />
 
       <div className="shell">
-        <Sidebar />
+        <Sidebar style={{ flexBasis: sidebarResize.size }} />
+        <ResizeHandle
+          orientation="vertical"
+          dragging={sidebarResize.dragging}
+          onPointerDown={sidebarResize.onHandlePointerDown}
+        />
 
         <main className="center">
           <section className="viewport" aria-label="Target page">
             <ViewSlot className="viewport__slot" onBoundsChange={setTargetBounds} />
           </section>
+          <ResizeHandle
+            orientation="horizontal"
+            dragging={devtoolsResize.dragging}
+            onPointerDown={devtoolsResize.onHandlePointerDown}
+          />
           <DevToolsPanel
             activeTabId={tabs.activeId}
             onNodeDragStart={setDraggedNode}
             onNodeDragEnd={() => setDraggedNode(null)}
+            style={{ flexBasis: devtoolsResize.size }}
           />
         </main>
 
         {copilotOpen && (
-          <CopilotPanel
-            copilot={copilot}
-            draggedNode={draggedNode}
-            onNodeDrop={() => setDraggedNode(null)}
-            onClose={() => setCopilotOpen(false)}
-            requestCount={requestCount}
-          />
+          <>
+            <ResizeHandle
+              orientation="vertical"
+              dragging={copilotResize.dragging}
+              onPointerDown={copilotResize.onHandlePointerDown}
+            />
+            <CopilotPanel
+              copilot={copilot}
+              draggedNode={draggedNode}
+              onNodeDrop={() => setDraggedNode(null)}
+              onClose={() => setCopilotOpen(false)}
+              requestCount={requestCount}
+              style={{ flexBasis: copilotResize.size }}
+            />
+          </>
         )}
       </div>
 

@@ -3,6 +3,7 @@ import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { attachInspector } from './inspector'
 import { startNetworkCapture, type NetworkCapture } from './network'
+import { createSessionManager } from './session'
 import { createTabManager } from './tabs'
 
 // keep in sync with --tabbar-height and --color-bg-deep in tokens.css
@@ -53,6 +54,7 @@ function createWindow(): void {
     onTabClosed: (tabId) => network?.forgetTab(tabId)
   })
   network = startNetworkCapture(mainWindow, tabs)
+  createSessionManager(mainWindow)
 
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])

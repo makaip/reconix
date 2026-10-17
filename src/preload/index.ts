@@ -1,4 +1,13 @@
 import { contextBridge, ipcRenderer } from 'electron'
+import type {
+  AgentSessionState,
+  AgentTask,
+  ApprovalDecision,
+  ApprovalRequest,
+  Finding,
+  StartAgentParams,
+  ToolDescriptor
+} from '../shared/agent'
 import type { CdpNode, DevToolsEvent, NodeContext, StyleRule } from '../shared/devtools'
 import type { CapturedRequest, NavigateResult, NetworkStats, TabsState } from '../shared/tabs'
 
@@ -55,6 +64,24 @@ const api = {
       ipcRenderer.on('devtools:event', listener)
       return () => ipcRenderer.removeListener('devtools:event', listener)
     }
+  },
+  agent: {
+    start: (params: StartAgentParams): Promise<AgentSessionState> =>
+      ipcRenderer.invoke('agent:start', params),
+    pause: (): Promise<void> => ipcRenderer.invoke('agent:pause'),
+    resume: (): Promise<void> => ipcRenderer.invoke('agent:resume'),
+    getState: (): Promise<AgentSessionState> => ipcRenderer.invoke('agent:get-state'),
+    listTools: (): Promise<ToolDescriptor[]> => ipcRenderer.invoke('tool:list'),
+    respondToApproval: (decision: ApprovalDecision): Promise<void> =>
+      ipcRenderer.invoke('approval:respond', decision),
+    onState: (callback: (state: AgentSessionState) => void): (() => void) =>
+      subscribe('agent:state', callback),
+    onPlanUpdate: (callback: (tasks: AgentTask[]) => void): (() => void) =>
+      subscribe('plan:update', callback),
+    onApprovalRequest: (callback: (request: ApprovalRequest) => void): (() => void) =>
+      subscribe('approval:request', callback),
+    onFinding: (callback: (finding: Finding) => void): (() => void) =>
+      subscribe('finding:new', callback)
   }
 }
 
