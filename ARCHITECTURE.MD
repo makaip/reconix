@@ -376,3 +376,84 @@ Tiers: **R** read-only (auto) · **P** page-mutating, sandbox-only (auto) · **M
 **MVP subset:** session/scope + navigation/read + page-interaction + `screenshot` + `query_log` + `record_finding` + `probe_reflection`. Network interception, `vary_parameter`, `run_tool` come after the spine is green.
 
 **Never exposed:** raw `cdp.send`, `Target.*`/`Browser.*` creation/attach, any shell/file/eval-into-UI capability.
+
+## 11. Path to product — feature gap analysis
+
+The MVP proves the architecture (agent → MCP → scope-checked tool → audited action). It does not yet have the feature surface a pentester would choose over Burp/ZAP/Caido. This section inventories what's missing, maps each item to the tiering/ownership model already frozen in Sections 5–6, and orders it so nothing here requires re-opening a frozen contract.
+
+**How to read this table:** *Tier* uses the existing R/P/M/D scale. *Vertical* uses the existing A/B/C/D ownership split. *Seam?* flags whether the item is pure addition (new tool/table, no contract change) or touches a frozen contract (6.1–6.6) and therefore needs sign-off from all four owners before work starts.
+
+### 11.1 Traffic & request-manipulation core
+
+The category Burp/ZAP/Caido win on today. Most of this is new MCP tools under C's existing pipeline — no new enforcement model needed, just more named, tiered tools.
+
+| Feature | Tier | Vertical | Seam? |
+|---|---|---|---|
+| Repeater — save/tag/diff arbitrary requests, response comparison view | R/M | C (tools) + A (UI panel) | No — new tool + new UI panel |
+| Intruder/fuzzer at scale (payload positions, wordlists, grep-match/extract) | M, rate-limited | C + D (rate limit) + E (payload gen, already scoped in 5.E) | No |
+| Match/replace rules (auto-rewrite headers/tokens on the fly) | M | C | No |
+| Full sitemap built passively from navigation history | R | C (populate) + A (render) | No — reads existing `tool_calls`/trace data |
+| HAR import/export | R | B (store) + A (export UI) | No |
+| Request history: filter by host/status/param/size, regex search | R | B (query) + A (UI) | Extends `query_log` — check it stays narrow (6.4 note) |
+
+### 11.2 Session & auth-flow tooling
+
+This is where an AI-driven, multi-session browser can actually beat the incumbents (Section 1 objective: "observable autonomy," Section 5.A target-view partitioning already supports this).
+
+| Feature | Tier | Vertical | Seam? |
+|---|---|---|---|
+| Multiple concurrent isolated sessions (user A / user B / admin) for IDOR/authz diffing | P/M | A (partition mgmt, extends 5.A's `persist:target-<engagementId>` pattern) + C (session-switch tool) | **Yes** — extends the partition-per-engagement model to partition-per-session-within-engagement; needs 6.1 (`session:switch` IPC) and 6.4 (tag `tool_calls` with session id) |
+| Record/replay login flows, token refresh | M | C | No |
+| JWT decode/edit/resign | P (decode), M (resign+replay) | E (decode/edit as pure-compute) + C (replay) | No — fits the existing 5.E "generate, never egress" pattern exactly |
+| OAuth/SAML flow visualization | R | C (capture) + A (render) | No |
+| Cookie/storage flag analyzer (Secure/HttpOnly/SameSite, CSP/CORS header checks) | R | E (pure analysis on data C already fetched) | No |
+
+### 11.3 Integration layer (external tool brokering)
+
+This reactivates **Open Decision 8.6** (`run_tool`, deferred post-MVP). It's the single biggest remaining piece of unowned risk, so treat it as its own mini-spike, not a feature to bolt on.
+
+| Tool class | Examples | Containment requirement |
+|---|---|---|
+| Recon | subfinder, amass, httpx, katana, nmap, naabu | argv-only invocation (never shell string), same egress-proxy + nftables floor as the OpenCode container — a broker that bypasses the floor defeats Section 10 entirely |
+| Active scanners | Nuclei, Nikto | **D** tier — rate-limited, explicit approval, resource-capped |
+| Exploitation aids | sqlmap, dalfox, jwt_tool, SSRFmap | **D** tier, microVM or equivalent sandboxing per Open Decision 8.6, output parsed into `findings` schema not raw dumped to agent context |
+| OOB/callback | Interactsh-class server | Needs an explicit allowed internal destination in the egress proxy (same treatment as the model endpoint in 6.6) + a `get_oob_hits` **R** tool |
+
+**Design requirement carried over from Section 2's test:** every broker call answers "what's the worst input here" the same way existing tools do — argv allowlist (never raw shell), resource/time caps, output size caps before it reaches agent context, and the same before/after audit write-through as every other tool. This is a C+D joint vertical; do not let it ship as a shortcut that skips the handler pipeline.
+
+### 11.4 Reporting & evidence (closes Objective: "traceable output")
+
+| Feature | Tier | Vertical | Seam? |
+|---|---|---|---|
+| Finding templates / severity scoring (CVSS or custom) | — | B (schema) + A (UI) | Extends `findings.schema_json` — no new seam, already designed for this |
+| Export: Markdown / PDF / JSON / SARIF | — | A (render) + B (data) | No |
+| Evidence bundle (screenshot + req/resp + trace, already captured by `collect_evidence`) packaged per finding | — | B | No |
+| DefectDojo / Dradis / PwnDoc export integration | — | B (new exporter) | No — one-way data push, doesn't touch the agent trust boundary at all |
+| Compliance-template mappings (ASVS/PCI) | — | Deferred per Section 1 non-goals | Revisit post-MVP |
+
+### 11.5 Extensibility
+
+| Feature | Notes |
+|---|---|
+| Plugin/extension API for community-authored tools | Must register through C's existing pipeline (5.C rule 1: "tool surface is the allowlist"). A third-party tool is just another 5.E-shaped or 5.C-shaped registrant — **never a new trust boundary.** Any plugin API that lets a third party add a tool *outside* schema-validate → scope-check → audit → tier reopens the exact hole Section 10 closes. |
+| Scriptable match/replace / custom extractors | Same rule — sandboxed, pure-compute, registered, tiered. |
+
+### 11.6 Product/ops surface (not security-critical, but blocking for "real product")
+
+| Feature | Vertical | Notes |
+|---|---|---|
+| Multi-engagement management (switch between concurrent engagements, archive/resume) | B | `engagements` table already supports this; needs UI (A) and session lifecycle (does OpenCode hold one session per engagement concurrently, or serialize? — resolve during 11.2's session work) |
+| Licensing / update channel | D | Orthogonal to the security model; standard app-distribution concern |
+| Multi-user / collaboration on one engagement | Deferred per Section 1 non-goals | Would need per-action attribution beyond `approvals.actor` (already a column) — smaller lift than it looks, but still post-MVP |
+| Performance: context management for long engagements (Section 9 ops note on extractor throughput) | D + B | The "summarize/search instead of dumping raw history" problem — `query_log`'s narrow interface (6.4) is the existing mitigation; watch whether it's narrow enough under real load |
+
+### 11.7 Suggested ordering
+
+1. **11.1 (traffic core)** — pure tool additions, no seam changes, highest user-visible value, do first.
+2. **11.2 session/auth tooling** — one real seam (multi-session partitioning); scope it as its own mini-spike like Phase 0, since it touches 6.1/6.4.
+3. **11.4 (reporting)** — no seams, can run in parallel with 1–2.
+4. **11.3 (external tool brokering)** — highest containment risk; do only after 1–2 are stable and the team has more MCP-pipeline mileage. Treat Open Decision 8.6 as a gate, not a checkbox.
+5. **11.5 (plugin API)** — last; you want the internal tool pipeline battle-tested before anyone outside the four owners can register into it.
+6. **11.6 (ops surface)** — interleave as needed; none of it blocks security posture.
+
+Nothing in this section proposes a new trust boundary. Every addition either slots into C's existing `schema-validate → scope-check → audit → tier` pipeline or is pure UI/data-plumbing on top of stores B already owns. If a future feature *can't* be described that way, that's the signal to stop and re-open Section 6 deliberately — not to special-case it in.
