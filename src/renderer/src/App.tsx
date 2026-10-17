@@ -1,4 +1,5 @@
 import CopilotPanel from './components/copilot/CopilotPanel'
+import DevToolsPanel from './components/devtools/DevToolsPanel'
 import Sidebar from './components/sidebar/Sidebar'
 import ViewSlot from './components/ViewSlot'
 
@@ -13,7 +14,7 @@ function App(): JSX.Element {
         <section className="viewport" aria-label="Target page">
           <ViewSlot className="viewport__slot" onBoundsChange={setTargetBounds} />
         </section>
-        <section className="devtools" aria-label="Developer tools" />
+        <DevToolsPanel />
       </main>
 
       <CopilotPanel />
