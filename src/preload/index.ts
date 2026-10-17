@@ -30,8 +30,11 @@ import type {
   NetworkStats,
   ReplayRequestInput,
   ReplayResult,
+  SavedRequest,
+  SaveRequestInput,
   TabsState
 } from '../shared/tabs'
+import type { DiffResponsesOutput } from '../shared/tools'
 
 // typed surface is exposed to renderer but renderer never accesses ipcRenderer directly
 export type Bounds = { x: number; y: number; width: number; height: number }
@@ -81,6 +84,21 @@ const api = {
     // full capture list (all tabs, most recent 200), pushed whenever any request changes
     onRequests: (callback: (requests: CapturedRequest[]) => void): (() => void) =>
       subscribe('network:requests', callback)
+  },
+  repeater: {
+    list: (): Promise<SavedRequest[]> => ipcRenderer.invoke('repeater:list'),
+    // create (no id) or update (with id) a saved request
+    save: (input: SaveRequestInput): Promise<SavedRequest | null> =>
+      ipcRenderer.invoke('repeater:save', input),
+    delete: (id: string): Promise<boolean> => ipcRenderer.invoke('repeater:delete', id),
+    // resend a saved request through the gated replayer; appends to its response history
+    send: (id: string): Promise<SavedRequest | null> => ipcRenderer.invoke('repeater:send', id),
+    // diff two of a saved request's responses (defaults to the two most recent)
+    diff: (payload: { id: string; aIndex?: number; bIndex?: number }): Promise<DiffResponsesOutput | null> =>
+      ipcRenderer.invoke('repeater:diff', payload),
+    // pushed whenever the saved set changes (save/delete/send)
+    onChanged: (callback: (saved: SavedRequest[]) => void): (() => void) =>
+      subscribe('repeater:changed', callback)
   },
   devtools: {
     getDocument: (): Promise<CdpNode | null> => ipcRenderer.invoke('devtools:get-document'),

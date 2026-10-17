@@ -91,3 +91,22 @@ export type ReplayResult =
       redirectedTo?: string
     }
   | { ok: false; reason: ReplayRejectReason; error: string }
+
+/** A request saved in Repeater: editable, taggable, with its recent response history. */
+export type SavedRequest = {
+  id: string
+  name: string
+  tags: string[]
+  request: ReplayRequestInput
+  /** Recent replay results, oldest first, capped. The last two feed the diff view. */
+  responses: ReplayResult[]
+  updatedAt: number
+}
+
+/** Payload to create (no id) or update (with id) a saved request. */
+export type SaveRequestInput = {
+  id?: string
+  name: string
+  tags: string[]
+  request: ReplayRequestInput
+}
