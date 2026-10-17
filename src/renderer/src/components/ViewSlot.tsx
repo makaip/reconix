@@ -1,25 +1,16 @@
-import { forwardRef } from 'react'
+import { useRef } from 'react'
+import { useBoundsReporter, type Bounds } from '../hooks/useBoundsReporter'
 
 type ViewSlotProps = {
-  /** imma put native view over this slot later */
-  view: 'page' | 'devtools'
+  onBoundsChange: (bounds: Bounds) => void
   className?: string
 }
 
-/**
- * empty layout box. main process will later position the view over this element's bounds
- */
-const ViewSlot = forwardRef<HTMLDivElement, ViewSlotProps>(function ViewSlot(
-  { view, className },
-  ref
-) {
-  return (
-    <div
-      ref={ref}
-      className={className ? `view-slot ${className}` : 'view-slot'}
-      data-view-slot={view}
-    />
-  )
-})
+/** reserved space for native WebContentsView */
+function ViewSlot({ onBoundsChange, className }: ViewSlotProps): JSX.Element {
+  const ref = useRef<HTMLDivElement>(null)
+  useBoundsReporter(ref, onBoundsChange)
+  return <div ref={ref} className={className ? `view-slot ${className}` : 'view-slot'} />
+}
 
 export default ViewSlot
