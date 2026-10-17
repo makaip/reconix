@@ -1,7 +1,7 @@
 ---
 description: DOM analyzer subagent that parses HTML/DOM states using a fast model and answers queries from other agents.
 mode: subagent
-model: google/gemini-3.8-flash
+model: google/gemini-flash-lite-latest
 permissions:
   - action: edit
     resource: "*"

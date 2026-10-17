@@ -6,12 +6,13 @@
 // over loopback HTTP, same as the eventual Docker setup will once 5.D lands —
 // the connector/transport layer doesn't care which one is on the other end.
 //
-// The orchestrator agent needs GOOGLE_GENERATIVE_AI_API_KEY in the
-// environment (see index.ts's .env load) and opencode.json / the
-// .opencode/agents/*.md files pinned to a real model — both are live as of
-// 2026-10-17 (google/gemini-3.8-flash: confirmed working on this key's plan;
-// the pro-tier preview models 404'd on a 0 free-tier quota, so flash is the
-// default for both agents until that's upgraded).
+// The orchestrator agent needs a Google credential (via `opencode auth login`
+// and/or GOOGLE_GENERATIVE_AI_API_KEY — see index.ts's .env load), plus the
+// model pinned on every session (AGENT_MODEL below), or OpenCode routes to its
+// own gateway and 403s. Using google/gemini-flash-lite-latest: the full
+// gemini-*-flash models cap at 20 requests/day on the free tier, which the
+// background @parser alone blows through; flash-lite has a much higher free
+// daily limit. Bump to a stronger model once the key has billing enabled.
 //
 // OpenCode's cwd (`opencode serve`'s working directory) is its PROJECT —
 // what its own bash/edit/read tools act on, and where it'd resolve a
@@ -56,7 +57,7 @@ const OPENCODE_PORT = 4097
 // OpenCode otherwise bypasses the agent model and routes to its own hosted
 // gateway, which 403s for a user running their own key (see transport.ts's
 // OpenCodeConfig.model). Keep in sync with .opencode/agents/*.md's `model`.
-const AGENT_MODEL = 'google/gemini-3.8-flash'
+const AGENT_MODEL = 'google/gemini-flash-lite-latest'
 // Must match opencode.json's mcp.servers.reconix.url — not read back from
 // there, since opencode.json is static config and this needs to be a fixed
 // port the running process actually binds to.

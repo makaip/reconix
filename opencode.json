@@ -22,12 +22,12 @@
     "orchestrator": {
       "mode": "primary",
       "description": "Lead strategist that analyzes target pages, generates hypotheses, and directs test execution.",
-      "model": "google/gemini-3.8-flash"
+      "model": "google/gemini-flash-lite-latest"
     },
     "evaluator": {
       "mode": "subagent",
       "description": "Fast log, DOM, and network inspector that validates execution results and filters false positives.",
-      "model": "google/gemini-3.8-flash",
+      "model": "google/gemini-flash-lite-latest",
       "permissions": [
         {
           "action": "edit",

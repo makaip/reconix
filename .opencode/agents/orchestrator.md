@@ -1,7 +1,7 @@
 ---
 description: Lead strategist that analyzes target pages, generates hypotheses, and executes test actions.
 mode: primary
-model: google/gemini-3.8-flash
+model: google/gemini-flash-lite-latest
 permissions:
   - action: bash
     resource: "*"

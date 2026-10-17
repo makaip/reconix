@@ -1,7 +1,7 @@
 ---
 description: Fast log, DOM, and network inspector that validates execution results and filters false positives.
 mode: subagent
-model: google/gemini-3.8-flash
+model: google/gemini-flash-lite-latest
 permissions:
   - action: edit
     resource: "*"
