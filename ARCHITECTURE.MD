@@ -90,16 +90,62 @@ Data flow of one agent action: human goal → Main → OpenCode session → suba
 
 ## 4. The four workstreams (ownership)
 
-Each person owns one vertical end to end. The letter is used throughout Section 5.
+Four people, four verticals. **Dev 1 owns two components** — the Electron client (5.A) *and* the custom capability tools (5.E: fuzzers, regex breakers, payload generators) — because both are "author UI/logic, don't touch the enforcement plumbing." The MCP server + CDP wrappers + scope enforcement stay a *separate* vertical (Dev 3). Component letters are used in Section 5; a dev may own more than one.
 
-| Owner | Vertical | Owns | Talks to (contracts) |
+| Dev | Components | Owns | Talks to (contracts) |
 |---|---|---|---|
-| **A** | **Frontend / Electron shell** | Renderer UI (chat transcript, viewport, approval surface, report preview), preload bridge, window/`WebContentsView` wiring | IPC contract (6.1) |
-| **B** | **Orchestration & Data** | Main process: OpenCode lifecycle + SDK adapter, SSE→IPC fan-out, approval relay, SQLite engagement store, audit logging | IPC (6.1), MCP (6.2), OpenCode events (6.3), DB schema (6.4), model endpoint (6.6) |
-| **C** | **Tools & Browser control** | MCP tool server, per-domain CDP wrappers, scope checks in handlers, target-view lifecycle & hardening | MCP (6.2), DB write-through (6.4), scope config (6.5) |
-| **D** | **Platform / Security / Model** | Docker compose, egress proxy + nftables, OpenCode config & built-in lockdown, self-hosted inference serving, `VERSIONS.lock` | scope config (6.5), model endpoint (6.6), OpenCode config |
+| **Dev 1 — Client & Custom Tools** | 5.A + 5.E | Renderer UI (transcript, viewport, inline approvals, report preview), preload bridge, UI-window wiring; custom capability tools (fuzzers, regex breakers, payload/mutation generators, response analyzers) exposed as MCP tools | IPC (6.1); registers tools into Dev 3's MCP server (6.2) |
+| **Dev 2 — Orchestration & Data** | 5.B | Main process: OpenCode lifecycle + SDK adapter, SSE→IPC fan-out, approval relay, SQLite engagement store, audit + findings | IPC (6.1), MCP (6.2), OpenCode events (6.3), DB schema (6.4), model endpoint (6.6) |
+| **Dev 3 — Tools & Browser control** | 5.C | MCP tool *server* (the enforcement chokepoint), per-domain CDP wrappers, in-handler scope checks, audit write-through, target-view lifecycle & CDP driving | MCP (6.2), DB write-through (6.4), scope config (6.5) |
+| **Dev 4 — Platform / Security / Model** | 5.D | Docker compose, egress proxy + nftables, OpenCode config & built-in lockdown, self-hosted inference serving, `VERSIONS.lock` | scope config (6.5), model endpoint (6.6), OpenCode config |
 
 The seams between these four are Section 6. If you find yourself needing to know *how* another vertical works internally, stop — you should only need its contract.
+
+**Critical seam — custom tools (5.E) do not egress.** Dev 1's fuzzers/regex-breakers are *generators and analyzers*: they produce candidate payloads and inspect responses, they never open a socket or send to a target themselves. All target traffic — including sending a fuzz payload — goes through Dev 3's scope-checked, tiered, audited network tools (`navigate`, `replay_request`, `set_intercept_rule`), which hit Dev 4's egress proxy + rate limiter. A custom tool that could send on its own would route around scope, audit, tiering, and rate-limiting in one move. 5.E tools register into Dev 3's server and inherit its `schema-validate → scope-check → audit → tier` contract; they are pure-compute (tier R/P) unless they call back through a Dev 3 send primitive.
+
+### Definite tasks
+
+**Dev 1 — Client & Custom Tools**
+
+*Frontend (5.A):*
+1. UI-window `webPreferences`: flip `sandbox: false` → `sandbox: true` in `src/main/index.ts`; keep `contextIsolation: true`, `nodeIntegration: false`. Add a strict CSP (`default-src 'self'`, no `unsafe-inline`).
+2. Preload: expose `window.reconix` with *exactly* the 6.1 methods; no method accepts a code string. Ship `src/preload/index.d.ts`.
+3. Transcript: render the `agent:event` stream (user / reasoning / tool-call / inline-approval) as **text nodes only** — no `innerHTML`/`dangerouslySetInnerHTML` on any target-derived content. Inline approve / deny / edit controls.
+4. Wire against the mock `agent:event` emitter + fake approval resolver already on the `ui` branch; swap to the real 6.3 shape once Phase 0 freezes it.
+5. Bind the already-scaffolded sidebar/report panels (`ui` branch) to real findings/sitemap data from 6.1.
+
+*Custom tools (5.E):*
+6. Build each custom tool as a **pure-compute** MCP tool registered into Dev 3's server: typed input schema, typed output schema, tier R or P, **no network**.
+7. Fuzzing payload generator — emits payload sets (encodings, boundary values, injection corpora) as data for the agent to feed into Dev 3's `replay_request`.
+8. Regex breaker — given a regex, emit ReDoS / catastrophic-backtracking candidate strings as data.
+9. Response analyzers — body differ, status/length/timing diff, entropy/encoding detectors, operating on bodies Dev 3's tools returned.
+10. Any tool that must iterate requests calls Dev 3's send primitive; it never opens a socket itself.
+
+**Dev 2 — Orchestration & Data (5.B)**
+1. OpenCode adapter: `createOpencodeClient({ baseUrl, password })` against Dev 4's container; one session per engagement; readiness wait + auto-restart w/ backoff; surface connection status over IPC.
+2. SSE subscriber: per event → (a) forward to renderer as `agent:event` (6.1) *and* (b) persist to store (6.4), one pass.
+3. Approval relay: on a permission event, forward to UI, block, return the human's decision through the SDK to unblock OpenCode.
+4. SQLite store on the host: `tool_calls` + `approvals` append-only (agent can never write), `findings` separate; pin columns/indexes — closes open-decision 3.
+5. Write-through logger API that Dev 3's handlers call; back `query_log` with a narrow structured query (never a DB handle).
+6. Freeze 6.1 + 6.4; publish a mock event emitter + mock logger for Dev 1 and Dev 3 to build against.
+
+**Dev 3 — Tools & Browser control (5.C)**
+1. MCP tool server: the *only* path the agent can act through. No generic passthrough, no eval-shaped tool, no raw shell/db/socket. Expose a registration API so Dev 1's 5.E tools slot in under the same enforcement.
+2. Handler pipeline on every tool: schema-validate (as hostile) → scope-check (6.5) → execute → audit write-through (6.4), before *and* after. No code path acts without recording.
+3. Page-power CDP wrappers as named/tiered tools: DOM, Runtime, Input, CSS, Emulation, Page-minus-navigate, Network *read*, Fetch *inspect*; `eval_in_page` tier P.
+4. Scope-critical gated tools: `navigate` (tier M, scope-checked), `set_intercept_rule` / `replay_request` (gated). `replay_request` is the send primitive Dev 1's fuzzers call.
+5. Reject raw `cdp.send`; never expose `Target.*` / `Browser.*`.
+6. Target `WebContentsView` CDP driving: attach the debugger to target views *only* — assert ≠ UI `webContents` at every `Runtime.evaluate` call site.
+7. Risk tier R/P/M/D on every tool; expose the tier map to Dev 2 for OpenCode's permission config.
+
+**Dev 4 — Platform / Security / Model (5.D)**
+1. `docker-compose.yml`: OpenCode container, pinned image, port → `127.0.0.1:<hostPort>`, `OPENCODE_SERVER_PASSWORD`, optional session volume.
+2. OpenCode config: disable built-in tools (shell, file-edit); assert the agent's visible tool list == our MCP tools only.
+3. Egress proxy holding the scope allowlist: in-scope → forward + log, else drop + log. The model endpoint is an explicit allowed internal destination.
+4. nftables/iptables floor: drop any packet to a non-target address; kill raw sockets / DNS exfil.
+5. Rate-limiting at the proxy (human-gated "safe to pound" config).
+6. Define scope-config format (6.5); compile it to proxy rules + nftables; hand Dev 3 the per-tool scope-check API.
+7. Self-hosted model: pick a tool-calling-capable model, serve it behind the 6.6 endpoint, prove tool-calling completions in the Phase-0 spike, freeze 6.6. Maintain `VERSIONS.lock`.
 
 ---
 
@@ -169,6 +215,14 @@ The agent's *only* read access to its history is via the `query_log` MCP tool (C
 
 **Self-hosted model (Section 9).** D owns serving, selection, and the endpoint contract (6.6).
 
+### 5.E Custom capability tools (Owner: Dev 1)
+
+Custom offensive/analysis tools — **fuzzers, regex breakers, payload & mutation generators, response analyzers** — authored by Dev 1 and registered into Dev 3's MCP server (5.C). They are the agent's *reasoning amplifiers*, not its reach.
+
+- **They generate and analyze; they never egress.** A tool here produces payloads as data or inspects a response body Dev 3's tools already fetched. No socket, no DNS, no file, no shell. Sending a payload at a target is always a separate call to Dev 3's `replay_request` / `navigate`, which carry the scope check, audit line, tier, and (via Dev 4) the rate limit. This is what keeps 5.E outside the enforcement burden and the chokepoint intact.
+- **They are pure-compute MCP tools (tier R or P).** Typed input/output schema, deterministic where possible, no hidden state. They slot into 5.C's registration API and inherit its `schema-validate → scope-check → audit → tier` pipeline like any other tool.
+- **Examples:** `gen_fuzz_payloads(corpus, encodings, boundaries) → string[]`; `break_regex(pattern) → redos_candidates[]`; `diff_responses(a, b) → delta`; `detect_encoding(body) → report`. The agent chains these into Dev 3's send tools; the loop (generate → send → analyze) lives in the agent's reasoning, logged at every send.
+
 ---
 
 ## 6. Frozen contracts (the seams)
@@ -234,10 +288,10 @@ D serves an **OpenAI-compatible** inference endpoint (`/v1/chat/completions` wit
 Prove, in a bare script with `console.log` instead of a UI: Docker-spawn OpenCode → HTTP-connect via SDK → create session → send a prompt → register **one** trivial MCP tool → watch the tool call come back → watch **one permission event fire** → respond to it → confirm the model endpoint (self-hosted) actually serves the completion with a tool call. This de-risks the beta API and the serving stack at once. **Record the resolved 6.3 and 6.6 details here.** Nothing else starts until this round trip is green.
 
 **Phase 1 — parallel verticals against mocks.**
-- A builds the UI + bridge against a mock `agent:event` emitter and a fake approval.
-- B builds the adapter + store against the spike's real OpenCode + a mock tool.
-- C builds the MCP server + CDP wrappers against a real `WebContentsView` + a mock scope config.
-- D builds Docker + proxy + nftables + the served model, and the OpenCode lockdown config.
+- Dev 1 builds the UI + bridge against a mock `agent:event` emitter and a fake approval, *and* writes the 5.E custom tools as pure-compute units against Dev 3's mock registration API + mock `replay_request`.
+- Dev 2 builds the adapter + store against the spike's real OpenCode + a mock tool.
+- Dev 3 builds the MCP server + CDP wrappers against a real `WebContentsView` + a mock scope config, exposing the registration API Dev 1's 5.E tools plug into.
+- Dev 4 builds Docker + proxy + nftables + the served model, and the OpenCode lockdown config.
 
 **Phase 2 — integrate at the seams**, in this order: B↔D (adapter to real container + real model) → C↔B (real tools logging to real store) → A↔B (real transcript + approvals) → C target view ↔ A viewport.
 
