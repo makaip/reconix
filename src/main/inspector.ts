@@ -33,7 +33,11 @@ type CssStyle = {
   styleSheetId?: string
   range?: { startLine: number }
 }
-type CssRule = { origin: string; selectorList: { text: string }; style: CssStyle }
+type CssRule = {
+  origin: string
+  selectorList: { text: string; selectors: { text: string }[] }
+  style: CssStyle
+}
 type SheetInfo = { url: string; inline: boolean }
 
 const MAX_OUTER_HTML = 50_000
@@ -178,7 +182,7 @@ export function attachInspector(win: BrowserWindow): Inspector {
   handle('devtools:get-styles', async (nodeId): Promise<StyleRule[] | null> => {
     if (!isNodeId(nodeId)) return null
     const [matched, inline] = await Promise.all([
-      send<{ matchedCSSRules?: { rule: CssRule }[] }>('CSS.getMatchedStylesForNode', { nodeId }),
+      send<{ matchedCSSRules?: { rule: CssRule; matchingSelectors: number[] }[] }>('CSS.getMatchedStylesForNode', { nodeId }),
       send<{ inlineStyle?: CssStyle }>('CSS.getInlineStylesForNode', { nodeId })
     ])
 
@@ -190,11 +194,16 @@ export function attachInspector(win: BrowserWindow): Inspector {
       }
     ]
     // CDP lists lowest priority first, and DevTools shows highest priority first
-    for (const { rule } of [...(matched.matchedCSSRules ?? [])].reverse()) {
+    for (const { rule, matchingSelectors } of [...(matched.matchedCSSRules ?? [])].reverse()) {
       const userAgent = rule.origin === 'user-agent'
+      // a rule like `a, b, c { }` only applies through the selectors that matched this node
+      const matching = matchingSelectors
+        .map((index) => rule.selectorList.selectors[index]?.text)
+        .filter(Boolean)
+        .join(', ')
       rules.push({
         origin: userAgent ? 'user-agent' : 'author',
-        selector: rule.selectorList.text,
+        selector: matching || rule.selectorList.text,
         source: userAgent
           ? undefined
           : sourceLabel(

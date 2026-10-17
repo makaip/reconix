@@ -1,3 +1,4 @@
 # reconix
 
-hello world!
+AI-driven penetration testing browser.
+

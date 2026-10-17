@@ -4,8 +4,7 @@ import type { NavigateResult, TabInfo, TabsState } from '../shared/tabs'
 export const TARGET_PARTITION = 'target'
 
 const ALLOWED_PROTOCOLS = new Set(['http:', 'https:'])
-const PAGE_BACKGROUND = '#f5f7fa'
-const PAGE_RADIUS = 8
+const PAGE_BACKGROUND = '#ffffff'
 const BLANK = 'about:blank'
 
 type Bounds = { x: number; y: number; width: number; height: number }
@@ -120,7 +119,6 @@ export function createTabManager(win: BrowserWindow, hooks: TabHooks): TabManage
       }
     })
     view.setBackgroundColor(PAGE_BACKGROUND)
-    view.setBorderRadius(PAGE_RADIUS)
     view.setVisible(false)
     win.contentView.addChildView(view)
 

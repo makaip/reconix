@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import urlLock from '../../assets/icons/url-lock.svg'
-import { proxy, scope } from '../../mock/data'
-import Badge from '../Badge'
+import { scope } from '../../mock/data'
 
 function splitUrl(url: string): { scheme: string; host: string; rest: string; hostname: string } | null {
   try {
@@ -79,8 +78,7 @@ function UrlBar({ url }: { url: string }): JSX.Element {
         </button>
       )}
 
-      {parts && scope.hosts.includes(parts.hostname) && <Badge tone="success">In scope</Badge>}
-      <Badge>Proxy {proxy.label}</Badge>
+      {parts && scope.hosts.includes(parts.hostname) && <span className="url-bar__scope">In scope</span>}
     </div>
   )
 }

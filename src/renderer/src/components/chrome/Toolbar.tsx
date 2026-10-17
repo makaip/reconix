@@ -1,5 +1,3 @@
-import dotGrey from '../../assets/icons/dot-grey.svg'
-import dotRed from '../../assets/icons/dot-red.svg'
 import navLeft from '../../assets/icons/nav-left.svg'
 import navReload from '../../assets/icons/nav-reload.svg'
 import navRight from '../../assets/icons/nav-right.svg'
@@ -55,17 +53,16 @@ function Toolbar({ url, canGoBack, canGoForward, copilotOpen, onToggleCopilot }:
       <UrlBar url={url} />
 
       {/* interception and recording aren't built yet, so these are inert */}
-      <button type="button" className="toolbar-button toolbar-button--muted" title="Not implemented yet">
-        <img src={dotGrey} width={7} height={7} alt="" />
+      <button type="button" className="toolbar-button" title="Not implemented yet">
         Intercept
       </button>
       <button type="button" className="toolbar-button" title="Not implemented yet">
-        <img src={dotRed} width={7} height={7} alt="" />
         Recorder
       </button>
+      <span className="toolbar__divider" />
       <button
         type="button"
-        className="toolbar-button toolbar-button--strong"
+        className="toolbar-button"
         aria-pressed={copilotOpen}
         onClick={onToggleCopilot}
       >

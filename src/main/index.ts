@@ -5,9 +5,9 @@ import { attachInspector } from './inspector'
 import { startNetworkCapture, type NetworkCapture } from './network'
 import { createTabManager } from './tabs'
 
-// matches the Tab Bar height and background in the Figma design
+// keep in sync with --tabbar-height and --color-bg-deep in tokens.css
 const TAB_BAR_HEIGHT = 40
-const TAB_BAR_COLOR = '#212122'
+const TAB_BAR_COLOR = '#18181a'
 
 function createWindow(): void {
   const mainWindow = new BrowserWindow({
@@ -21,11 +21,11 @@ function createWindow(): void {
     // the tab bar is the title bar, so each OS draws its window controls over it
     titleBarStyle: 'hidden',
     ...(process.platform === 'darwin'
-      ? { trafficLightPosition: { x: 17, y: 17 } }
+      ? { trafficLightPosition: { x: 16, y: 13 } }
       : {
           titleBarOverlay: {
             color: TAB_BAR_COLOR,
-            symbolColor: '#9e9ea1',
+            symbolColor: '#a0a0a6',
             height: TAB_BAR_HEIGHT
           }
         }),

@@ -1,8 +1,6 @@
 import { useState } from 'react'
 import type { StyleRule } from '../../../../shared/devtools'
 
-const TABS = ['Styles', 'Computed', 'Layout', 'Event Listeners', '»']
-
 function matches(text: string, filter: string): boolean {
   return text.toLowerCase().includes(filter)
 }
@@ -25,18 +23,9 @@ function StylesPane({ rules }: { rules: StyleRule[] | null }): JSX.Element {
   return (
     <div className="dt-styles">
       <div className="dt-styles__tabs" role="tablist">
-        {TABS.map((tab) => (
-          <button
-            key={tab}
-            type="button"
-            role="tab"
-            aria-selected={tab === 'Styles'}
-            disabled={tab !== 'Styles'}
-            className={tab === 'Styles' ? 'dt-tab dt-tab--active dt-tab--small' : 'dt-tab dt-tab--small'}
-          >
-            {tab}
-          </button>
-        ))}
+        <button type="button" role="tab" aria-selected className="dt-tab dt-tab--active dt-tab--small">
+          Styles
+        </button>
       </div>
 
       <div className="dt-styles__filter">
@@ -48,9 +37,6 @@ function StylesPane({ rules }: { rules: StyleRule[] | null }): JSX.Element {
           value={filter}
           onChange={(event) => setFilter(event.target.value)}
         />
-        <span>:hov</span>
-        <span>.cls</span>
-        <span>+</span>
       </div>
 
       <div className="dt-styles__rules">

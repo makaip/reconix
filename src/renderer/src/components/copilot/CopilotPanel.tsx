@@ -4,7 +4,6 @@ import close from '../../assets/icons/close.svg'
 import type { Copilot, NodeRef } from '../../hooks/useCopilot'
 import { NODE_DRAG_TYPE } from '../../lib/dragTypes'
 import { engagement } from '../../mock/data'
-import Badge from '../Badge'
 import Composer from './Composer'
 import DropZone from './DropZone'
 import Message from './Message'
@@ -46,7 +45,7 @@ function CopilotPanel({
       <header className="copilot__header">
         <img src={chat} width={16} height={16} alt="" />
         <h2 className="copilot__title">Copilot</h2>
-        <Badge>{engagement}</Badge>
+        <span className="copilot__engagement">{engagement}</span>
         <button type="button" className="icon-button" aria-label="Close Copilot" onClick={onClose}>
           <img src={close} width={14} height={14} alt="" />
         </button>
