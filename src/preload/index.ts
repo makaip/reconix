@@ -8,7 +8,19 @@ import type {
   StartAgentParams,
   ToolDescriptor
 } from '../shared/agent'
-import type { CdpNode, DevToolsEvent, NodeContext, StyleRule } from '../shared/devtools'
+import type {
+  CdpNode,
+  ConsoleEntry,
+  CookieInfo,
+  DevToolsEvent,
+  NodeContext,
+  ResourceContent,
+  ResourceInfo,
+  ResourceRef,
+  StorageArea,
+  StorageEntry,
+  StyleRule
+} from '../shared/devtools'
 import type { CapturedRequest, NavigateResult, NetworkStats, TabsState } from '../shared/tabs'
 
 // typed surface is exposed to renderer but renderer never accesses ipcRenderer directly
@@ -60,6 +72,24 @@ const api = {
       ipcRenderer.invoke('devtools:highlight', nodeId),
     setInspectMode: (enabled: boolean): Promise<boolean | null> =>
       ipcRenderer.invoke('devtools:set-inspect-mode', enabled),
+    // Console: runs `expression` in the target page and returns the formatted result/error
+    evaluate: (expression: string): Promise<ConsoleEntry | null> =>
+      ipcRenderer.invoke('devtools:console-evaluate', expression),
+    // Sources
+    getResources: (): Promise<ResourceInfo[] | null> => ipcRenderer.invoke('devtools:get-resources'),
+    getResourceContent: (ref: ResourceRef): Promise<ResourceContent | null> =>
+      ipcRenderer.invoke('devtools:get-resource-content', ref),
+    // Application: cookies + storage
+    getCookies: (): Promise<CookieInfo[] | null> => ipcRenderer.invoke('devtools:get-cookies'),
+    deleteCookie: (name: string): Promise<boolean | null> => ipcRenderer.invoke('devtools:delete-cookie', name),
+    getStorage: (area: StorageArea): Promise<StorageEntry[] | null> =>
+      ipcRenderer.invoke('devtools:get-storage', area),
+    setStorageItem: (payload: { area: StorageArea; key: string; value: string }): Promise<boolean | null> =>
+      ipcRenderer.invoke('devtools:set-storage-item', payload),
+    deleteStorageItem: (payload: { area: StorageArea; key: string }): Promise<boolean | null> =>
+      ipcRenderer.invoke('devtools:delete-storage-item', payload),
+    clearStorage: (area: StorageArea): Promise<boolean | null> =>
+      ipcRenderer.invoke('devtools:clear-storage', area),
     // subscribes to devtools DOM events
     // aso returns an unsubscribe function to stop listening to events
     onEvent: (callback: (event: DevToolsEvent) => void): (() => void) => {

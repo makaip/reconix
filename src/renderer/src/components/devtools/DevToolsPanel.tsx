@@ -1,12 +1,18 @@
 import { useEffect, useMemo, useState, type CSSProperties } from 'react'
 import type { StyleRule } from '../../../../shared/devtools'
 import type { NodeRef } from '../../hooks/useCopilot'
+import { useApplication } from '../../hooks/useApplication'
+import { useConsole } from '../../hooks/useConsole'
 import { buildRows, useDomTree } from '../../hooks/useDomTree'
 import { useNetworkRequests } from '../../hooks/useNetworkRequests'
+import { useResources } from '../../hooks/useResources'
+import ApplicationPanel from './ApplicationPanel'
 import Breadcrumbs from './Breadcrumbs'
+import ConsolePanel from './ConsolePanel'
 import DevToolsToolbar, { type DevToolsTab } from './DevToolsToolbar'
 import ElementsTree from './ElementsTree'
 import NetworkPanel from './NetworkPanel'
+import SourcesPanel from './SourcesPanel'
 import StylesPane from './StylesPane'
 
 type DevToolsPanelProps = {
@@ -29,6 +35,9 @@ function DevToolsPanel({
   const [devtoolsTab, setDevtoolsTab] = useState<DevToolsTab>('elements')
   const rows = useMemo(() => buildRows(state), [state])
   const networkRequests = useNetworkRequests(activeTabId)
+  const consoleApi = useConsole()
+  const { resources, loaded: resourcesLoaded } = useResources(activeTabId)
+  const application = useApplication(activeTabId)
 
   useEffect(() => setInspecting(false), [activeTabId])
 
@@ -69,9 +78,16 @@ function DevToolsPanel({
         onToggleInspect={toggleInspect}
         activeTab={devtoolsTab}
         onTabChange={setDevtoolsTab}
-        networkCount={networkRequests.length}
+        counts={{ network: networkRequests.length, console: consoleApi.entries.length }}
+        extra={
+          devtoolsTab === 'console' ? (
+            <button type="button" className="dt-text-button" onClick={consoleApi.clear}>
+              Clear
+            </button>
+          ) : undefined
+        }
       />
-      {devtoolsTab === 'elements' ? (
+      {devtoolsTab === 'elements' && (
         <div className="dt-elements">
           <div className="dt-elements__tree">
             {loaded ? (
@@ -91,9 +107,13 @@ function DevToolsPanel({
           </div>
           <StylesPane rules={rules} />
         </div>
-      ) : (
-        <NetworkPanel requests={networkRequests} />
       )}
+      {devtoolsTab === 'network' && <NetworkPanel requests={networkRequests} />}
+      {devtoolsTab === 'console' && (
+        <ConsolePanel entries={consoleApi.entries} onEvaluate={consoleApi.evaluate} />
+      )}
+      {devtoolsTab === 'sources' && <SourcesPanel resources={resources} loaded={resourcesLoaded} />}
+      {devtoolsTab === 'application' && <ApplicationPanel application={application} />}
     </section>
   )
 }
