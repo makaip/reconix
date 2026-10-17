@@ -37,3 +37,28 @@ export type NetworkStats = {
   total: number
   perTab: Record<number, number>
 }
+
+/**
+ * A full request/response record including bodies, captured over CDP for the
+ * inspected (active) target page. Unlike CapturedRequest (webRequest, all tabs,
+ * headers/timing only), this carries the payloads Repeater/diff/intruder need.
+ * Keyed by the CDP requestId, which is distinct from CapturedRequest.id.
+ */
+export type CapturedBody = {
+  requestId: string
+  url: string
+  method: string
+  status?: number
+  mimeType?: string
+  requestHeaders?: Record<string, string>
+  responseHeaders?: Record<string, string>
+  /** Request payload (e.g. POST body) as reported by CDP, if any. */
+  requestBody?: string
+  /** Response body text. Base64 when `responseBase64` is true (binary resources). */
+  responseBody?: string
+  responseBase64?: boolean
+  requestBodyTruncated?: boolean
+  responseBodyTruncated?: boolean
+  /** ms since epoch when the body was captured. */
+  capturedAt: number
+}

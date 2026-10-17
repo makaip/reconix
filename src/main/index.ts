@@ -1,6 +1,7 @@
 import { app, shell, BrowserWindow, ipcMain, session } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
+import { createBodyStore } from './bodies'
 import { attachInspector } from './inspector'
 import { startNetworkCapture, type NetworkCapture } from './network'
 import { createSessionManager } from './session'
@@ -75,7 +76,8 @@ function createWindow(): void {
   })
 
   let network: NetworkCapture | undefined
-  const inspector = attachInspector(mainWindow)
+  const bodies = createBodyStore(mainWindow)
+  const inspector = attachInspector(mainWindow, bodies)
   const tabs = createTabManager(mainWindow, {
     onActiveChanged: (target) => inspector.setTarget(target),
     onTabClosed: (tabId) => network?.forgetTab(tabId)
