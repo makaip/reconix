@@ -21,14 +21,29 @@ function App(): JSX.Element {
   const network = useNetworkStats()
   const [dragActive, setDragActive] = useState(false)
   const [copilotOpen, setCopilotOpen] = useState(true)
+  const [sidebarOpen, setSidebarOpen] = useState(true)
   // Set when a sitemap file is double-clicked, so DevTools opens it in Sources. The counter
   // forces a re-open even when the same file is double-clicked twice in a row.
   const [openSource, setOpenSource] = useState<{ target: string; nonce: number } | null>(null)
 
   // Panel sizes are drag-resizable; see shell.css for the matching defaults these fall back to.
-  const sidebarResize = useResizable({ axis: 'x', initial: 240, min: 180, max: 480 })
+  // Dragging the sidebar edge far enough left collapses it; the toolbar button brings it back.
+  const sidebarResize = useResizable({
+    axis: 'x',
+    initial: 240,
+    min: 180,
+    max: 480,
+    onCollapse: () => setSidebarOpen(false)
+  })
   const copilotResize = useResizable({ axis: 'x', initial: 360, min: 280, max: 560, invert: true })
-  const devtoolsResize = useResizable({ axis: 'y', initial: 380, min: 160, max: 640, invert: true })
+  // DevTools opens at a quarter of the window height.
+  const devtoolsResize = useResizable({
+    axis: 'y',
+    initial: Math.round(window.innerHeight * 0.25),
+    min: 160,
+    max: 640,
+    invert: true
+  })
 
   const activeTab = tabs.tabs.find((tab) => tab.id === tabs.activeId)
   const requestCount = tabs.activeId === null ? 0 : (network.perTab[tabs.activeId] ?? 0)
@@ -47,22 +62,28 @@ function App(): JSX.Element {
         url={activeTab?.url ?? ''}
         canGoBack={tabs.canGoBack}
         canGoForward={tabs.canGoForward}
+        sidebarOpen={sidebarOpen}
+        onToggleSidebar={() => setSidebarOpen((open) => !open)}
         copilotOpen={copilotOpen}
         onToggleCopilot={() => setCopilotOpen((open) => !open)}
       />
 
       <div className="shell">
-        <Sidebar
-          style={{ flexBasis: sidebarResize.size }}
-          onDragStart={() => setDragActive(true)}
-          onDragEnd={() => setDragActive(false)}
-          onOpenSource={(target) => setOpenSource((prev) => ({ target, nonce: (prev?.nonce ?? 0) + 1 }))}
-        />
-        <ResizeHandle
-          orientation="vertical"
-          dragging={sidebarResize.dragging}
-          onPointerDown={sidebarResize.onHandlePointerDown}
-        />
+        {sidebarOpen && (
+          <>
+            <Sidebar
+              style={{ flexBasis: sidebarResize.size }}
+              onDragStart={() => setDragActive(true)}
+              onDragEnd={() => setDragActive(false)}
+              onOpenSource={(target) => setOpenSource((prev) => ({ target, nonce: (prev?.nonce ?? 0) + 1 }))}
+            />
+            <ResizeHandle
+              orientation="vertical"
+              dragging={sidebarResize.dragging}
+              onPointerDown={sidebarResize.onHandlePointerDown}
+            />
+          </>
+        )}
 
         <main className="center">
           <section className="viewport" aria-label="Target page">

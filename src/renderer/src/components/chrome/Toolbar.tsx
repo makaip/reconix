@@ -2,12 +2,15 @@ import navLeft from '../../assets/icons/nav-left.svg'
 import navReload from '../../assets/icons/nav-reload.svg'
 import navRight from '../../assets/icons/nav-right.svg'
 import toolbarChat from '../../assets/icons/toolbar-chat.svg'
+import toolbarSidebar from '../../assets/icons/toolbar-sidebar.svg'
 import UrlBar from './UrlBar'
 
 type ToolbarProps = {
   url: string
   canGoBack: boolean
   canGoForward: boolean
+  sidebarOpen: boolean
+  onToggleSidebar: () => void
   copilotOpen: boolean
   onToggleCopilot: () => void
 }
@@ -28,11 +31,29 @@ function NavButton({ label, icon, flip, disabled, onClick }: NavButtonProps): JS
   )
 }
 
-function Toolbar({ url, canGoBack, canGoForward, copilotOpen, onToggleCopilot }: ToolbarProps): JSX.Element {
+function Toolbar({
+  url,
+  canGoBack,
+  canGoForward,
+  sidebarOpen,
+  onToggleSidebar,
+  copilotOpen,
+  onToggleCopilot
+}: ToolbarProps): JSX.Element {
   const { target } = window.reconix
 
   return (
     <div className="toolbar">
+      <button
+        type="button"
+        className="toolbar-button"
+        aria-label="Toggle sitemap"
+        title="Toggle sitemap"
+        aria-pressed={sidebarOpen}
+        onClick={onToggleSidebar}
+      >
+        <img src={toolbarSidebar} width={14} height={14} alt="" />
+      </button>
       {/* the design only draws the left arrow enabled and the right one disabled, so each state mirrors one of them */}
       <NavButton
         label="Back"
