@@ -1,9 +1,11 @@
+import CopilotPanel from './components/copilot/CopilotPanel'
+import Sidebar from './components/sidebar/Sidebar'
 import ViewSlot from './components/ViewSlot'
 
 function App(): JSX.Element {
   return (
     <div className="shell">
-      <aside className="sidebar" aria-label="Sitemap and findings" />
+      <Sidebar />
 
       <main className="center">
         <section className="viewport" aria-label="Target page">
@@ -14,7 +16,7 @@ function App(): JSX.Element {
         </section>
       </main>
 
-      <aside className="copilot" aria-label="Copilot" />
+      <CopilotPanel />
     </div>
   )
 }
