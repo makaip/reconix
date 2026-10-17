@@ -12,6 +12,43 @@ export type CrawlCandidate = {
   source: 'anchor' | 'form' | 'resource'
 }
 
+// --- Driver contract (main process crawler + renderer panel) ------------------
+
+/** Request to start a crawl. Egress still goes through the scope-/rate-gated replayer. */
+export type CrawlStartInput = {
+  url: string
+  /** Max link depth from the start URL. Clamped 0..10 in the driver. Default 2. */
+  maxDepth?: number
+  /** Hard cap on pages fetched. Clamped 1..500 in the driver. Default 50. */
+  maxPages?: number
+  /** Also follow form actions and resource src, not just anchors. Default false. */
+  includeResources?: boolean
+}
+
+/** One fetched page in a crawl run. `status` is null when the fetch never completed. */
+export type CrawlPageResult = {
+  url: string
+  depth: number
+  status: number | null
+  /** Set when the replayer rejected or the fetch failed (denied/rate-limited/network/non-html). */
+  reason?: string
+}
+
+/** Why a crawl stopped. */
+export type CrawlStopReason = 'done' | 'max-pages' | 'stopped' | 'error'
+
+/** Live crawl state, pushed to the renderer over `crawl:state`. */
+export type CrawlState = {
+  running: boolean
+  startUrl: string | null
+  /** Pages fetched (whether or not they yielded links). */
+  visited: number
+  /** URLs still waiting in the frontier. */
+  queued: number
+  pages: CrawlPageResult[]
+  stoppedReason?: CrawlStopReason
+}
+
 export type CrawlExtractOptions = {
   /** Also pull form actions and script/img/iframe/source src, not just <a href>. Default false. */
   includeResources?: boolean

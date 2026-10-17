@@ -38,6 +38,7 @@ import type {
   WsConnection
 } from '../shared/tabs'
 import type { DiffResponsesOutput } from '../shared/tools'
+import type { CrawlStartInput, CrawlState } from '../shared/crawler'
 
 // typed surface is exposed to renderer but renderer never accesses ipcRenderer directly
 export type Bounds = { x: number; y: number; width: number; height: number }
@@ -93,6 +94,14 @@ const api = {
     list: (): Promise<WsConnection[]> => ipcRenderer.invoke('websocket:list'),
     onChanged: (callback: (conns: WsConnection[]) => void): (() => void) =>
       subscribe('websocket:changed', callback)
+  },
+  crawler: {
+    // Deterministic scope-aware spider. Drives the gated replayer; no new egress.
+    start: (input: CrawlStartInput): Promise<CrawlState> => ipcRenderer.invoke('crawl:start', input),
+    stop: (): Promise<CrawlState> => ipcRenderer.invoke('crawl:stop'),
+    getState: (): Promise<CrawlState> => ipcRenderer.invoke('crawl:get-state'),
+    onState: (callback: (state: CrawlState) => void): (() => void) =>
+      subscribe('crawl:state', callback)
   },
   repeater: {
     list: (): Promise<SavedRequest[]> => ipcRenderer.invoke('repeater:list'),
