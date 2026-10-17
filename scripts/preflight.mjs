@@ -96,7 +96,7 @@ try {
 }
 
 const agentsDir = join(repoRoot, '.opencode', 'agents')
-const requiredAgents = ['orchestrator', 'parser', 'evaluator']
+const requiredAgents = ['pentest-orchestrator', 'dom-analyzer', 'evaluator']
 for (const name of requiredAgents) {
   const path = join(agentsDir, `${name}.md`)
   if (!existsSync(path)) {

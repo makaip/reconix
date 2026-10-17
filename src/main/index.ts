@@ -36,6 +36,10 @@ try {
 } catch {
   // no .env present — fine, OpenCode just won't have provider auth yet.
 }
+// reconix.env (the remote vLLM connection) is NOT loaded here: it's a shell
+// file using `export` and "${VAR}" interpolation, which Electron's bundled
+// Node 20 `loadEnvFile` crashes on natively (SIGTRAP, uncatchable). copilot.ts
+// sources it in a shell at `opencode serve` spawn time instead.
 
 let copilotBridge: CopilotBridge | null = null
 

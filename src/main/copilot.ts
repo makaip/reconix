@@ -6,13 +6,18 @@
 // over loopback HTTP, same as the eventual Docker setup will once 5.D lands —
 // the connector/transport layer doesn't care which one is on the other end.
 //
-// The orchestrator agent needs a Google credential (via `opencode auth login`
-// and/or GOOGLE_GENERATIVE_AI_API_KEY — see index.ts's .env load), plus the
-// model pinned on every session (AGENT_MODEL below), or OpenCode routes to its
-// own gateway and 403s. Using google/gemini-flash-lite-latest: the full
-// gemini-*-flash models cap at 20 requests/day on the free tier, which the
-// background @parser alone blows through; flash-lite has a much higher free
-// daily limit. Bump to a stronger model once the key has billing enabled.
+// Model wiring (see ORCHESTRATOR_MODEL / DOM_ANALYZER_MODEL below):
+//  - The orchestrator runs on the remote vLLM server configured in reconix.env
+//    (ORCHESTRATOR_BASE_URL / ORCHESTRATOR_API_KEY, read by opencode.json's
+//    vllm-orchestrator provider). index.ts loads reconix.env into the env the
+//    spawned `opencode serve` inherits.
+//  - The DOM parser (and the @evaluator subagent) run on the user's Gemini key
+//    (via `opencode auth login google` and/or GOOGLE_GENERATIVE_AI_API_KEY).
+//    gemini-flash-lite-latest is used because the full gemini-*-flash models cap
+//    at 20 requests/day on the free tier, which the background parser alone blows
+//    through; flash-lite has a much higher free daily limit.
+// Either way the model MUST be pinned on the session we create, or OpenCode
+// bypasses the agent's configured model and routes to its own gateway (403).
 //
 // OpenCode's cwd (`opencode serve`'s working directory) is its PROJECT —
 // what its own bash/edit/read tools act on, and where it'd resolve a
@@ -52,12 +57,15 @@ import type { FindingSink, HistoryReader, NetworkReader, ToolContext, TraceStore
 
 const HOST = '127.0.0.1'
 const OPENCODE_PORT = 4097
-// Model pinned on every session we create (orchestrator + the parser
-// one-shot). Must be set explicitly, not just left to the agent's config:
-// OpenCode otherwise bypasses the agent model and routes to its own hosted
-// gateway, which 403s for a user running their own key (see transport.ts's
-// OpenCodeConfig.model). Keep in sync with .opencode/agents/*.md's `model`.
-const AGENT_MODEL = 'google/gemini-flash-lite-latest'
+// Models pinned on the sessions we create. Must be set explicitly, not left to
+// the agent's config: OpenCode otherwise bypasses the agent model and routes to
+// its own hosted gateway, which 403s for provider-authed models (see
+// transport.ts's OpenCodeConfig.model). Keep in sync with opencode.json /
+// .opencode/agents/*.md. The orchestrator runs on the remote vLLM server
+// (reconix.env's ORCHESTRATOR_BASE_URL); the DOM parser runs on the user's
+// Gemini key (the vLLM dom server is a separate, often-offline box).
+const ORCHESTRATOR_MODEL = 'vllm-orchestrator/orchestrator-model'
+const DOM_ANALYZER_MODEL = 'google/gemini-flash-lite-latest'
 // Must match opencode.json's mcp.servers.reconix.url — not read back from
 // there, since opencode.json is static config and this needs to be a fixed
 // port the running process actually binds to.
@@ -203,7 +211,7 @@ async function runOneShotAgent(
     const sessionRes = await fetch(`${baseUrl}/api/session`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ agent, model: parseModel(AGENT_MODEL) })
+      body: JSON.stringify({ agent, model: parseModel(DOM_ANALYZER_MODEL) })
     })
     if (!sessionRes.ok) {
       console.error(
@@ -498,12 +506,23 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
     await syncGlobalOpenCodeConfig()
     const sandboxDir = await resolveSandboxDir()
     return new Promise((resolve, reject) => {
-      const proc = spawn('opencode', ['serve', '--hostname', HOST, '--port', String(OPENCODE_PORT)], {
+      // Source reconix.env (the remote-vLLM connection) in a shell before exec'ing
+      // serve, so bash — not us — handles its `export` + "${VAR}" interpolation.
+      // We unset OPENCODE_SERVER_PASSWORD/PORT from it: serve must PRINT a
+      // generated password (parsed below) and bind OUR port, not reconix.env's.
+      // GOOGLE_* and the rest of process.env (incl. the .env load) are inherited.
+      const reconixEnv = join(app.getAppPath(), 'reconix.env')
+      const script =
+        'if [ -f "$RECONIX_ENV" ]; then set -a; . "$RECONIX_ENV"; set +a; ' +
+        'unset OPENCODE_SERVER_PASSWORD OPENCODE_PORT; fi; ' +
+        'exec opencode serve --hostname "$1" --port "$2"'
+      const proc = spawn('bash', ['-c', script, 'bash', HOST, String(OPENCODE_PORT)], {
         // The scratch sandbox, NOT app.getAppPath() (the Reconix repo) and
         // NOT process.cwd() (wherever the OS launched Electron from).
         // Reconix's own agents/mcp config reach the server regardless, via
         // syncGlobalOpenCodeConfig() above — see the file-header comment.
         cwd: sandboxDir,
+        env: { ...process.env, RECONIX_ENV: reconixEnv },
         stdio: 'pipe'
       })
       child = proc
@@ -618,7 +637,7 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
     async (html) => {
       const { baseUrl, password } = await ensureServerInfo().catch(() => ({ baseUrl: '', password: '' }))
       if (!baseUrl) return null
-      return runOneShotAgent(baseUrl, password, 'parser', html)
+      return runOneShotAgent(baseUrl, password, 'dom-analyzer', html)
     }
   )
 
@@ -628,7 +647,7 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
     starting = (async () => {
       const { baseUrl, password } = await ensureServerInfo()
       const c = createOpenCodeConnector(
-        { baseUrl, password, agent: 'orchestrator', model: AGENT_MODEL },
+        { baseUrl, password, agent: 'pentest-orchestrator', model: ORCHESTRATOR_MODEL },
         {
           onAgentEvent: (ev: AgentEvent) => send('copilot:event', ev),
           persist: (_raw: RawEvent, _normalized: AgentEvent | null) => {

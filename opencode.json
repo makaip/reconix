@@ -43,7 +43,7 @@
     "evaluator": {
       "mode": "subagent",
       "description": "Evidence Analysis and False-Positive Filtering subagent. Reviews execution logs, console output, DOM changes, and network responses from @pentest-orchestrator; validates hypotheses with strict evidence-based reasoning; responds only with the structured JSON evaluation format (vulnerable, confidence, reason). Does not execute actions, modify code, or run terminal commands.",
-      "model": "opencode/glm-5.3-flash-free",
+      "model": "google/gemini-flash-lite-latest",
       "permissions": [
         {
           "action": "edit",
@@ -60,7 +60,7 @@
     "dom-analyzer": {
       "mode": "subagent",
       "description": "Fast DOM Analyzer subagent. Inspects raw HTML snapshots, DOM trees, or accessibility trees; extracts elements, forms, inputs, attributes, and event handlers for @pentest-orchestrator; acts as a cheap filter to condense DOM noise into concise findings. Does not execute actions, modify code, or run terminal commands.",
-      "model": "opencode/glm-5.3-flash-free",
+      "model": "google/gemini-flash-lite-latest",
       "permissions": [
         {
           "action": "edit",
