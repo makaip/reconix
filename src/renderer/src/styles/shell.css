@@ -66,3 +66,43 @@
 .viewport__slot {
   background: var(--page-bg);
 }
+
+.resize-handle {
+  flex: none;
+  position: relative;
+  z-index: 1;
+  background: transparent;
+}
+
+.resize-handle::after {
+  content: '';
+  position: absolute;
+  background: var(--color-accent);
+  opacity: 0;
+  transition: opacity 0.1s ease;
+}
+
+.resize-handle:hover::after,
+.resize-handle--dragging::after {
+  opacity: 1;
+}
+
+.resize-handle--vertical {
+  width: 5px;
+  margin: 0 -2px;
+  cursor: col-resize;
+}
+
+.resize-handle--vertical::after {
+  inset: 0 2px;
+}
+
+.resize-handle--horizontal {
+  height: 5px;
+  margin: -2px 0;
+  cursor: row-resize;
+}
+
+.resize-handle--horizontal::after {
+  inset: 2px 0;
+}

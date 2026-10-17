@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type DragEvent } from 'react'
+import { useEffect, useRef, useState, type CSSProperties, type DragEvent } from 'react'
 import chat from '../../assets/icons/chat.svg'
 import close from '../../assets/icons/close.svg'
 import type { Copilot, NodeRef } from '../../hooks/useCopilot'
@@ -15,6 +15,7 @@ type CopilotPanelProps = {
   onNodeDrop: () => void
   onClose: () => void
   requestCount: number
+  style?: CSSProperties
 }
 
 function CopilotPanel({
@@ -22,7 +23,8 @@ function CopilotPanel({
   draggedNode,
   onNodeDrop,
   onClose,
-  requestCount
+  requestCount,
+  style
 }: CopilotPanelProps): JSX.Element {
   const { messages, attachments, attach, detach, send } = copilot
   const [over, setOver] = useState(false)
@@ -41,7 +43,7 @@ function CopilotPanel({
     draggedNode !== null && event.dataTransfer.types.includes(NODE_DRAG_TYPE)
 
   return (
-    <aside className="copilot" aria-label="Copilot">
+    <aside className="copilot" aria-label="Copilot" style={style}>
       <header className="copilot__header">
         <img src={chat} width={16} height={16} alt="" />
         <h2 className="copilot__title">Copilot</h2>

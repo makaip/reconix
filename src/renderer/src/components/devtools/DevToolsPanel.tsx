@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type CSSProperties } from 'react'
 import type { StyleRule } from '../../../../shared/devtools'
 import type { NodeRef } from '../../hooks/useCopilot'
 import { buildRows, useDomTree } from '../../hooks/useDomTree'
@@ -12,12 +12,14 @@ type DevToolsPanelProps = {
   activeTabId: number | null
   onNodeDragStart: (node: NodeRef) => void
   onNodeDragEnd: () => void
+  style?: CSSProperties
 }
 
 function DevToolsPanel({
   activeTabId,
   onNodeDragStart,
-  onNodeDragEnd
+  onNodeDragEnd,
+  style
 }: DevToolsPanelProps): JSX.Element {
   const { state, loaded, toggle, select } = useDomTree()
   const [rules, setRules] = useState<StyleRule[] | null>(null)
@@ -57,7 +59,7 @@ function DevToolsPanel({
   }
 
   return (
-    <section className="devtools" aria-label="Developer tools">
+    <section className="devtools" aria-label="Developer tools" style={style}>
       <DevToolsToolbar inspecting={inspecting} onToggleInspect={toggleInspect} />
       <div className="dt-elements">
         <div className="dt-elements__tree">
