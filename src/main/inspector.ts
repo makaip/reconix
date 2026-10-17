@@ -200,7 +200,17 @@ export type Inspector = {
   setTarget: (target: WebContents | null) => void
 }
 
-export function attachInspector(win: BrowserWindow): Inspector {
+/**
+ * Optional sink for CDP Network.* events. The inspector owns the single debugger
+ * client per webContents, so response-body capture (bodies.ts) can't attach its
+ * own; instead it rides this hook, receiving the inspector's bound `send`.
+ */
+export type NetworkSink = {
+  handleNetworkEvent: (method: string, params: Record<string, unknown>, send: <T>(method: string, params?: object) => Promise<T>) => void
+  reset: () => void
+}
+
+export function attachInspector(win: BrowserWindow, networkSink?: NetworkSink): Inspector {
   let current: WebContents | null = null
   let ready: Promise<boolean> = Promise.resolve(false)
   let stopListening: (() => void) | null = null
@@ -250,6 +260,8 @@ export function attachInspector(win: BrowserWindow): Inspector {
     sheets.clear()
     entryCounter = 0
     contextId = null
+    // requestIds are per-target; drop the previous target's captured bodies.
+    networkSink?.reset()
 
     if (!target) {
       ready = Promise.resolve(false)
@@ -308,6 +320,8 @@ export function attachInspector(win: BrowserWindow): Inspector {
         if (contextId === executionContextId) contextId = null
       } else if (method === 'Runtime.executionContextsCleared') {
         contextId = null
+      } else if (method.startsWith('Network.')) {
+        networkSink?.handleNetworkEvent(method, params, send)
       } else if (FORWARDED_EVENTS.has(method)) {
         emit({ method, params } as DevToolsEvent)
       }
