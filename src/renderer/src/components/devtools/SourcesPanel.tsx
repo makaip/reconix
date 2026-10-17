@@ -1,9 +1,20 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { ResourceInfo } from '../../../../shared/devtools'
+import { useResizable } from '../../hooks/useResizable'
+import { RESOURCE_DRAG_TYPE, type ResourceDragItem } from '../../lib/dragTypes'
+import { fileIcon } from '../../lib/fileIcon'
+import { highlight } from '../../lib/highlight'
+import { nextSelection } from '../../lib/selection'
+import { detectLanguage, prettyPrint } from '../../lib/sourceFormat'
+import ResizeHandle from '../chrome/ResizeHandle'
 
 type SourcesPanelProps = {
   resources: ResourceInfo[]
   loaded: boolean
+  /** A sitemap endpoint (host+path) to reveal/select, re-triggered by its nonce. */
+  openTarget: { target: string; nonce: number } | null
+  onDragStart: () => void
+  onDragEnd: () => void
 }
 
 /** Last path segment (or the host, for a bare "/") — same idea as Network's requestName. */
@@ -17,13 +28,59 @@ function resourceLabel(url: string): string {
   }
 }
 
-function SourcesPanel({ resources, loaded }: SourcesPanelProps): JSX.Element {
-  const [selected, setSelected] = useState<ResourceInfo | null>(null)
+/** host+path, trailing slash stripped — the scheme-agnostic key the sitemap matches on. */
+function hostPath(url: string): string {
+  try {
+    const parsed = new URL(url)
+    return `${parsed.hostname}${parsed.pathname}`.replace(/\/$/, '')
+  } catch {
+    return url
+  }
+}
+
+const keyOf = (resource: Pick<ResourceInfo, 'frameId' | 'url'>): string =>
+  `${resource.frameId}:${resource.url}`
+
+function SourcesPanel({
+  resources,
+  loaded,
+  openTarget,
+  onDragStart,
+  onDragEnd
+}: SourcesPanelProps): JSX.Element {
+  const [active, setActive] = useState<ResourceInfo | null>(null)
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [anchor, setAnchor] = useState<string | null>(null)
   const [content, setContent] = useState<string | null>(null)
   const [state, setState] = useState<'idle' | 'loading' | 'binary' | 'error'>('idle')
+  const listResize = useResizable({ axis: 'x', initial: 220, min: 140, max: 600, storageKey: 'sources.list' })
+  const [pretty, setPretty] = useState(true)
+  const [truncated, setTruncated] = useState(false)
 
+  const language = active ? detectLanguage(active) : 'plaintext'
+  // Pretty-print + highlight once per loaded source, not on every render.
+  const html = useMemo(() => {
+    if (content === null) return ''
+    const formatted = pretty ? prettyPrint(content, language) : content
+    return highlight(truncated ? `${formatted}\n\n… truncated …` : formatted, language)
+  }, [content, language, pretty, truncated])
+
+  const reveal = (resource: ResourceInfo): void => {
+    setActive(resource)
+    setSelected(new Set([keyOf(resource)]))
+    setAnchor(keyOf(resource))
+  }
+
+  // A sitemap double-click opens the matching resource here (if the page loaded it).
   useEffect(() => {
-    if (!selected) {
+    if (!openTarget) return
+    const match = resources.find((r) => hostPath(r.url) === openTarget.target.replace(/\/$/, ''))
+    if (match) reveal(match)
+  }, [openTarget, resources])
+
+  // Loads the active resource's source into the viewer.
+  useEffect(() => {
+    if (!active) {
       setContent(null)
       setState('idle')
       return
@@ -31,7 +88,7 @@ function SourcesPanel({ resources, loaded }: SourcesPanelProps): JSX.Element {
     let stale = false
     setState('loading')
     void window.reconix.devtools
-      .getResourceContent({ frameId: selected.frameId, url: selected.url })
+      .getResourceContent({ frameId: active.frameId, url: active.url })
       .then((result) => {
         if (stale) return
         if (!result) {
@@ -42,7 +99,8 @@ function SourcesPanel({ resources, loaded }: SourcesPanelProps): JSX.Element {
           setState('binary')
           return
         }
-        setContent(result.truncated ? `${result.content}\n\n… truncated …` : result.content)
+        setContent(result.content)
+        setTruncated(result.truncated)
         setState('idle')
       })
       .catch(() => {
@@ -51,46 +109,118 @@ function SourcesPanel({ resources, loaded }: SourcesPanelProps): JSX.Element {
     return () => {
       stale = true
     }
-  }, [selected])
+  }, [active])
 
-  // the resource the selection pointed at may disappear on navigation
+  // Drop selections/active that point at resources gone after a navigation.
   useEffect(() => {
-    if (selected && !resources.some((r) => r.url === selected.url && r.frameId === selected.frameId)) {
-      setSelected(null)
+    const present = new Set(resources.map(keyOf))
+    setSelected((current) => {
+      const next = new Set([...current].filter((k) => present.has(k)))
+      return next.size === current.size ? current : next
+    })
+    if (active && !present.has(keyOf(active))) setActive(null)
+  }, [resources, active])
+
+  const select = (
+    resource: ResourceInfo,
+    mods: { metaKey: boolean; ctrlKey: boolean; shiftKey: boolean }
+  ): void => {
+    const keys = resources.map(keyOf)
+    const result = nextSelection(selected, anchor, keyOf(resource), keys, mods)
+    setSelected(result.set)
+    setAnchor(result.anchor)
+    setActive(resource)
+  }
+
+  // Dragging a row carries every selected file; dragging an unselected row selects just it first.
+  const dragItems = (resource: ResourceInfo): ResourceDragItem[] => {
+    const key = keyOf(resource)
+    let keys = selected
+    if (!selected.has(key)) {
+      keys = new Set([key])
+      setSelected(keys)
+      setAnchor(key)
     }
-  }, [resources, selected])
+    return resources
+      .filter((r) => keys.has(keyOf(r)))
+      .map((r) => ({ url: r.url, label: resourceLabel(r.url), frameId: r.frameId }))
+  }
 
   return (
     <div className="dt-sources">
-      <div className="dt-sources__list" role="tree" aria-label="Page resources">
+      <div
+        className="dt-sources__list"
+        role="tree"
+        aria-label="Page resources"
+        style={{ width: listResize.size }}
+      >
         {!loaded && <p className="dt-empty">Loading…</p>}
         {loaded && resources.length === 0 && <p className="dt-empty">No resources loaded.</p>}
         {resources.map((resource) => (
           <button
-            key={`${resource.frameId}:${resource.url}`}
+            key={keyOf(resource)}
             type="button"
             className={
-              selected?.url === resource.url && selected?.frameId === resource.frameId
+              selected.has(keyOf(resource))
                 ? 'dt-sources__row dt-sources__row--selected'
                 : 'dt-sources__row'
             }
             title={resource.url}
-            onClick={() => setSelected(resource)}
+            draggable
+            onClick={(event) =>
+              select(resource, {
+                metaKey: event.metaKey,
+                ctrlKey: event.ctrlKey,
+                shiftKey: event.shiftKey
+              })
+            }
+            onDragStart={(event) => {
+              const items = dragItems(resource)
+              event.dataTransfer.effectAllowed = 'copy'
+              event.dataTransfer.setData(RESOURCE_DRAG_TYPE, JSON.stringify(items))
+              event.dataTransfer.setData('text/plain', items.map((item) => item.url).join('\n'))
+              onDragStart()
+            }}
+            onDragEnd={onDragEnd}
           >
+            <img src={fileIcon(resourceLabel(resource.url))} width={14} height={14} alt="" />
             <span className="dt-sources__row-name">{resourceLabel(resource.url)}</span>
             <span className="dt-sources__row-type dt-muted">{resource.type}</span>
           </button>
         ))}
       </div>
 
+      <ResizeHandle
+        orientation="vertical"
+        dragging={listResize.dragging}
+        onPointerDown={listResize.onHandlePointerDown}
+      />
+
       <div className="dt-sources__viewer">
-        {!selected && <p className="dt-network__detail-empty">Select a resource to view its source.</p>}
-        {selected && state === 'loading' && <p className="dt-network__detail-empty">Loading…</p>}
-        {selected && state === 'binary' && <p className="dt-network__detail-empty">Binary content, not shown.</p>}
-        {selected && state === 'error' && (
+        {!active && <p className="dt-network__detail-empty">Select a resource to view its source.</p>}
+        {active && state === 'loading' && <p className="dt-network__detail-empty">Loading…</p>}
+        {active && state === 'binary' && <p className="dt-network__detail-empty">Binary content, not shown.</p>}
+        {active && state === 'error' && (
           <p className="dt-network__detail-empty">Couldn't load this resource.</p>
         )}
-        {selected && state === 'idle' && content !== null && <pre className="dt-sources__code">{content}</pre>}
+        {active && state === 'idle' && content !== null && (
+          <>
+            <div className="dt-sources__toolbar">
+              <span className="dt-muted">{language}</span>
+              <button
+                type="button"
+                className={pretty ? 'dt-sources__pretty dt-sources__pretty--on' : 'dt-sources__pretty'}
+                aria-pressed={pretty}
+                title="Pretty print"
+                onClick={() => setPretty((on) => !on)}
+              >
+                {'{ }'}
+              </button>
+            </div>
+            {/* highlight() escapes all source text; see SECURITY note in lib/highlight.ts */}
+            <pre className="dt-sources__code hljs" dangerouslySetInnerHTML={{ __html: html }} />
+          </>
+        )}
       </div>
     </div>
   )

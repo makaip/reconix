@@ -125,6 +125,8 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  max-width: 100%;
+  min-width: 0;
   height: 22px;
   padding: 0 3px 0 7px;
   background: var(--color-bg-bar);
@@ -133,12 +135,17 @@
 }
 
 .context-chip__label {
+  min-width: 0;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-family: var(--font-mono);
   font-size: var(--text-2xs);
   white-space: nowrap;
 }
 
 .context-chip__remove {
+  flex: none;
   display: grid;
   place-items: center;
   width: 16px;
@@ -245,4 +252,67 @@
 
 .composer__send:hover {
   background: var(--color-text-muted);
+}
+
+/* agent:event transcript items (arch.md §6.1): tool calls + inline approvals. */
+.message--tool,
+.message--approval {
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-inset);
+}
+
+.message--approval {
+  border-color: var(--color-border);
+}
+
+.approval__controls {
+  display: flex;
+  gap: 8px;
+}
+
+.approval__btn {
+  flex: none;
+  padding: 4px 10px;
+  font-size: var(--text-xs);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg);
+  color: var(--color-text);
+  cursor: pointer;
+}
+
+.approval__btn:hover {
+  background: var(--color-bg-inset);
+}
+
+.approval__btn--approve {
+  border-color: var(--color-text);
+}
+
+.approval__btn--deny {
+  color: var(--color-text-muted);
+}
+
+.approval__edit {
+  width: 100%;
+  min-height: 48px;
+  resize: vertical;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--color-text);
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+}
+
+.approval__status {
+  margin: 0;
+  font-size: var(--text-2xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-text-faint);
 }

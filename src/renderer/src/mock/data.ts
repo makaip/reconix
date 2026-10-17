@@ -17,17 +17,6 @@ export type Finding = {
   title: string
 }
 
-export type CopilotMessage =
-  | { id: string; role: 'user'; context: string[]; text: string }
-  | {
-      id: string
-      role: 'assistant'
-      used: string
-      text: string
-      mapping?: { field: string; column: string }[]
-      footnote?: string
-    }
-
 export const sitemap: SitemapNode[] = [
   { id: 'host', label: 'app.example.test', depth: 0, kind: 'folder' },
   { id: 'login', label: '/login', depth: 1, kind: 'page' },
@@ -45,28 +34,6 @@ export const findings: Finding[] = [
 ]
 
 export const engagement = 'Q4 web app'
-
-export const messages: CopilotMessage[] = [
-  {
-    id: 'm1',
-    role: 'user',
-    context: ['<table.orders-table>'],
-    text: 'Which columns does this table render, and which request fills it?'
-  },
-  {
-    id: 'm2',
-    role: 'assistant',
-    used: 'used 1 DOM node, 1 captured request',
-    text: "Rows come from GET /api/v1/orders?page=2. The table's data-endpoint attribute matches that request. Response fields map to columns:",
-    mapping: [
-      { field: 'id', column: 'Order' },
-      { field: 'customer.email', column: 'Customer' },
-      { field: 'total', column: 'Total' },
-      { field: 'status', column: 'Status' }
-    ],
-    footnote: 'Paging is server-side. page is the only query parameter.'
-  }
-]
 
 // placeholders until proxy and scope rules exist
 export const proxy = { label: ':8080', address: '127.0.0.1:8080' }

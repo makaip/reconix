@@ -1,0 +1,19 @@
+{
+  "engagementId": "example-engagement",
+  "infra": [
+    {
+      "host": "model.internal",
+      "ports": [8443]
+    }
+  ],
+  "targets": [
+    {
+      "host": "*.juice-shop.local",
+      "paths": ["/"]
+    },
+    {
+      "cidr": "10.13.37.0/24",
+      "ports": [80, 443, 3000]
+    }
+  ]
+}

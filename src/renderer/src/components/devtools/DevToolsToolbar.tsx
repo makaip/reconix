@@ -1,11 +1,24 @@
 import type { ReactNode } from 'react'
 import inspect from '../../assets/icons/inspect.svg'
 
-export type DevToolsTab = 'elements' | 'network' | 'console' | 'sources' | 'application'
+export type DevToolsTab =
+  | 'elements'
+  | 'network'
+  | 'websocket'
+  | 'crawler'
+  | 'repeater'
+  | 'intercept'
+  | 'console'
+  | 'sources'
+  | 'application'
 
 const TABS: { id: DevToolsTab; label: string }[] = [
   { id: 'elements', label: 'Elements' },
   { id: 'network', label: 'Network' },
+  { id: 'websocket', label: 'WebSocket' },
+  { id: 'crawler', label: 'Crawler' },
+  { id: 'repeater', label: 'Repeater' },
+  { id: 'intercept', label: 'Intercept' },
   { id: 'console', label: 'Console' },
   { id: 'sources', label: 'Sources' },
   { id: 'application', label: 'Application' }

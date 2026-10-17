@@ -1,10 +1,12 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type {
+  AgentEvent,
   AgentSessionState,
   AgentTask,
   ApprovalDecision,
   ApprovalRequest,
   Finding,
+  SendMessageParams,
   StartAgentParams,
   ToolDescriptor
 } from '../shared/agent'
@@ -21,7 +23,22 @@ import type {
   StorageEntry,
   StyleRule
 } from '../shared/devtools'
-import type { CapturedRequest, NavigateResult, NetworkStats, TabsState } from '../shared/tabs'
+import type {
+  CapturedBody,
+  CapturedRequest,
+  NavigateResult,
+  NetworkStats,
+  InterceptRule,
+  ReplayRequestInput,
+  ReplayResult,
+  SavedRequest,
+  SaveInterceptRuleInput,
+  SaveRequestInput,
+  TabsState,
+  WsConnection
+} from '../shared/tabs'
+import type { DiffResponsesOutput } from '../shared/tools'
+import type { CrawlStartInput, CrawlState } from '../shared/crawler'
 
 // typed surface is exposed to renderer but renderer never accesses ipcRenderer directly
 export type Bounds = { x: number; y: number; width: number; height: number }
@@ -33,6 +50,10 @@ function subscribe<T>(channel: string, callback: (payload: T) => void): () => vo
   return () => ipcRenderer.removeListener(channel, listener)
 }
 
+// Fixed, named surface only. No method takes a code string that executes in the
+// UI/renderer: devtools.evaluate forwards an expression to the TARGET page over CDP
+// in main, it is not an eval channel into this window. index.d.ts mirrors this via
+// `typeof api`, so the two stay in sync automatically.
 const api = {
   ping: (): Promise<string> => ipcRenderer.invoke('ping'),
   platform: process.platform,
@@ -56,11 +77,56 @@ const api = {
   network: {
     getStats: (): Promise<NetworkStats> => ipcRenderer.invoke('network:get-stats'),
     list: (tabId?: number): Promise<CapturedRequest[]> => ipcRenderer.invoke('network:list', tabId),
+    // Full req/resp record (incl. bodies) for one CDP request on the inspected target.
+    getBody: (requestId: string): Promise<CapturedBody | null> =>
+      ipcRenderer.invoke('network:get-body', requestId),
+    // Repeater: resend an arbitrary request. Scope- and rate-gated in main.
+    replay: (input: ReplayRequestInput): Promise<ReplayResult> =>
+      ipcRenderer.invoke('replay:send', input),
     onStats: (callback: (stats: NetworkStats) => void): (() => void) =>
       subscribe('network:stats', callback),
     // full capture list (all tabs, most recent 200), pushed whenever any request changes
     onRequests: (callback: (requests: CapturedRequest[]) => void): (() => void) =>
       subscribe('network:requests', callback)
+  },
+  websocket: {
+    // WebSocket connections + frames captured over CDP on the inspected target.
+    list: (): Promise<WsConnection[]> => ipcRenderer.invoke('websocket:list'),
+    onChanged: (callback: (conns: WsConnection[]) => void): (() => void) =>
+      subscribe('websocket:changed', callback)
+  },
+  crawler: {
+    // Deterministic scope-aware spider. Drives the gated replayer; no new egress.
+    start: (input: CrawlStartInput): Promise<CrawlState> => ipcRenderer.invoke('crawl:start', input),
+    stop: (): Promise<CrawlState> => ipcRenderer.invoke('crawl:stop'),
+    getState: (): Promise<CrawlState> => ipcRenderer.invoke('crawl:get-state'),
+    onState: (callback: (state: CrawlState) => void): (() => void) =>
+      subscribe('crawl:state', callback)
+  },
+  repeater: {
+    list: (): Promise<SavedRequest[]> => ipcRenderer.invoke('repeater:list'),
+    // create (no id) or update (with id) a saved request
+    save: (input: SaveRequestInput): Promise<SavedRequest | null> =>
+      ipcRenderer.invoke('repeater:save', input),
+    delete: (id: string): Promise<boolean> => ipcRenderer.invoke('repeater:delete', id),
+    // resend a saved request through the gated replayer; appends to its response history
+    send: (id: string): Promise<SavedRequest | null> => ipcRenderer.invoke('repeater:send', id),
+    // diff two of a saved request's responses (defaults to the two most recent)
+    diff: (payload: { id: string; aIndex?: number; bIndex?: number }): Promise<DiffResponsesOutput | null> =>
+      ipcRenderer.invoke('repeater:diff', payload),
+    // pushed whenever the saved set changes (save/delete/send)
+    onChanged: (callback: (saved: SavedRequest[]) => void): (() => void) =>
+      subscribe('repeater:changed', callback)
+  },
+  intercept: {
+    list: (): Promise<InterceptRule[]> => ipcRenderer.invoke('intercept:list'),
+    save: (input: SaveInterceptRuleInput): Promise<InterceptRule | null> =>
+      ipcRenderer.invoke('intercept:save', input),
+    toggle: (id: string, enabled: boolean): Promise<InterceptRule | null> =>
+      ipcRenderer.invoke('intercept:toggle', id, enabled),
+    delete: (id: string): Promise<boolean> => ipcRenderer.invoke('intercept:delete', id),
+    onChanged: (callback: (rules: InterceptRule[]) => void): (() => void) =>
+      subscribe('intercept:changed', callback)
   },
   devtools: {
     getDocument: (): Promise<CdpNode | null> => ipcRenderer.invoke('devtools:get-document'),
@@ -108,8 +174,20 @@ const api = {
     resume: (): Promise<void> => ipcRenderer.invoke('agent:resume'),
     getState: (): Promise<AgentSessionState> => ipcRenderer.invoke('agent:get-state'),
     listTools: (): Promise<ToolDescriptor[]> => ipcRenderer.invoke('tool:list'),
+    // §6.1 sendMessage {text}: a user message into the agent session.
+    sendMessage: (params: SendMessageParams): Promise<void> =>
+      ipcRenderer.invoke('sendMessage', params),
+    // §6.1 respondApproval {approvalId, decision, editedParams?}. No code string crosses
+    // the bridge — editedParams is a plain text key/value map only.
+    respondApproval: (decision: ApprovalDecision): Promise<void> =>
+      ipcRenderer.invoke('respondApproval', decision),
+    // Legacy alias kept for backward-compat with earlier consumers.
     respondToApproval: (decision: ApprovalDecision): Promise<void> =>
       ipcRenderer.invoke('approval:respond', decision),
+    // §6.1 agent:event: the one transcript stream (user / reasoning / tool-call /
+    // tool-result / inline approval). Returns an unsubscribe function.
+    onEvent: (callback: (event: AgentEvent) => void): (() => void) =>
+      subscribe('agent:event', callback),
     onState: (callback: (state: AgentSessionState) => void): (() => void) =>
       subscribe('agent:state', callback),
     onPlanUpdate: (callback: (tasks: AgentTask[]) => void): (() => void) =>

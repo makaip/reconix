@@ -8,7 +8,8 @@ function DropZone({ over }: DropZoneProps): JSX.Element {
     <div className={over ? 'drop-zone drop-zone--over' : 'drop-zone'}>
       <p className="drop-zone__title">Drop to attach as context</p>
       <p className="drop-zone__hint">
-        From DevTools: outerHTML, CSS selector and computed styles of the node.
+        DOM nodes bring outerHTML, selector and computed styles. Source and sitemap files
+        bring their URL.
       </p>
     </div>
   )

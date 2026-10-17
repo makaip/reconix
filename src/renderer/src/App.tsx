@@ -7,7 +7,7 @@ import ResizeHandle from './components/chrome/ResizeHandle'
 import StatusBar from './components/chrome/StatusBar'
 import TabBar from './components/chrome/TabBar'
 import Toolbar from './components/chrome/Toolbar'
-import { useCopilot, type NodeRef } from './hooks/useCopilot'
+import { useCopilot } from './hooks/useCopilot'
 import { useNetworkStats } from './hooks/useNetworkStats'
 import { useResizable } from './hooks/useResizable'
 import { useTabs } from './hooks/useTabs'
@@ -18,8 +18,11 @@ function App(): JSX.Element {
   const copilot = useCopilot()
   const tabs = useTabs()
   const network = useNetworkStats()
-  const [draggedNode, setDraggedNode] = useState<NodeRef | null>(null)
+  const [dragActive, setDragActive] = useState(false)
   const [copilotOpen, setCopilotOpen] = useState(true)
+  // Set when a sitemap file is double-clicked, so DevTools opens it in Sources. The counter
+  // forces a re-open even when the same file is double-clicked twice in a row.
+  const [openSource, setOpenSource] = useState<{ target: string; nonce: number } | null>(null)
 
   // Panel sizes are drag-resizable; see shell.css for the matching defaults these fall back to.
   const sidebarResize = useResizable({ axis: 'x', initial: 240, min: 180, max: 480 })
@@ -48,7 +51,12 @@ function App(): JSX.Element {
       />
 
       <div className="shell">
-        <Sidebar style={{ flexBasis: sidebarResize.size }} />
+        <Sidebar
+          style={{ flexBasis: sidebarResize.size }}
+          onDragStart={() => setDragActive(true)}
+          onDragEnd={() => setDragActive(false)}
+          onOpenSource={(target) => setOpenSource((prev) => ({ target, nonce: (prev?.nonce ?? 0) + 1 }))}
+        />
         <ResizeHandle
           orientation="vertical"
           dragging={sidebarResize.dragging}
@@ -66,8 +74,10 @@ function App(): JSX.Element {
           />
           <DevToolsPanel
             activeTabId={tabs.activeId}
-            onNodeDragStart={setDraggedNode}
-            onNodeDragEnd={() => setDraggedNode(null)}
+            targetUrl={activeTab?.url ?? ''}
+            onDragStart={() => setDragActive(true)}
+            onDragEnd={() => setDragActive(false)}
+            openSource={openSource}
             style={{ flexBasis: devtoolsResize.size }}
           />
         </main>
@@ -81,8 +91,8 @@ function App(): JSX.Element {
             />
             <CopilotPanel
               copilot={copilot}
-              draggedNode={draggedNode}
-              onNodeDrop={() => setDraggedNode(null)}
+              dragActive={dragActive}
+              onDrop={() => setDragActive(false)}
               onClose={() => setCopilotOpen(false)}
               requestCount={requestCount}
               style={{ flexBasis: copilotResize.size }}

@@ -1,11 +1,11 @@
-import { useState } from 'react'
+import { useState, type CSSProperties } from 'react'
 import type { StyleRule } from '../../../../shared/devtools'
 
 function matches(text: string, filter: string): boolean {
   return text.toLowerCase().includes(filter)
 }
 
-function StylesPane({ rules }: { rules: StyleRule[] | null }): JSX.Element {
+function StylesPane({ rules, style }: { rules: StyleRule[] | null; style?: CSSProperties }): JSX.Element {
   const [filter, setFilter] = useState('')
   const needle = filter.trim().toLowerCase()
 
@@ -21,7 +21,7 @@ function StylesPane({ rules }: { rules: StyleRule[] | null }): JSX.Element {
     .filter((rule): rule is StyleRule => rule !== null)
 
   return (
-    <div className="dt-styles">
+    <div className="dt-styles" style={style}>
       <div className="dt-styles__tabs" role="tablist">
         <button type="button" role="tab" aria-selected className="dt-tab dt-tab--active dt-tab--small">
           Styles
