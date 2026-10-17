@@ -1,6 +1,22 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  "default_agent": "orchestrator",
+  "default_agent": "pentest-orchestrator",
+  "providers": {
+    "vllm-orchestrator": {
+      "package": "@ai-sdk/openai-compatible",
+      "name": "vLLM (orchestrator, local)",
+      "settings": {
+        "baseURL": "{env:ORCHESTRATOR_BASE_URL}",
+        "apiKey": "{env:ORCHESTRATOR_API_KEY}"
+      },
+      "models": {
+        "orchestrator-model": {
+          "name": "Qwen 2.5 14B AWQ (orchestrator)",
+          "limit": { "context": 20480, "output": 4096 }
+        }
+      }
+    }
+  },
   "permissions": [
     {
       "action": "bash",
@@ -19,15 +35,32 @@
     }
   ],
   "agents": {
-    "orchestrator": {
+    "pentest-orchestrator": {
       "mode": "primary",
-      "description": "Lead strategist that analyzes target pages, generates hypotheses, and directs test execution.",
-      "model": "temp"
+      "description": "Lead Penetration Testing Orchestrator for an AI-driven security browser built on Electron and OpenCode. Coordinates autonomous security assessments: reconnaissance/mapping, hypothesis generation, delegation to @dom-analyzer and @evaluator, and reporting.",
+      "model": "vllm-orchestrator/orchestrator-model"
     },
     "evaluator": {
       "mode": "subagent",
-      "description": "Fast log, DOM, and network inspector that validates execution results and filters false positives.",
-      "model": "temp",
+      "description": "Evidence Analysis and False-Positive Filtering subagent. Reviews execution logs, console output, DOM changes, and network responses from @pentest-orchestrator; validates hypotheses with strict evidence-based reasoning; responds only with the structured JSON evaluation format (vulnerable, confidence, reason). Does not execute actions, modify code, or run terminal commands.",
+      "model": "opencode/glm-5.3-flash-free",
+      "permissions": [
+        {
+          "action": "edit",
+          "resource": "*",
+          "effect": "deny"
+        },
+        {
+          "action": "bash",
+          "resource": "*",
+          "effect": "deny"
+        }
+      ]
+    },
+    "dom-analyzer": {
+      "mode": "subagent",
+      "description": "Fast DOM Analyzer subagent. Inspects raw HTML snapshots, DOM trees, or accessibility trees; extracts elements, forms, inputs, attributes, and event handlers for @pentest-orchestrator; acts as a cheap filter to condense DOM noise into concise findings. Does not execute actions, modify code, or run terminal commands.",
+      "model": "opencode/glm-5.3-flash-free",
       "permissions": [
         {
           "action": "edit",

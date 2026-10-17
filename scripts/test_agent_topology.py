@@ -8,8 +8,8 @@ load_dotenv()
 
 # Point to an alternative OpenAI-compatible gateway/provider (e.g., OpenRouter, local vLLM, etc.)
 client = OpenAI(
-    api_key=os.environ.get("API_KEY"),
-    base_url=os.environ.get("BASE_URL")
+    api_key=os.environ.get("NAVIGATOR_API_KEY"),
+    base_url=os.environ.get("NAVIGATOR_BASE_URL")
 )
 
 RAW_DOM_LOGS = """
