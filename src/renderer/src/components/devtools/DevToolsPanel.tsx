@@ -41,11 +41,13 @@ function DevToolsPanel({
 
   useEffect(() => setInspecting(false), [activeTabId])
 
-  // page inspector turns itself off once element has been picked
+  // page inspector turns itself off once element has been picked, and the pick is shown in Elements
   useEffect(
     () =>
       window.reconix.devtools.onEvent((event) => {
-        if (event.method === 'Reconix.nodeInspected') setInspecting(false)
+        if (event.method !== 'Reconix.nodeInspected') return
+        setInspecting(false)
+        setDevtoolsTab('elements')
       }),
     []
   )

@@ -49,6 +49,19 @@
   flex: none;
 }
 
+/* tab drag-to-reorder: the dragged tab dims and an accent bar marks where it will land */
+.tab--dragging {
+  opacity: 0.5;
+}
+
+.tab--drop-before {
+  box-shadow: inset 2px 0 0 var(--color-accent);
+}
+
+.tab--drop-after {
+  box-shadow: inset -2px 0 0 var(--color-accent);
+}
+
 .tab__title {
   flex: 1 1 0;
   min-width: 0;
