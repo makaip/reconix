@@ -42,7 +42,11 @@ const api = {
   network: {
     getStats: (): Promise<NetworkStats> => ipcRenderer.invoke('network:get-stats'),
     list: (tabId?: number): Promise<CapturedRequest[]> => ipcRenderer.invoke('network:list', tabId),
-    onStats: (callback: (stats: NetworkStats) => void): (() => void) => subscribe('network:stats', callback)
+    onStats: (callback: (stats: NetworkStats) => void): (() => void) =>
+      subscribe('network:stats', callback),
+    // full capture list (all tabs, most recent 200), pushed whenever any request changes
+    onRequests: (callback: (requests: CapturedRequest[]) => void): (() => void) =>
+      subscribe('network:requests', callback)
   },
   devtools: {
     getDocument: (): Promise<CdpNode | null> => ipcRenderer.invoke('devtools:get-document'),

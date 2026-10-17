@@ -2,9 +2,11 @@ import { useEffect, useMemo, useState, type CSSProperties } from 'react'
 import type { StyleRule } from '../../../../shared/devtools'
 import type { NodeRef } from '../../hooks/useCopilot'
 import { buildRows, useDomTree } from '../../hooks/useDomTree'
+import { useNetworkRequests } from '../../hooks/useNetworkRequests'
 import Breadcrumbs from './Breadcrumbs'
-import DevToolsToolbar from './DevToolsToolbar'
+import DevToolsToolbar, { type DevToolsTab } from './DevToolsToolbar'
 import ElementsTree from './ElementsTree'
+import NetworkPanel from './NetworkPanel'
 import StylesPane from './StylesPane'
 
 type DevToolsPanelProps = {
@@ -24,7 +26,9 @@ function DevToolsPanel({
   const { state, loaded, toggle, select } = useDomTree()
   const [rules, setRules] = useState<StyleRule[] | null>(null)
   const [inspecting, setInspecting] = useState(false)
+  const [devtoolsTab, setDevtoolsTab] = useState<DevToolsTab>('elements')
   const rows = useMemo(() => buildRows(state), [state])
+  const networkRequests = useNetworkRequests(activeTabId)
 
   useEffect(() => setInspecting(false), [activeTabId])
 
@@ -60,26 +64,36 @@ function DevToolsPanel({
 
   return (
     <section className="devtools" aria-label="Developer tools" style={style}>
-      <DevToolsToolbar inspecting={inspecting} onToggleInspect={toggleInspect} />
-      <div className="dt-elements">
-        <div className="dt-elements__tree">
-          {loaded ? (
-            <ElementsTree
-              state={state}
-              rows={rows}
-              onSelect={select}
-              onToggle={toggle}
-              onHover={(id) => void window.reconix.devtools.highlight(id)}
-              onNodeDragStart={onNodeDragStart}
-              onNodeDragEnd={onNodeDragEnd}
-            />
-          ) : (
-            <p className="dt-empty">Inspector unavailable.</p>
-          )}
-          <Breadcrumbs state={state} />
+      <DevToolsToolbar
+        inspecting={inspecting}
+        onToggleInspect={toggleInspect}
+        activeTab={devtoolsTab}
+        onTabChange={setDevtoolsTab}
+        networkCount={networkRequests.length}
+      />
+      {devtoolsTab === 'elements' ? (
+        <div className="dt-elements">
+          <div className="dt-elements__tree">
+            {loaded ? (
+              <ElementsTree
+                state={state}
+                rows={rows}
+                onSelect={select}
+                onToggle={toggle}
+                onHover={(id) => void window.reconix.devtools.highlight(id)}
+                onNodeDragStart={onNodeDragStart}
+                onNodeDragEnd={onNodeDragEnd}
+              />
+            ) : (
+              <p className="dt-empty">Inspector unavailable.</p>
+            )}
+            <Breadcrumbs state={state} />
+          </div>
+          <StylesPane rules={rules} />
         </div>
-        <StylesPane rules={rules} />
-      </div>
+      ) : (
+        <NetworkPanel requests={networkRequests} />
+      )}
     </section>
   )
 }
