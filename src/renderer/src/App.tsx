@@ -79,6 +79,7 @@ function App(): JSX.Element {
           />
           <DevToolsPanel
             activeTabId={tabs.activeId}
+            targetUrl={activeTab?.url ?? ''}
             onDragStart={() => setDragActive(true)}
             onDragEnd={() => setDragActive(false)}
             openSource={openSource}

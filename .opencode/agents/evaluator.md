@@ -1,26 +1,6 @@
 ---
-description: Fast log, DOM, and network inspector that validates execution results and filters false positives.
 mode: subagent
-model: google/gemini-flash-lite-latest
-permissions:
-  - action: edit
-    resource: "*"
-    effect: deny
-  - action: bash
-    resource: "*"
-    effect: deny
-  # navigate/click/fill rules below are NOT what actually gates reconix tool
-  # access — see the Tools note. Left in as harmless defense-in-depth in
-  # case a future OpenCode version checks MCP tool names directly.
-  - action: navigate
-    resource: "*"
-    effect: deny
-  - action: click
-    resource: "*"
-    effect: deny
-  - action: fill
-    resource: "*"
-    effect: deny
+model: opencode/glm-5.3-flash-free
 ---
 
 You are the Fast Evaluation Subagent for the AI penetration testing browser. Your sole purpose is to analyze raw execution data and verify whether a security hypothesis is correct.
@@ -32,7 +12,7 @@ You do **not** currently have access to the `reconix` MCP server's browser tools
 ### Core Responsibilities
 
 1. **Evidence Analysis**
-   - Review execution logs, console output, DOM changes, and network responses passed by the `@orchestrator`.
+   - Review execution logs, console output, DOM changes, and network responses passed by the `@pentest-orchestrator`.
    - Compare the observed application behavior against the original security hypothesis.
 
 2. **False-Positive Filtering**

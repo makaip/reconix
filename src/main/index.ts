@@ -4,9 +4,11 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { createBodyStore } from './bodies'
 import { createCopilotBridge, type CopilotBridge } from './copilot'
 import { loadScopeChecker } from './engagement'
-import { attachInspector } from './inspector'
+import { attachInspector, combineNetworkSinks } from './inspector'
 import { createInterceptor } from './intercept'
 import { startNetworkCapture, type NetworkCapture } from './network'
+import { createWebSocketCapture } from './websocket'
+import { createCrawler } from './crawler'
 import { createReplay } from './replay'
 import { createRepeater } from './repeater'
 import { createSessionManager } from './session'
@@ -110,8 +112,13 @@ function createWindow(): void {
   copilotBridge = createCopilotBridge(mainWindow, () => network)
 
   const bodies = createBodyStore(mainWindow)
+  const websockets = createWebSocketCapture(mainWindow)
   const interceptor = createInterceptor(mainWindow)
-  const inspector = attachInspector(mainWindow, bodies, interceptor.sink)
+  const inspector = attachInspector(
+    mainWindow,
+    combineNetworkSinks(bodies, websockets),
+    interceptor.sink
+  )
   const tabs = createTabManager(mainWindow, {
     onActiveChanged: (target, tabId) => {
       inspector.setTarget(target)
@@ -126,6 +133,9 @@ function createWindow(): void {
   const { replayer } = createReplay(mainWindow, loadScopeChecker())
   // Repeater reuses the one gated replayer so its sends are scope-/rate-checked too.
   createRepeater(mainWindow, replayer)
+  // The crawler drives the SAME gated replayer, so its spidering never egresses
+  // outside authorized scope or past the per-host rate limit.
+  createCrawler(mainWindow, replayer)
   createSessionManager(mainWindow)
 
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {

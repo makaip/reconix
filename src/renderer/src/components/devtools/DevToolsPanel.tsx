@@ -3,16 +3,19 @@ import type { StyleRule } from '../../../../shared/devtools'
 import { nextSelection } from '../../lib/selection'
 import { useApplication } from '../../hooks/useApplication'
 import { useConsole } from '../../hooks/useConsole'
+import { useCrawler } from '../../hooks/useCrawler'
 import { buildRows, useDomTree } from '../../hooks/useDomTree'
 import { useIntercept } from '../../hooks/useIntercept'
 import { useNetworkRequests } from '../../hooks/useNetworkRequests'
 import { useRepeater } from '../../hooks/useRepeater'
 import { useResizable } from '../../hooks/useResizable'
 import { useResources } from '../../hooks/useResources'
+import { useWebSocket } from '../../hooks/useWebSocket'
 import ResizeHandle from '../chrome/ResizeHandle'
 import ApplicationPanel from './ApplicationPanel'
 import Breadcrumbs from './Breadcrumbs'
 import ConsolePanel from './ConsolePanel'
+import CrawlerPanel from './CrawlerPanel'
 import DevToolsToolbar, { type DevToolsTab } from './DevToolsToolbar'
 import ElementsTree from './ElementsTree'
 import InterceptPanel from './InterceptPanel'
@@ -20,10 +23,13 @@ import NetworkPanel from './NetworkPanel'
 import RepeaterPanel from './RepeaterPanel'
 import SourcesPanel from './SourcesPanel'
 import StylesPane from './StylesPane'
+import WebSocketPanel from './WebSocketPanel'
 
 type DevToolsPanelProps = {
   /** Changes when the user switches tabs; the page inspector doesn't carry over. */
   activeTabId: number | null
+  /** Active tab's URL, used to prefill the Crawler start field. */
+  targetUrl?: string
   onDragStart: () => void
   onDragEnd: () => void
   /** Request (from the sitemap) to open a file in Sources; the nonce re-triggers repeats. */
@@ -33,6 +39,7 @@ type DevToolsPanelProps = {
 
 function DevToolsPanel({
   activeTabId,
+  targetUrl,
   onDragStart,
   onDragEnd,
   openSource,
@@ -63,6 +70,8 @@ function DevToolsPanel({
   const consoleApi = useConsole()
   const { resources, loaded: resourcesLoaded } = useResources(activeTabId)
   const application = useApplication(activeTabId)
+  const websockets = useWebSocket(activeTabId)
+  const crawler = useCrawler()
 
   useEffect(() => setInspecting(false), [activeTabId])
 
@@ -129,6 +138,8 @@ function DevToolsPanel({
         onTabChange={setDevtoolsTab}
         counts={{
           network: networkRequests.length,
+          websocket: websockets.length,
+          crawler: crawler.state.pages.length,
           repeater: repeater.saved.length,
           intercept: intercept.rules.length,
           console: consoleApi.entries.length
@@ -170,6 +181,8 @@ function DevToolsPanel({
         </div>
       )}
       {devtoolsTab === 'network' && <NetworkPanel requests={networkRequests} />}
+      {devtoolsTab === 'websocket' && <WebSocketPanel connections={websockets} />}
+      {devtoolsTab === 'crawler' && <CrawlerPanel api={crawler} defaultUrl={targetUrl} />}
       {devtoolsTab === 'repeater' && <RepeaterPanel api={repeater} />}
       {devtoolsTab === 'intercept' && <InterceptPanel api={intercept} />}
       {devtoolsTab === 'console' && (

@@ -38,6 +38,35 @@ export type NetworkStats = {
   perTab: Record<number, number>
 }
 
+/** One WebSocket frame captured over CDP on the inspected target. */
+export type WsFrame = {
+  /** 'sent' = client→server, 'received' = server→client. */
+  direction: 'sent' | 'received'
+  /** CDP opcode: 1 text, 2 binary, 8 close, 9 ping, 10 pong. */
+  opcode: number
+  /** Frame payload, capped at a byte limit; base64 for binary frames per CDP. */
+  payload: string
+  payloadTruncated: boolean
+  /** CDP monotonic timestamp of the frame. */
+  timestamp: number
+}
+
+/**
+ * A WebSocket connection on the inspected target with its captured frames.
+ * Frame data comes over CDP (Network.webSocket*) — webRequest in network.ts sees
+ * only the handshake (resourceType 'websocket'), never the frames.
+ */
+export type WsConnection = {
+  /** CDP requestId of the socket; stable for the connection's life. */
+  requestId: string
+  url: string
+  createdAt: number
+  closedAt?: number
+  frames: WsFrame[]
+  /** True once oldest frames were dropped past the per-connection cap. */
+  framesTruncated: boolean
+}
+
 /**
  * A full request/response record including bodies, captured over CDP for the
  * inspected (active) target page. Unlike CapturedRequest (webRequest, all tabs,

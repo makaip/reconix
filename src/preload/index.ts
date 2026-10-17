@@ -34,7 +34,8 @@ import type {
   SavedRequest,
   SaveInterceptRuleInput,
   SaveRequestInput,
-  TabsState
+  TabsState,
+  WsConnection
 } from '../shared/tabs'
 import type { DiffResponsesOutput } from '../shared/tools'
 // Aliased: shared/agent.ts already exports a (differently-shaped) AgentEvent/
@@ -47,6 +48,7 @@ import type {
   EngineStatus,
   ServerStatus
 } from '../shared/contracts'
+import type { CrawlStartInput, CrawlState } from '../shared/crawler'
 
 // typed surface is exposed to renderer but renderer never accesses ipcRenderer directly
 export type Bounds = { x: number; y: number; width: number; height: number }
@@ -96,6 +98,20 @@ const api = {
     // full capture list (all tabs, most recent 200), pushed whenever any request changes
     onRequests: (callback: (requests: CapturedRequest[]) => void): (() => void) =>
       subscribe('network:requests', callback)
+  },
+  websocket: {
+    // WebSocket connections + frames captured over CDP on the inspected target.
+    list: (): Promise<WsConnection[]> => ipcRenderer.invoke('websocket:list'),
+    onChanged: (callback: (conns: WsConnection[]) => void): (() => void) =>
+      subscribe('websocket:changed', callback)
+  },
+  crawler: {
+    // Deterministic scope-aware spider. Drives the gated replayer; no new egress.
+    start: (input: CrawlStartInput): Promise<CrawlState> => ipcRenderer.invoke('crawl:start', input),
+    stop: (): Promise<CrawlState> => ipcRenderer.invoke('crawl:stop'),
+    getState: (): Promise<CrawlState> => ipcRenderer.invoke('crawl:get-state'),
+    onState: (callback: (state: CrawlState) => void): (() => void) =>
+      subscribe('crawl:state', callback)
   },
   repeater: {
     list: (): Promise<SavedRequest[]> => ipcRenderer.invoke('repeater:list'),
