@@ -202,9 +202,11 @@ function Sidebar({ style, onDragStart, onDragEnd, onOpenSource }: SidebarProps):
         )}
 
         <SectionHeader label="Findings" count={findings.length} />
-        {findings.map((finding) => (
-          <FindingCard key={finding.id} finding={finding} />
-        ))}
+        {findings.length === 0 ? (
+          <p className="dt-empty">No findings yet.</p>
+        ) : (
+          findings.map((finding) => <FindingCard key={finding.id} finding={finding} />)
+        )}
       </div>
 
       <button type="button" className="add-note">

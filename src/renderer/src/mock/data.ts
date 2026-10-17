@@ -27,11 +27,11 @@ export const sitemap: SitemapNode[] = [
   { id: 'static', label: '/static', depth: 1, kind: 'folder' }
 ]
 
-export const findings: Finding[] = [
-  { id: 'f1', severity: 'medium', title: 'Session cookie missing Secure flag' },
-  { id: 'f2', severity: 'low', title: 'No Content-Security-Policy header' },
-  { id: 'f3', severity: 'info', title: 'Verbose error page on /api/v1' }
-]
+// Seeded findings removed: the panel must not assert vulnerabilities the agent
+// hasn't actually confirmed, or it taints the assessment (and any human/agent
+// reading the panel). Real findings arrive via record_finding through the MCP
+// pipeline. Empty until then.
+export const findings: Finding[] = []
 
 export const engagement = 'Q4 web app'
 
