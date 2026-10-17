@@ -101,11 +101,19 @@ export function createTabManager(win: BrowserWindow, hooks: TabHooks): TabManage
     for (const tab of tabs.values()) tab.view.setBounds(scaled)
   }
 
+  // A blank tab hides its view so the renderer's new-tab splash screen shows through.
+  const syncVisibility = (): void => {
+    for (const tab of tabs.values()) {
+      const url = tab.view.webContents.getURL()
+      tab.view.setVisible(tab.id === activeId && url !== '' && url !== BLANK)
+    }
+  }
+
   function activate(id: number): void {
     const tab = tabs.get(id)
     if (!tab) return
     activeId = id
-    for (const other of tabs.values()) other.view.setVisible(other.id === id)
+    syncVisibility()
     win.contentView.addChildView(tab.view) // re-adding moves the view to the top
     applyBounds()
     hooks.onActiveChanged(tab.view.webContents)
@@ -146,6 +154,8 @@ export function createTabManager(win: BrowserWindow, hooks: TabHooks): TabManage
       // Typed overloads differ per event; the handlers ignore their arguments.
       ;(webContents as Electron.WebContents).on(event as 'did-stop-loading', emitState)
     }
+    webContents.on('did-navigate', syncVisibility)
+    webContents.on('did-navigate-in-page', syncVisibility)
 
     activate(id)
     webContents.loadURL(url ?? BLANK).catch(() => {

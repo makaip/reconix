@@ -45,6 +45,7 @@
 .viewport {
   flex: 1 1 0;
   min-height: 0;
+  position: relative;
 }
 
 .devtools {
@@ -65,6 +66,120 @@
 
 .viewport__slot {
   background: var(--page-bg);
+}
+
+/* splash screen, covering the page slot while no tabs are open */
+.splash {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: auto;
+  padding: 24px;
+  background: var(--color-bg-inset);
+  color: var(--color-text);
+  user-select: none;
+}
+
+.splash__content {
+  width: 100%;
+  max-width: 440px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+
+.splash__title {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 600;
+}
+
+.splash__subtitle {
+  margin: 6px 0 0;
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+}
+
+.splash kbd {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--color-text-muted);
+}
+
+.splash__steps {
+  width: 100%;
+  margin: 28px 0 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: splash-step;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  text-align: left;
+}
+
+.splash__step {
+  counter-increment: splash-step;
+  display: grid;
+  grid-template-columns: 22px 1fr;
+  column-gap: 8px;
+  font-size: var(--text-xs);
+}
+
+.splash__step::before {
+  content: counter(splash-step);
+  grid-row: span 2;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--color-bg-bar);
+  color: var(--color-text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--text-2xs);
+}
+
+.splash__step-title {
+  font-weight: 600;
+}
+
+.splash__step-body {
+  color: var(--color-text-muted);
+}
+
+.splash__shortcuts {
+  width: 100%;
+  margin: 24px 0 0;
+  padding-top: 16px;
+  border-top: 1px solid var(--color-border-subtle);
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 24px;
+  font-size: var(--text-xs);
+}
+
+.splash__shortcut {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.splash__shortcut dt {
+  color: var(--color-text-muted);
+}
+
+.splash__shortcut dd {
+  margin: 0;
+}
+
+.splash__notice {
+  margin: 24px 0 0;
+  font-size: var(--text-2xs);
+  color: var(--color-text-faint);
 }
 
 .resize-handle {

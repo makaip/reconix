@@ -2,6 +2,7 @@ import { useState } from 'react'
 import CopilotPanel from './components/copilot/CopilotPanel'
 import DevToolsPanel from './components/devtools/DevToolsPanel'
 import Sidebar from './components/sidebar/Sidebar'
+import Splash from './components/Splash'
 import ViewSlot from './components/ViewSlot'
 import ResizeHandle from './components/chrome/ResizeHandle'
 import StatusBar from './components/chrome/StatusBar'
@@ -66,6 +67,7 @@ function App(): JSX.Element {
         <main className="center">
           <section className="viewport" aria-label="Target page">
             <ViewSlot className="viewport__slot" onBoundsChange={setTargetBounds} />
+            {activeTab && !activeTab.url && <Splash />}
           </section>
           <ResizeHandle
             orientation="horizontal"
