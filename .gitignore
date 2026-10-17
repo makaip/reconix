@@ -25,3 +25,8 @@ arch.md
 r.md
 release/
 smoke-output/
+
+# vllm keys
+reconix.env
+
+CLAUDE.md
