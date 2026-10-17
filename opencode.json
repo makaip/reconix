@@ -1,11 +1,11 @@
 {
   "$schema": "https://opencode.ai/config.json",
   "default_agent": "orchestrator",
-  "provider": {
+  "providers": {
     "vllm-orchestrator": {
-      "npm": "@ai-sdk/openai-compatible",
+      "package": "@ai-sdk/openai-compatible",
       "name": "vLLM (orchestrator, local)",
-      "options": {
+      "settings": {
         "baseURL": "{env:ORCHESTRATOR_BASE_URL}",
         "apiKey": "{env:ORCHESTRATOR_API_KEY}"
       },
@@ -17,9 +17,9 @@
       }
     },
     "vllm-evaluator": {
-      "npm": "@ai-sdk/openai-compatible",
+      "package": "@ai-sdk/openai-compatible",
       "name": "vLLM (evaluator, local)",
-      "options": {
+      "settings": {
         "baseURL": "{env:EVALUATOR_BASE_URL}",
         "apiKey": "{env:EVALUATOR_API_KEY}"
       },
@@ -31,9 +31,9 @@
       }
     },
     "vllm-dom": {
-      "npm": "@ai-sdk/openai-compatible",
+      "package": "@ai-sdk/openai-compatible",
       "name": "vLLM (dom-analyzer, local)",
-      "options": {
+      "settings": {
         "baseURL": "{env:DOM_BASE_URL}",
         "apiKey": "{env:DOM_API_KEY}"
       },
