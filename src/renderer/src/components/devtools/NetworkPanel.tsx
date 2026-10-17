@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from 'react'
 import type { CapturedRequest } from '../../../../shared/tabs'
 import { queryRequests, type RequestQuery } from '../../lib/requestQuery'
 import { toHar } from '../../lib/har'
+import { useResizable } from '../../hooks/useResizable'
+import ResizeHandle from '../chrome/ResizeHandle'
 
 type NetworkPanelProps = {
   requests: CapturedRequest[]
@@ -57,6 +59,14 @@ const EMPTY_QUERY: RequestQuery = {}
 
 function NetworkPanel({ requests }: NetworkPanelProps): JSX.Element {
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const detailResize = useResizable({
+    axis: 'x',
+    initial: 330,
+    min: 200,
+    max: 800,
+    invert: true,
+    storageKey: 'network.detail'
+  })
   const [query, setQuery] = useState<RequestQuery>(EMPTY_QUERY)
   const selected = requests.find((request) => request.id === selectedId) ?? null
 
@@ -150,7 +160,12 @@ function NetworkPanel({ requests }: NetworkPanelProps): JSX.Element {
         )}
       </div>
 
-      <div className="dt-network__detail">
+      <ResizeHandle
+        orientation="vertical"
+        dragging={detailResize.dragging}
+        onPointerDown={detailResize.onHandlePointerDown}
+      />
+      <div className="dt-network__detail" style={{ width: detailResize.size }}>
         {selected === null ? (
           <p className="dt-network__detail-empty">Select a request to inspect its headers.</p>
         ) : (

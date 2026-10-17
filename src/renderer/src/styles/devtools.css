@@ -577,7 +577,12 @@
   background: var(--color-selection);
 }
 
+.dt-sources__row img {
+  flex: none;
+}
+
 .dt-sources__row-name {
+  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -766,13 +771,14 @@
 
 /* Repeater (ARCHITECTURE.MD §11.1): saved-request list + request editor + response */
 .rep {
-  display: grid;
-  grid-template-columns: 220px 1fr;
+  display: flex;
   min-height: 0;
   flex: 1;
   overflow: hidden;
 }
 .rep__list {
+  flex: none;
+  width: 220px;
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -812,6 +818,7 @@
   font-family: var(--font-mono);
 }
 .rep__editor {
+  flex: 1 1 0;
   display: flex;
   flex-direction: column;
   gap: 6px;

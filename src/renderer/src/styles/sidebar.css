@@ -102,6 +102,8 @@
 }
 
 .sitemap-row__label {
+  /* Long segments (hashed bundle names, tokens) cut off; the row's title shows the full path. */
+  max-width: 200px;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
