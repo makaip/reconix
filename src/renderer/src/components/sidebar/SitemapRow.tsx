@@ -7,6 +7,8 @@ import type { SitemapNode } from '../../lib/sitemap'
 type SitemapRowProps = {
   node: SitemapNode
   selected: boolean
+  /** The keyboard cursor is on this row. */
+  focused: boolean
   /** Folder rows only: whether its children are hidden. */
   collapsed: boolean
   onToggle: () => void
@@ -22,6 +24,7 @@ type SitemapRowProps = {
 function SitemapRow({
   node,
   selected,
+  focused,
   collapsed,
   onToggle,
   onSelect,
@@ -39,7 +42,8 @@ function SitemapRow({
       className={[
         'sitemap-row',
         isFolder && 'sitemap-row--folder',
-        selected && 'sitemap-row--selected'
+        selected && 'sitemap-row--selected',
+        focused && 'sitemap-row--focused'
       ]
         .filter(Boolean)
         .join(' ')}
@@ -47,6 +51,8 @@ function SitemapRow({
       aria-current={selected ? 'true' : undefined}
       aria-expanded={isFolder ? !collapsed : undefined}
       title={node.id}
+      data-id={node.id}
+      tabIndex={-1}
       draggable={node.kind === 'page'}
       onClick={(event) =>
         onSelect(node.id, {

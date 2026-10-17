@@ -32,6 +32,21 @@
   color: var(--color-text-faint);
 }
 
+.sitemap {
+  overflow-x: auto;
+  outline: none;
+}
+
+/* Grows to the widest row so deep nests scroll horizontally instead of truncating. */
+.sitemap__rows {
+  width: max-content;
+  min-width: 100%;
+}
+
+.sitemap:focus .sitemap-row--focused {
+  box-shadow: inset 0 0 0 1px var(--color-accent);
+}
+
 .sitemap-row {
   display: flex;
   align-items: center;
