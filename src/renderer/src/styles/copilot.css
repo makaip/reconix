@@ -125,6 +125,8 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  max-width: 100%;
+  min-width: 0;
   height: 22px;
   padding: 0 3px 0 7px;
   background: var(--color-bg-bar);
@@ -133,12 +135,17 @@
 }
 
 .context-chip__label {
+  min-width: 0;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-family: var(--font-mono);
   font-size: var(--text-2xs);
   white-space: nowrap;
 }
 
 .context-chip__remove {
+  flex: none;
   display: grid;
   place-items: center;
   width: 16px;
