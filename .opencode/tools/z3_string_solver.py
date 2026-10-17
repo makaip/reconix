@@ -12,17 +12,8 @@ def solve_constraints(max_len: int, must_contain: str, pattern: str = None):
     
     # Substring / payload inclusion
     if must_contain:
-        payload = Const('payload', StringSort())
-        s.add(payload == must_contain)
+        payload = StringVal(must_contain)
         s.add(Contains(user_input, payload))
-        
-    # Optional regex pattern matching
-    if pattern:
-        try:
-            re_pattern = Re(pattern)
-            s.add(InRe(user_input, re_pattern))
-        except Exception as e:
-            return {"status": "error", "reason": f"Invalid regex pattern for Z3: {str(e)}"}
         
     if s.check() == sat:
         m = s.model()
@@ -32,7 +23,7 @@ def solve_constraints(max_len: int, must_contain: str, pattern: str = None):
         return {"status": "unsat", "reason": "No string satisfies the given constraints."}
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Z3 Constraint Solver for Web Inputs")
+    parser = argparse.ArgumentParser(description="Z3 String Constraint Solver for Web Inputs")
     parser.add_argument("--max-len", type=int, default=50, help="Maximum allowed length")
     parser.add_argument("--contain", type=str, default="", help="Substring that must be present")
     parser.add_argument("--pattern", type=str, default=None, help="Regex pattern restriction")
