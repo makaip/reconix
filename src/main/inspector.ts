@@ -205,12 +205,29 @@ export type Inspector = {
  * client per webContents, so response-body capture (bodies.ts) can't attach its
  * own; instead it rides this hook, receiving the inspector's bound `send`.
  */
+export type InspectorSend = <T>(method: string, params?: object) => Promise<T>
+
 export type NetworkSink = {
-  handleNetworkEvent: (method: string, params: Record<string, unknown>, send: <T>(method: string, params?: object) => Promise<T>) => void
+  handleNetworkEvent: (method: string, params: Record<string, unknown>, send: InspectorSend) => void
   reset: () => void
 }
 
-export function attachInspector(win: BrowserWindow, networkSink?: NetworkSink): Inspector {
+/**
+ * Optional sink for CDP Fetch.* events (request interception / match-replace). Rides
+ * the same single debugger as NetworkSink. `onAttached` fires once the debugger is
+ * live on a new target so the interceptor can (re-)enable Fetch if it holds rules.
+ */
+export type InterceptSink = {
+  handleFetchEvent: (method: string, params: Record<string, unknown>, send: InspectorSend) => void
+  onAttached: (send: InspectorSend) => void
+  reset: () => void
+}
+
+export function attachInspector(
+  win: BrowserWindow,
+  networkSink?: NetworkSink,
+  interceptSink?: InterceptSink
+): Inspector {
   let current: WebContents | null = null
   let ready: Promise<boolean> = Promise.resolve(false)
   let stopListening: (() => void) | null = null
@@ -262,6 +279,8 @@ export function attachInspector(win: BrowserWindow, networkSink?: NetworkSink): 
     contextId = null
     // requestIds are per-target; drop the previous target's captured bodies.
     networkSink?.reset()
+    // A fresh debugger session starts with Fetch disabled; the interceptor re-enables on attach.
+    interceptSink?.reset()
 
     if (!target) {
       ready = Promise.resolve(false)
@@ -322,6 +341,8 @@ export function attachInspector(win: BrowserWindow, networkSink?: NetworkSink): 
         contextId = null
       } else if (method.startsWith('Network.')) {
         networkSink?.handleNetworkEvent(method, params, send)
+      } else if (method.startsWith('Fetch.')) {
+        interceptSink?.handleFetchEvent(method, params, send)
       } else if (FORWARDED_EVENTS.has(method)) {
         emit({ method, params } as DevToolsEvent)
       }
@@ -338,6 +359,8 @@ export function attachInspector(win: BrowserWindow, networkSink?: NetworkSink): 
       await dbg.sendCommand('Log.enable')
       await dbg.sendCommand('Page.enable')
       await dbg.sendCommand('Network.enable')
+      // Debugger is live on this target; let the interceptor re-enable Fetch if it has rules.
+      interceptSink?.onAttached(send)
       return true
     })().catch((error) => {
       console.error('Inspector failed to attach:', error)

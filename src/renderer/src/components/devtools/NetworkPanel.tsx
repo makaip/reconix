@@ -1,5 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { CapturedRequest } from '../../../../shared/tabs'
+import { queryRequests, type RequestQuery } from '../../lib/requestQuery'
+import { toHar } from '../../lib/har'
 
 type NetworkPanelProps = {
   requests: CapturedRequest[]
@@ -51,9 +53,36 @@ function flattenResponseHeaders(headers: Record<string, string[]> | undefined): 
   return Object.fromEntries(Object.entries(headers).map(([name, values]) => [name, values.join(', ')]))
 }
 
+const EMPTY_QUERY: RequestQuery = {}
+
 function NetworkPanel({ requests }: NetworkPanelProps): JSX.Element {
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [query, setQuery] = useState<RequestQuery>(EMPTY_QUERY)
   const selected = requests.find((request) => request.id === selectedId) ?? null
+
+  const filtered = useMemo(() => queryRequests(requests, query), [requests, query])
+
+  // Downloads the currently-shown requests as a HAR 1.2 file (no server round-trip).
+  const exportHar = (): void => {
+    const blob = new Blob([JSON.stringify(toHar(filtered), null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `reconix-${new Date().toISOString().slice(0, 19).replace(/:/g, '')}.har`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  const set = (patch: Partial<RequestQuery>): void =>
+    setQuery((q) => {
+      const next = { ...q, ...patch }
+      // Blank strings/NaN clear a field rather than filtering on emptiness.
+      for (const key of Object.keys(next) as (keyof RequestQuery)[]) {
+        const v = next[key]
+        if (v === '' || v === undefined || (typeof v === 'number' && Number.isNaN(v))) delete next[key]
+      }
+      return next
+    })
 
   // dropped requests (tab closed, capture buffer trimmed) shouldn't leave a dangling selection
   useEffect(() => {
@@ -64,9 +93,23 @@ function NetworkPanel({ requests }: NetworkPanelProps): JSX.Element {
 
   return (
     <div className="dt-network">
+      <div className="dt-netfilter">
+        <input className="dt-netfilter__input" placeholder="host" onChange={(e) => set({ host: e.target.value })} />
+        <input className="dt-netfilter__input dt-netfilter__input--sm" placeholder="method" onChange={(e) => set({ method: e.target.value })} />
+        <input className="dt-netfilter__input dt-netfilter__input--sm" placeholder="status (404, 5xx)" onChange={(e) => set({ status: e.target.value })} />
+        <input className="dt-netfilter__input" placeholder="URL regex" onChange={(e) => set({ urlRegex: e.target.value })} />
+        <input className="dt-netfilter__input dt-netfilter__input--sm" placeholder="param" onChange={(e) => set({ param: e.target.value })} />
+        <input className="dt-netfilter__input dt-netfilter__input--sm" type="number" placeholder="min B" onChange={(e) => set({ minBytes: e.target.valueAsNumber })} />
+        <input className="dt-netfilter__input dt-netfilter__input--sm" type="number" placeholder="max B" onChange={(e) => set({ maxBytes: e.target.valueAsNumber })} />
+        <button type="button" className="dt-text-button" onClick={exportHar} disabled={filtered.length === 0}>
+          Export HAR
+        </button>
+      </div>
       <div className="dt-network__list" role="table" aria-label="Network requests">
-        {requests.length === 0 ? (
-          <p className="dt-empty">No requests captured yet.</p>
+        {filtered.length === 0 ? (
+          <p className="dt-empty">
+            {requests.length === 0 ? 'No requests captured yet.' : 'No requests match the filter.'}
+          </p>
         ) : (
           <div className="dt-network__rows">
             <div className="dt-network__row dt-network__row--head" role="row">
@@ -76,7 +119,7 @@ function NetworkPanel({ requests }: NetworkPanelProps): JSX.Element {
               <span className="dt-network__cell dt-network__cell--type">Type</span>
               <span className="dt-network__cell dt-network__cell--time">Time</span>
             </div>
-            {requests.map((request) => (
+            {filtered.map((request) => (
               <button
                 key={request.id}
                 type="button"

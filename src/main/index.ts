@@ -4,6 +4,7 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { createBodyStore } from './bodies'
 import { loadScopeChecker } from './engagement'
 import { attachInspector } from './inspector'
+import { createInterceptor } from './intercept'
 import { startNetworkCapture, type NetworkCapture } from './network'
 import { createReplay } from './replay'
 import { createRepeater } from './repeater'
@@ -80,7 +81,8 @@ function createWindow(): void {
 
   let network: NetworkCapture | undefined
   const bodies = createBodyStore(mainWindow)
-  const inspector = attachInspector(mainWindow, bodies)
+  const interceptor = createInterceptor(mainWindow)
+  const inspector = attachInspector(mainWindow, bodies, interceptor.sink)
   const tabs = createTabManager(mainWindow, {
     onActiveChanged: (target) => inspector.setTarget(target),
     onTabClosed: (tabId) => network?.forgetTab(tabId)

@@ -110,3 +110,27 @@ export type SaveRequestInput = {
   tags: string[]
   request: ReplayRequestInput
 }
+
+/** A live match/replace rule: rewrite or remove a request header when the URL matches. */
+export type InterceptRule = {
+  id: string
+  enabled: boolean
+  name: string
+  /** Substring matched against the request URL. Empty = all requests. */
+  urlPattern: string
+  /** Header name to act on (case-insensitive match). */
+  header: string
+  action: 'set' | 'remove'
+  /** Replacement value for `set`. */
+  value?: string
+}
+
+/** Payload to create (no id) or update (with id) an intercept rule. */
+export type SaveInterceptRuleInput = {
+  id?: string
+  name: string
+  urlPattern: string
+  header: string
+  action: 'set' | 'remove'
+  value?: string
+}
