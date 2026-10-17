@@ -1,0 +1,256 @@
+.devtools {
+  font-size: var(--text-xs);
+  color: var(--dt-text);
+}
+
+.dt-toolbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  height: 32px;
+  padding: 0 6px 0 4px;
+  background: var(--dt-bg-toolbar);
+  border-bottom: 1px solid var(--dt-border);
+}
+
+.dt-toolbar__divider {
+  flex: none;
+  width: 1px;
+  height: 16px;
+  background: var(--dt-border);
+}
+
+.dt-toolbar__spacer {
+  flex: 1 1 0;
+}
+
+.dt-icon-button {
+  flex: none;
+  display: grid;
+  place-items: center;
+  padding: 7px 6px;
+  background: none;
+  border: 0;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+}
+
+.dt-icon-button:disabled {
+  cursor: default;
+}
+
+.dt-icon-button:not(:disabled):hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.dt-icon-button--active {
+  background: rgba(138, 181, 247, 0.25);
+}
+
+.dt-tab {
+  flex: none;
+  padding: 7px 10px 6px;
+  background: none;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  font-size: var(--text-xs);
+  color: var(--dt-text-muted);
+  cursor: default;
+}
+
+.dt-tab--small {
+  padding: 6px 8px 5px;
+}
+
+.dt-tab--active {
+  color: var(--dt-text);
+  border-bottom-color: var(--color-accent);
+}
+
+.dt-elements {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+}
+
+.dt-elements__tree {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.dt-empty {
+  margin: 0;
+  padding: 12px;
+  color: var(--dt-text-muted);
+}
+
+.dt-tree {
+  flex: 1 1 0;
+  min-height: 0;
+  padding: 4px 0;
+  overflow: auto;
+  outline: 0;
+  font-family: var(--font-mono);
+}
+
+.dt-tree__list {
+  min-width: max-content;
+}
+
+.dt-row {
+  height: 20px;
+  padding-right: 8px;
+  line-height: 20px;
+  white-space: pre;
+  cursor: default;
+}
+
+.dt-row:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.dt-row--selected,
+.dt-row--selected:hover {
+  background: var(--dt-selected);
+}
+
+.dt-row__arrow {
+  display: inline-block;
+  width: 2ch;
+  color: var(--dt-text-muted);
+}
+
+.dt-tag {
+  color: var(--dt-tag);
+}
+
+.dt-attr {
+  color: var(--dt-attr);
+}
+
+.dt-string {
+  color: var(--dt-string);
+}
+
+.dt-property {
+  color: var(--dt-property);
+}
+
+.dt-muted {
+  color: var(--dt-text-muted);
+}
+
+.dt-breadcrumbs {
+  flex: none;
+  display: flex;
+  gap: 14px;
+  padding: 5px 10px;
+  overflow: hidden;
+  background: var(--dt-bg-toolbar);
+  border-top: 1px solid var(--dt-border);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  white-space: nowrap;
+}
+
+.dt-breadcrumbs__crumb {
+  color: var(--dt-text-muted);
+}
+
+.dt-breadcrumbs__crumb--current {
+  font-weight: 500;
+  color: var(--dt-text);
+}
+
+.dt-styles {
+  flex: none;
+  width: 330px;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--dt-border);
+}
+
+.dt-styles__tabs {
+  flex: none;
+  display: flex;
+  padding-left: 4px;
+  border-bottom: 1px solid var(--dt-border);
+}
+
+.dt-styles__filter {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--dt-border);
+  font-family: var(--font-mono);
+  color: var(--dt-text-muted);
+}
+
+.dt-styles__input {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 3px 6px;
+  background: var(--dt-bg-toolbar);
+  border: 0;
+  border-radius: var(--radius-xs);
+  outline: 0;
+  font: inherit;
+  font-family: var(--font-sans);
+  color: var(--dt-text);
+}
+
+.dt-styles__input::placeholder {
+  color: var(--dt-text-muted);
+}
+
+.dt-styles__rules {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: auto;
+  font-family: var(--font-mono);
+}
+
+.dt-styles__empty {
+  margin: 0;
+  padding: 12px 10px;
+  font-family: var(--font-sans);
+  color: var(--dt-text-muted);
+}
+
+.dt-rule {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--dt-border);
+}
+
+.dt-rule__head {
+  display: flex;
+  gap: 8px;
+}
+
+.dt-rule__selector {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.dt-rule__source {
+  flex: none;
+  font-size: var(--text-2xs);
+  color: var(--dt-text-muted);
+}
+
+.dt-rule__source--link {
+  text-decoration: underline;
+}
+
+.dt-rule__property {
+  padding-left: 2ch;
+  overflow-wrap: anywhere;
+}

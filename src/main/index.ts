@@ -1,6 +1,7 @@
 import { app, shell, BrowserWindow, ipcMain } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
+import { attachInspector } from './inspector'
 import { createTargetView } from './targetView'
 
 function createWindow(): void {
@@ -12,7 +13,7 @@ function createWindow(): void {
     show: false,
     autoHideMenuBar: true,
     webPreferences: {
-      preload: join(__dirname, '../preload/index.js'),
+      preload: join(__dirname, '../preload/index.cjs'),
       sandbox: false,
       contextIsolation: true,
       nodeIntegration: false
@@ -28,7 +29,8 @@ function createWindow(): void {
     return { action: 'deny' }
   })
 
-  createTargetView(mainWindow)
+  const targetView = createTargetView(mainWindow)
+  attachInspector(mainWindow, targetView.webContents)
 
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
