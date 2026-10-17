@@ -1,5 +1,22 @@
+# Node / Electron
 node_modules/
 out/
 dist/
 *.log
 .DS_Store
+
+# Python / uv
+.venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+.pyd
+.ruff_cache/
+.pytest_cache/
+dist/
+build/
+*.egg-info/
+
+# Environment / Credentials
+.env
