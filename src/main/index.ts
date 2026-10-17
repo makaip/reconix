@@ -69,15 +69,25 @@ function createWindow(): void {
     return { action: 'deny' }
   })
 
+  // Created before createTabManager: that call synchronously opens the first
+  // tab and fires onActiveChanged once before createTabManager even returns.
+  // network isn't assigned until after tabs exists (it needs tabs.tabIdFor),
+  // so copilotBridge gets a getter instead of the instance — see
+  // ActiveTabNetworkReader's comment in copilot.ts for why.
   let network: NetworkCapture | undefined
+  copilotBridge = createCopilotBridge(mainWindow, () => network)
+
   const inspector = attachInspector(mainWindow)
   const tabs = createTabManager(mainWindow, {
-    onActiveChanged: (target) => inspector.setTarget(target),
-    onTabClosed: (tabId) => network?.forgetTab(tabId)
+    onActiveChanged: (target, tabId) => {
+      inspector.setTarget(target)
+      copilotBridge?.setActiveTarget(target, tabId)
+    },
+    onTabClosed: (tabId) => network?.forgetTab(tabId),
+    beforeNavigate: () => copilotBridge?.waitUntilReady() ?? Promise.resolve()
   })
   network = startNetworkCapture(mainWindow, tabs)
   createSessionManager(mainWindow)
-  copilotBridge = createCopilotBridge(mainWindow)
 
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])

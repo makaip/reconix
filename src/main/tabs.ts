@@ -12,8 +12,14 @@ type Tab = { id: number; view: WebContentsView }
 
 export type TabHooks = {
   /** Called whenever the active tab (and so the inspected page) changes. */
-  onActiveChanged: (target: WebContents | null) => void
+  onActiveChanged: (target: WebContents | null, tabId: number) => void
   onTabClosed: (tabId: number) => void
+  /** Awaited before a real navigation (tabs:navigate) proceeds — lets the
+   *  Copilot engine (opencode serve + MCP) finish booting before a target
+   *  site loads, so the DOM-parser watcher isn't racing a cold start the
+   *  moment the page settles. Never blocks forever: the bridge resolves
+   *  this even on engine failure, it just won't have browser tools yet. */
+  beforeNavigate?: () => Promise<unknown>
 }
 
 export type TabManager = {
@@ -105,7 +111,7 @@ export function createTabManager(win: BrowserWindow, hooks: TabHooks): TabManage
     for (const other of tabs.values()) other.view.setVisible(other.id === id)
     win.contentView.addChildView(tab.view) // re-adding moves the view to the top
     applyBounds()
-    hooks.onActiveChanged(tab.view.webContents)
+    hooks.onActiveChanged(tab.view.webContents, tab.id)
     emitState()
   }
 
@@ -200,6 +206,7 @@ export function createTabManager(win: BrowserWindow, hooks: TabHooks): TabManage
     }
     const contents = activeContents()
     if (!contents) return { ok: false, error: 'No active tab' }
+    await hooks.beforeNavigate?.()
     try {
       await contents.loadURL(parsed.href)
       return { ok: true }

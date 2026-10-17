@@ -8,6 +8,9 @@ const STATS_THROTTLE_MS = 150
 export type NetworkCapture = {
   /** Drops everything captured for a tab that was closed. */
   forgetTab: (tabId: number) => void
+  /** Most-recent-last, optionally filtered to one tab and/or everything after a cursor id. */
+  list: (opts?: { tabId?: number; sinceId?: string; limit?: number }) => CapturedRequest[]
+  get: (id: string) => CapturedRequest | undefined
 }
 
 /**
@@ -78,14 +81,26 @@ export function startNetworkCapture(win: BrowserWindow, tabs: TabManager): Netwo
     if (entry) entry.error = details.error
   })
 
+  // sinceId filters to requests captured after a given id — ids are
+  // monotonically increasing per-session (Electron's own request counter),
+  // so a plain string/numeric comparison is a valid "cursor" without needing
+  // to track insertion order separately.
+  const list = (opts?: { tabId?: number; sinceId?: string; limit?: number }): CapturedRequest[] => {
+    const sinceNum = opts?.sinceId !== undefined ? Number(opts.sinceId) : undefined
+    const filtered = [...requests.values()].filter(
+      (r) =>
+        (opts?.tabId === undefined || r.tabId === opts.tabId) &&
+        (sinceNum === undefined || Number(r.id) > sinceNum)
+    )
+    return filtered.slice(-(opts?.limit ?? 200))
+  }
+
   const handle = (channel: string, fn: (...args: unknown[]) => unknown): void => {
     ipcMain.removeHandler(channel)
     ipcMain.handle(channel, (event, ...args) => (event.sender === win.webContents ? fn(...args) : null))
   }
   handle('network:get-stats', () => stats())
-  handle('network:list', (tabId) =>
-    [...requests.values()].filter((r) => typeof tabId !== 'number' || r.tabId === tabId).slice(-200)
-  )
+  handle('network:list', (tabId) => list({ tabId: typeof tabId === 'number' ? tabId : undefined }))
 
   win.on('closed', () => {
     if (statsTimer) clearTimeout(statsTimer)
@@ -101,6 +116,8 @@ export function startNetworkCapture(win: BrowserWindow, tabs: TabManager): Netwo
     forgetTab: (tabId) => {
       for (const [id, request] of requests) if (request.tabId === tabId) requests.delete(id)
       scheduleStats()
-    }
+    },
+    list,
+    get: (id) => requests.get(id)
   }
 }

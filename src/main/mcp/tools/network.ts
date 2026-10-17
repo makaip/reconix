@@ -53,9 +53,47 @@ function pending(name: string, description: string, tier: 'R' | 'M'): Tool {
   }) as Tool
 }
 
+const get_network_log = defineTool<{ sinceId?: string }, unknown>({
+  name: 'get_network_log',
+  description:
+    'Network entries observed on the target since a cursor (the last entry\'s id from a prior call) — ' +
+    'method, url, status, timing, headers. Scoped to whatever tab is currently active, not the whole app.',
+  riskTier: 'R',
+  inputSchema: {
+    type: 'object',
+    properties: { sinceId: { type: 'string' } },
+    additionalProperties: false
+  },
+  outputSchema: { type: 'array' },
+  parse: (raw) => {
+    const r = raw as { sinceId?: unknown }
+    return typeof r?.sinceId === 'string' ? { sinceId: r.sinceId } : {}
+  },
+  execute: async (i, ctx) => ctx.network.list(i.sinceId)
+})
+
+const get_request = defineTool<{ id: string }, unknown>({
+  name: 'get_request',
+  description: 'Full request/response detail for one request id (from get_network_log).',
+  riskTier: 'R',
+  inputSchema: {
+    type: 'object',
+    required: ['id'],
+    properties: { id: { type: 'string' } },
+    additionalProperties: false
+  },
+  outputSchema: { type: 'object' },
+  parse: (raw) => ({ id: str(raw, 'id') }),
+  execute: async (i, ctx) => {
+    const req = ctx.network.get(i.id)
+    if (!req) throw new ToolExecError(`no request with id "${i.id}" (it may have aged out)`)
+    return req
+  }
+})
+
 export const networkTools: Tool[] = [
   replay_request as Tool,
-  pending('get_network_log', 'Network entries observed on the target since a cursor.', 'R'),
-  pending('get_request', 'Full request/response + body ref for one request id.', 'R'),
+  get_network_log as Tool,
+  get_request as Tool,
   pending('set_intercept_rule', 'CDP Fetch rewrite rule. Gated — it is the scope boundary.', 'M')
 ]

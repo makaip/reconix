@@ -2,9 +2,10 @@
 // one of these; a capability that is not a Tool cannot be expressed.
 
 import type { EngagementId, Policy, RiskTier, TraceRef } from '../../shared/contracts'
+import type { CapturedRequest } from '../../shared/tabs'
 import type { CdpDriver } from './cdp'
 import type { JsonSchema } from './validate'
-import type { ScopeChecker } from './scope'
+import type { ScopeEnforcer } from './scope'
 
 // Sinks the handlers need, beyond the driver. Audit is NOT here — the pipeline
 // owns audit so a handler can never skip it.
@@ -17,15 +18,23 @@ export interface FindingSink {
 export interface HistoryReader {
   query(filter: unknown): Promise<unknown[]> // backs query_log; never a DB handle
 }
+/** Backs get_network_log/get_request. Read-only — never a send primitive
+ *  (that's replay_request, gated separately). Implementations scope `list`
+ *  to whatever tab is "current" for the caller (see copilot.ts). */
+export interface NetworkReader {
+  list(sinceId?: string): CapturedRequest[]
+  get(id: string): CapturedRequest | undefined
+}
 
 export interface ToolContext {
   engagementId: EngagementId
-  scope: ScopeChecker
+  scope: ScopeEnforcer
   policy: Policy
   cdp: CdpDriver
   traces: TraceStore
   findings: FindingSink
   history: HistoryReader
+  network: NetworkReader
 }
 
 export interface Tool<I = unknown, O = unknown> {

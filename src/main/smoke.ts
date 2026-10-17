@@ -39,7 +39,8 @@ function buildServer(wc: Electron.WebContents, audit: InMemoryAuditLogger): Retu
     cdp: new WebContentsCdpDriver(wc, () => false /* not the UI */),
     traces: { save: async () => 'trace_mock' },
     findings: { record: async () => 'find_mock' },
-    history: { query: async () => [] }
+    history: { query: async () => [] },
+    network: { list: () => [], get: () => undefined }
   }
   return buildMcpServer({ audit, context: ctx, surface: 'all' })
 }

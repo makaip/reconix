@@ -13,7 +13,18 @@ function hostMatches(host: string, pattern: string): boolean {
   return host === pattern
 }
 
-export class ScopeChecker {
+// Extracted so a ToolContext can carry a scope that isn't fixed at
+// construction time — e.g. copilot.ts's ActiveTabScope, which re-derives
+// allowed_hosts from whichever tab is active on every check instead of a
+// single ScopeConfig baked in at startup (there's no "start engagement" UI
+// flow wiring a real scope yet).
+export interface ScopeEnforcer {
+  readonly config: ScopeConfig
+  isInScope(target: string | undefined): boolean
+  assertInScope(target: string | undefined): void
+}
+
+export class ScopeChecker implements ScopeEnforcer {
   constructor(private readonly cfg: ScopeConfig) {}
 
   /** The underlying config (what get_scope returns to the agent). */

@@ -14,7 +14,12 @@ import type { CapturedRequest, NavigateResult, NetworkStats, TabsState } from '.
 // imported above for the `agent` namespace below. TODO: these are two parallel
 // approval-decision shapes for what's conceptually the same concept — worth
 // reconciling once `agent.*` vs `copilot.*` below gets sorted out.
-import type { AgentEvent, ApprovalDecision as CopilotApprovalDecision, ServerStatus } from '../shared/contracts'
+import type {
+  AgentEvent,
+  ApprovalDecision as CopilotApprovalDecision,
+  EngineStatus,
+  ServerStatus
+} from '../shared/contracts'
 
 // typed surface is exposed to renderer but renderer never accesses ipcRenderer directly
 export type Bounds = { x: number; y: number; width: number; height: number }
@@ -94,6 +99,7 @@ const api = {
     send: (text: string): Promise<{ messageId: string }> => ipcRenderer.invoke('copilot:send', text),
     respondApproval: (approvalId: string, decision: CopilotApprovalDecision): Promise<void> =>
       ipcRenderer.invoke('copilot:respond-approval', approvalId, decision),
+    interrupt: (): Promise<void> => ipcRenderer.invoke('copilot:interrupt'),
     onEvent: (callback: (event: AgentEvent) => void): (() => void) => {
       const listener = (_event: Electron.IpcRendererEvent, payload: AgentEvent): void => callback(payload)
       ipcRenderer.on('copilot:event', listener)
@@ -103,6 +109,14 @@ const api = {
       const listener = (_event: Electron.IpcRendererEvent, payload: ServerStatus): void => callback(payload)
       ipcRenderer.on('copilot:status', listener)
       return () => ipcRenderer.removeListener('copilot:status', listener)
+    },
+    // Engine boot status (opencode serve + the MCP tool server), not to be
+    // confused with onStatus's OpenCode session ServerStatus above — this
+    // fires once at launch (starting -> ready|error), before any session exists.
+    onEngineStatus: (callback: (status: EngineStatus) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, payload: EngineStatus): void => callback(payload)
+      ipcRenderer.on('copilot:engine-status', listener)
+      return () => ipcRenderer.removeListener('copilot:engine-status', listener)
     }
   }
 }

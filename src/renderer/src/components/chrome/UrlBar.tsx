@@ -16,7 +16,7 @@ function splitUrl(url: string): { scheme: string; host: string; rest: string; ho
   }
 }
 
-function UrlBar({ url }: { url: string }): JSX.Element {
+function UrlBar({ url, disabled }: { url: string; disabled?: boolean }): JSX.Element {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -31,6 +31,7 @@ function UrlBar({ url }: { url: string }): JSX.Element {
   useEffect(() => setError(null), [url])
 
   const startEditing = (): void => {
+    if (disabled) return
     setDraft(url)
     setError(null)
     setEditing(true)
@@ -65,7 +66,14 @@ function UrlBar({ url }: { url: string }): JSX.Element {
           }}
         />
       ) : (
-        <button type="button" className="url-bar__display" aria-label="Address" onClick={startEditing}>
+        <button
+          type="button"
+          className="url-bar__display"
+          aria-label="Address"
+          disabled={disabled}
+          title={disabled ? 'Waiting for the AI engine to finish starting…' : undefined}
+          onClick={startEditing}
+        >
           {parts ? (
             <>
               <span className="url-bar__muted">{parts.scheme}</span>

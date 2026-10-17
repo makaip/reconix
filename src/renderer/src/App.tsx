@@ -3,11 +3,13 @@ import CopilotPanel from './components/copilot/CopilotPanel'
 import DevToolsPanel from './components/devtools/DevToolsPanel'
 import Sidebar from './components/sidebar/Sidebar'
 import ViewSlot from './components/ViewSlot'
+import EngineStatusBanner from './components/chrome/EngineStatusBanner'
 import ResizeHandle from './components/chrome/ResizeHandle'
 import StatusBar from './components/chrome/StatusBar'
 import TabBar from './components/chrome/TabBar'
 import Toolbar from './components/chrome/Toolbar'
 import { useCopilot, type NodeRef } from './hooks/useCopilot'
+import { useEngineStatus } from './hooks/useEngineStatus'
 import { useNetworkStats } from './hooks/useNetworkStats'
 import { useResizable } from './hooks/useResizable'
 import { useTabs } from './hooks/useTabs'
@@ -16,6 +18,7 @@ const setTargetBounds = window.reconix.target.setBounds
 
 function App(): JSX.Element {
   const copilot = useCopilot()
+  const engineStatus = useEngineStatus()
   const tabs = useTabs()
   const network = useNetworkStats()
   const [draggedNode, setDraggedNode] = useState<NodeRef | null>(null)
@@ -38,12 +41,14 @@ function App(): JSX.Element {
         onClose={(id) => void window.reconix.tabs.close(id)}
         onNew={() => void window.reconix.tabs.create()}
       />
+      <EngineStatusBanner status={engineStatus} />
       <Toolbar
         url={activeTab?.url ?? ''}
         canGoBack={tabs.canGoBack}
         canGoForward={tabs.canGoForward}
         copilotOpen={copilotOpen}
         onToggleCopilot={() => setCopilotOpen((open) => !open)}
+        navDisabled={engineStatus.status === 'starting'}
       />
 
       <div className="shell">

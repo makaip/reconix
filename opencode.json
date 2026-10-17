@@ -9,7 +9,7 @@
     },
     {
       "action": "edit",
-      "resource": "src/**",
+      "resource": "*",
       "effect": "allow"
     },
     {
@@ -40,6 +40,14 @@
           "effect": "deny"
         }
       ]
+    }
+  },
+  "mcp": {
+    "servers": {
+      "reconix": {
+        "type": "remote",
+        "url": "http://127.0.0.1:4101/mcp"
+      }
     }
   }
 }

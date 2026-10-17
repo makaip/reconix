@@ -64,6 +64,11 @@ export interface ServerStatus {
   detail?: string
 }
 
+// Engine boot status — `opencode serve` + the MCP tool server coming up at
+// app launch, before any chat session exists. Distinct from ServerStatus
+// above (which tracks an active OpenCode session's connection state).
+export type EngineStatus = { status: 'starting' } | { status: 'ready' } | { status: 'error'; error: string }
+
 // ─── Error envelope (API.md §4) ───────────────────────────────────────────────
 export interface ErrorEnvelope {
   error: { code: string; message: string; retriable: boolean }

@@ -10,6 +10,11 @@ type ToolbarProps = {
   canGoForward: boolean
   copilotOpen: boolean
   onToggleCopilot: () => void
+  /** True while the Copilot engine is still booting — navigation is
+   *  accepted by the address bar but held by the main process until the
+   *  engine's ready, so disable the controls rather than let the user
+   *  think a click did nothing. */
+  navDisabled?: boolean
 }
 
 type NavButtonProps = {
@@ -28,7 +33,14 @@ function NavButton({ label, icon, flip, disabled, onClick }: NavButtonProps): JS
   )
 }
 
-function Toolbar({ url, canGoBack, canGoForward, copilotOpen, onToggleCopilot }: ToolbarProps): JSX.Element {
+function Toolbar({
+  url,
+  canGoBack,
+  canGoForward,
+  copilotOpen,
+  onToggleCopilot,
+  navDisabled
+}: ToolbarProps): JSX.Element {
   const { target } = window.reconix
 
   return (
@@ -50,7 +62,7 @@ function Toolbar({ url, canGoBack, canGoForward, copilotOpen, onToggleCopilot }:
       />
       <NavButton label="Reload" icon={navReload} onClick={() => void target.reload()} />
 
-      <UrlBar url={url} />
+      <UrlBar url={url} disabled={navDisabled} />
 
       {/* interception and recording aren't built yet, so these are inert */}
       <button type="button" className="toolbar-button" title="Not implemented yet">

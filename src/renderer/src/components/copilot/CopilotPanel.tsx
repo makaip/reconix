@@ -26,7 +26,7 @@ function CopilotPanel({
   requestCount,
   style
 }: CopilotPanelProps): JSX.Element {
-  const { messages, attachments, attach, detach, send } = copilot
+  const { messages, attachments, thinking, busy, attach, detach, send, suspend } = copilot
   const [over, setOver] = useState(false)
   const listRef = useRef<HTMLDivElement>(null)
 
@@ -37,7 +37,7 @@ function CopilotPanel({
   useEffect(() => {
     const list = listRef.current
     if (list) list.scrollTop = list.scrollHeight
-  }, [messages.length])
+  }, [messages.length, thinking])
 
   const acceptsDrag = (event: DragEvent): boolean =>
     draggedNode !== null && event.dataTransfer.types.includes(NODE_DRAG_TYPE)
@@ -48,6 +48,11 @@ function CopilotPanel({
         <img src={chat} width={16} height={16} alt="" />
         <h2 className="copilot__title">Copilot</h2>
         <span className="copilot__engagement">{engagement}</span>
+        {busy && (
+          <button type="button" className="copilot__suspend" onClick={suspend}>
+            Suspend
+          </button>
+        )}
         <button type="button" className="icon-button" aria-label="Close Copilot" onClick={onClose}>
           <img src={close} width={14} height={14} alt="" />
         </button>
@@ -76,6 +81,16 @@ function CopilotPanel({
         {messages.map((message) => (
           <Message key={message.id} message={message} />
         ))}
+        {thinking && (
+          <div className="thinking" role="status" aria-label="Copilot is thinking">
+            <span className="thinking__author">Copilot</span>
+            <span className="thinking__dots">
+              <span />
+              <span />
+              <span />
+            </span>
+          </div>
+        )}
         <div className="copilot__spacer" />
         {draggedNode && <DropZone over={over} />}
       </div>

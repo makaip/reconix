@@ -62,6 +62,14 @@ export class OpenCodeConnector {
     this.sinks.onStatus({ state: 'down' })
   }
 
+  /** Interrupts the agent's current turn without tearing down the session —
+   *  the stream loop and connector stay alive, so the user can send another
+   *  message right after. Distinct from stop(), which kills everything. */
+  async interrupt(): Promise<void> {
+    if (!this.sessionId) return
+    await this.transport.abort(this.sessionId)
+  }
+
   private async waitForReady(): Promise<void> {
     const deadline = Date.now() + (this.opts.readinessTimeoutMs ?? 30_000)
     while (Date.now() < deadline) {
