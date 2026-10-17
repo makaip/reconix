@@ -415,3 +415,239 @@
   overflow-wrap: anywhere;
   color: var(--color-text);
 }
+
+.dt-text-button {
+  flex: none;
+  align-self: center;
+  height: 22px;
+  padding: 0 8px;
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-muted);
+  font: inherit;
+  font-size: var(--text-2xs);
+  cursor: pointer;
+}
+
+.dt-text-button:hover {
+  background: var(--color-hover);
+  color: var(--color-text);
+}
+
+.dt-text-button:disabled {
+  color: var(--color-text-faint);
+  cursor: default;
+}
+
+.dt-text-button:disabled:hover {
+  background: none;
+}
+
+/* --- Console ------------------------------------------------------------ */
+
+.dt-console {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.dt-console__log {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 2px 0;
+  font-family: var(--font-mono);
+}
+
+.dt-console__entry {
+  display: flex;
+  gap: 8px;
+  padding: 3px 10px;
+  border-bottom: 1px solid var(--color-border-subtle);
+  overflow-wrap: anywhere;
+  color: var(--color-text);
+}
+
+.dt-console__entry--command {
+  color: var(--color-text-muted);
+}
+
+.dt-console__entry--error {
+  color: var(--color-error);
+  background: color-mix(in srgb, var(--color-error) 10%, transparent);
+}
+
+.dt-console__entry--warning {
+  color: var(--color-sev-medium);
+}
+
+.dt-console__entry--info {
+  color: var(--color-accent);
+}
+
+.dt-console__entry--debug {
+  color: var(--color-text-faint);
+}
+
+.dt-console__prompt {
+  flex: none;
+  color: var(--color-text-faint);
+}
+
+.dt-console__text {
+  flex: 1 1 0;
+  min-width: 0;
+  white-space: pre-wrap;
+}
+
+.dt-console__input-row {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 28px;
+  padding: 0 10px;
+  border-top: 1px solid var(--color-border);
+  font-family: var(--font-mono);
+}
+
+.dt-console__input {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  background: none;
+  border: 0;
+  outline: 0;
+  font: inherit;
+  color: var(--color-text);
+}
+
+.dt-console__input::placeholder {
+  color: var(--color-text-faint);
+}
+
+/* --- Sources / Application (shared list+viewer split) ------------------- */
+
+.dt-sources,
+.dt-application {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+}
+
+.dt-sources__list {
+  flex: none;
+  width: 220px;
+  overflow: auto;
+  border-right: 1px solid var(--color-border);
+}
+
+.dt-sources__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  height: 24px;
+  padding: 0 10px;
+  background: none;
+  border: 0;
+  color: var(--color-text);
+  text-align: left;
+  cursor: default;
+}
+
+.dt-sources__row:hover {
+  background: var(--color-hover);
+}
+
+.dt-sources__row--selected,
+.dt-sources__row--selected:hover {
+  background: var(--color-selection);
+}
+
+.dt-sources__row-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dt-sources__row-type {
+  flex: none;
+  font-size: var(--text-2xs);
+}
+
+.dt-sources__viewer {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: auto;
+  padding: 10px 12px;
+}
+
+.dt-sources__code {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--color-text);
+}
+
+.dt-application__detail {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: auto;
+}
+
+/* --- Tables (cookies, storage) ------------------------------------------- */
+
+.dt-table-wrap {
+  padding: 8px 10px;
+}
+
+.dt-storage__toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 6px;
+}
+
+.dt-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-2xs);
+}
+
+.dt-table th {
+  padding: 4px 8px;
+  background: var(--color-bg-bar);
+  border-bottom: 1px solid var(--color-border);
+  text-align: left;
+  font-weight: 600;
+  color: var(--color-text-faint);
+  white-space: nowrap;
+}
+
+.dt-table td {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--color-border-subtle);
+  vertical-align: middle;
+}
+
+.dt-table__mono {
+  font-family: var(--font-mono);
+}
+
+.dt-table__truncate {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dt-table .dt-styles__input {
+  height: 20px;
+}
