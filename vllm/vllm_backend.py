@@ -126,7 +126,7 @@ def engine_kwargs_from_env_args(raw: str | None = None) -> dict[str, Any]:
 # ``Qwen/Qwen3-32B-AWQ`` is what profiles/orchestrator.env serves; a local
 # directory of weights works just as well (vLLM accepts either).
 DEFAULT_MODEL = "Qwen/Qwen3-32B-AWQ"
-# Must match the model key OpenCode resolves (opencode.json -> agents.orchestrator.model).
+# Must match the model key OpenCode resolves (opencode.json -> agents.pentest-orchestrator.model).
 DEFAULT_SERVED_NAME = "orchestrator-model"
 
 def default_model() -> str:
