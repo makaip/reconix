@@ -68,29 +68,27 @@ function sourceLabel(sheet: SheetInfo | undefined, line: number | undefined): st
 
 // attach chrome devtools protocol to target page and expose IPC surface for custom devtools UI.
 // also generic CDP access isnt handed to render
-export function attachInspector(win: BrowserWindow, target: WebContents): void {
-  const dbg = target.debugger
+export type Inspector = {
+  // points the inspector at another page (or none), and the renderer reloads its tree
+  setTarget: (target: WebContents | null) => void
+}
+
+export function attachInspector(win: BrowserWindow): Inspector {
+  let current: WebContents | null = null
+  let ready: Promise<boolean> = Promise.resolve(false)
+  let stopListening: (() => void) | null = null
   const sheets = new Map<string, SheetInfo>()
 
-  const send = <T>(method: string, params?: object): Promise<T> =>
-    dbg.sendCommand(method, params) as Promise<T>
+  const send = <T>(method: string, params?: object): Promise<T> => {
+    if (!current || current.isDestroyed()) return Promise.reject(new Error('No inspected page'))
+    return current.debugger.sendCommand(method, params) as Promise<T>
+  }
 
   const emit = (event: DevToolsEvent): void => {
     if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
       win.webContents.send('devtools:event', event)
     }
   }
-
-  const ready = (async () => {
-    dbg.attach('1.3')
-    await send('DOM.enable')
-    await send('CSS.enable')
-    await send('Overlay.enable')
-    return true
-  })().catch((error) => {
-    console.error('Inspector failed to attach:', error)
-    return false
-  })
 
   async function resolveInspected(backendNodeId: number): Promise<void> {
     try {
@@ -104,21 +102,59 @@ export function attachInspector(win: BrowserWindow, target: WebContents): void {
     }
   }
 
-  dbg.on('message', (_event, method, params: Record<string, unknown>) => {
-    if (method === 'CSS.styleSheetAdded') {
-      const header = params.header as { styleSheetId: string; sourceURL: string; isInline: boolean }
-      sheets.set(header.styleSheetId, { url: header.sourceURL, inline: header.isInline })
-    } else if (method === 'Overlay.inspectNodeRequested') {
-      void resolveInspected(params.backendNodeId as number)
-    } else if (FORWARDED_EVENTS.has(method)) {
-      emit({ method, params } as DevToolsEvent)
+  function setTarget(target: WebContents | null): void {
+    stopListening?.()
+    stopListening = null
+    if (current && !current.isDestroyed() && current.debugger.isAttached()) {
+      try {
+        current.debugger.detach()
+      } catch {
+        // already detached
+      }
     }
-  })
+    current = target
+    sheets.clear()
+
+    if (!target) {
+      ready = Promise.resolve(false)
+      emit({ method: 'DOM.documentUpdated', params: {} })
+      return
+    }
+
+    const dbg = target.debugger
+    const onMessage = (_event: unknown, method: string, params: Record<string, unknown>): void => {
+      if (method === 'CSS.styleSheetAdded') {
+        const header = params.header as { styleSheetId: string; sourceURL: string; isInline: boolean }
+        sheets.set(header.styleSheetId, { url: header.sourceURL, inline: header.isInline })
+      } else if (method === 'Overlay.inspectNodeRequested') {
+        void resolveInspected(params.backendNodeId as number)
+      } else if (FORWARDED_EVENTS.has(method)) {
+        emit({ method, params } as DevToolsEvent)
+      }
+    }
+    dbg.on('message', onMessage)
+    stopListening = () => dbg.removeListener('message', onMessage)
+
+    const attached = (async () => {
+      dbg.attach('1.3')
+      await dbg.sendCommand('DOM.enable')
+      await dbg.sendCommand('CSS.enable')
+      await dbg.sendCommand('Overlay.enable')
+      return true
+    })().catch((error) => {
+      console.error('Inspector failed to attach:', error)
+      return false
+    })
+    ready = attached
+    void attached.then(() => {
+      if (current === target) emit({ method: 'DOM.documentUpdated', params: {} })
+    })
+  }
 
   const handle = (channel: string, fn: (...args: unknown[]) => Promise<unknown>): void => {
     ipcMain.removeHandler(channel)
     ipcMain.handle(channel, async (event, ...args) => {
-      if (event.sender !== win.webContents || !(await ready)) return null
+      if (event.sender !== win.webContents || !(await ready) || !current) return null
       try {
         return await fn(...args)
       } catch {
@@ -213,6 +249,8 @@ export function attachInspector(win: BrowserWindow, target: WebContents): void {
     ]) {
       ipcMain.removeHandler(channel)
     }
-    if (dbg.isAttached()) dbg.detach()
+    setTarget(null)
   })
+
+  return { setTarget }
 }

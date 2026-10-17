@@ -13,6 +13,11 @@
   background: var(--color-bg-raised);
 }
 
+.badge--success {
+  background: var(--color-success-soft);
+  color: var(--color-success);
+}
+
 .badge--muted {
   background: var(--color-badge-muted);
 }

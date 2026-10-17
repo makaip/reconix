@@ -68,4 +68,6 @@ export const messages: CopilotMessage[] = [
   }
 ]
 
-export const composerContext = ['current tab', '3 requests', 'scope']
+// placeholders until proxy and scope rules exist
+export const proxy = { label: ':8080', address: '127.0.0.1:8080' }
+export const scope = { hosts: ['app.example.test'], summary: '1 host · 4 rules' }
