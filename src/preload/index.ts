@@ -208,6 +208,11 @@ const api = {
       ipcRenderer.on('copilot:status', listener)
       return () => ipcRenderer.removeListener('copilot:status', listener)
     },
+    // Current engine boot status, read on mount. The push below can fire
+    // before the renderer subscribes (main creates the bridge before the
+    // window loads), so this readback is what actually keeps the loading
+    // banner honest — don't rely on the event alone.
+    getEngineStatus: (): Promise<EngineStatus> => ipcRenderer.invoke('copilot:get-engine-status'),
     // Engine boot status (opencode serve + the MCP tool server), not to be
     // confused with onStatus's OpenCode session ServerStatus above — this
     // fires once at launch (starting -> ready|error), before any session exists.

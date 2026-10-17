@@ -575,19 +575,34 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
   // DOM summary yet" because `opencode serve` hadn't finished booting. The
   // renderer gates on `waitUntilReady()` below (surfaced as a loading
   // overlay) so the user sees why, instead of hitting a silent race.
-  send('copilot:engine-status', { status: 'starting' } satisfies EngineStatus)
+  //
+  // The status is RETAINED (not just pushed): the bridge is created before the
+  // renderer has even loaded, and the engine often reaches 'ready' before React
+  // mounts and subscribes — so a push-only channel loses the transition and the
+  // loading banner hangs on 'starting' forever. The renderer reads this back via
+  // `copilot:get-engine-status` on mount, and the push is only an optimization
+  // for the case where it did subscribe in time.
+  let engineStatus: EngineStatus = { status: 'starting' }
+  const setEngineStatus = (next: EngineStatus): void => {
+    engineStatus = next
+    send('copilot:engine-status', next)
+  }
+
+  setEngineStatus({ status: 'starting' })
   const engineReady: Promise<{ ok: boolean; error?: string }> = ensureServerInfo().then(
     () => {
-      send('copilot:engine-status', { status: 'ready' } satisfies EngineStatus)
+      setEngineStatus({ status: 'ready' })
       return { ok: true }
     },
     (err: unknown) => {
       const error = err instanceof Error ? err.message : String(err)
       console.error('[copilot] engine warm-up failed:', err)
-      send('copilot:engine-status', { status: 'error', error } satisfies EngineStatus)
+      setEngineStatus({ status: 'error', error })
       return { ok: false, error }
     }
   )
+
+  ipcMain.handle('copilot:get-engine-status', () => engineStatus)
 
   const domWatcher = new DomSummaryWatcher(
     () => cdp,
@@ -660,6 +675,7 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
       ipcMain.removeHandler('copilot:send')
       ipcMain.removeHandler('copilot:respond-approval')
       ipcMain.removeHandler('copilot:interrupt')
+      ipcMain.removeHandler('copilot:get-engine-status')
       domWatcher.setActive(null)
       await connector?.stop().catch(() => undefined)
       await mcpServer?.stop().catch(() => undefined)
