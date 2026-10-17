@@ -213,6 +213,21 @@ export type NetworkSink = {
 }
 
 /**
+ * Fans CDP Network.* events to several sinks that share the inspector's single
+ * debugger (e.g. response-body capture + WebSocket capture). `reset` resets all.
+ */
+export function combineNetworkSinks(...sinks: NetworkSink[]): NetworkSink {
+  return {
+    handleNetworkEvent: (method, params, send) => {
+      for (const sink of sinks) sink.handleNetworkEvent(method, params, send)
+    },
+    reset: () => {
+      for (const sink of sinks) sink.reset()
+    }
+  }
+}
+
+/**
  * Optional sink for CDP Fetch.* events (request interception / match-replace). Rides
  * the same single debugger as NetworkSink. `onAttached` fires once the debugger is
  * live on a new target so the interceptor can (re-)enable Fetch if it holds rules.

@@ -34,7 +34,8 @@ import type {
   SavedRequest,
   SaveInterceptRuleInput,
   SaveRequestInput,
-  TabsState
+  TabsState,
+  WsConnection
 } from '../shared/tabs'
 import type { DiffResponsesOutput } from '../shared/tools'
 
@@ -86,6 +87,12 @@ const api = {
     // full capture list (all tabs, most recent 200), pushed whenever any request changes
     onRequests: (callback: (requests: CapturedRequest[]) => void): (() => void) =>
       subscribe('network:requests', callback)
+  },
+  websocket: {
+    // WebSocket connections + frames captured over CDP on the inspected target.
+    list: (): Promise<WsConnection[]> => ipcRenderer.invoke('websocket:list'),
+    onChanged: (callback: (conns: WsConnection[]) => void): (() => void) =>
+      subscribe('websocket:changed', callback)
   },
   repeater: {
     list: (): Promise<SavedRequest[]> => ipcRenderer.invoke('repeater:list'),
