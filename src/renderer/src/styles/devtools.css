@@ -793,3 +793,88 @@
   background: var(--color-bg-inset);
   border-radius: var(--radius-sm);
 }
+
+/* Intercept / match-replace rules (ARCHITECTURE.MD §11.1) */
+.itc {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  overflow-y: auto;
+  min-height: 0;
+  flex: 1;
+}
+.itc__note {
+  font-size: var(--text-2xs);
+}
+.itc__form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--color-border);
+}
+.itc__form-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.itc__form-row .rep__input {
+  flex: 1;
+}
+.itc__rules {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.itc__rule {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+}
+.itc__rule:hover {
+  background: var(--color-hover);
+}
+.itc__rule-name {
+  font-weight: 500;
+}
+.itc__rule-desc {
+  font-size: var(--text-2xs);
+  font-family: var(--font-mono);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.itc__rule-desc code {
+  font-family: var(--font-mono);
+}
+
+/* Network request-history filter bar (ARCHITECTURE.MD §11.1) */
+.dt-netfilter {
+  display: flex;
+  gap: 4px;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--color-border);
+  flex-wrap: wrap;
+}
+.dt-netfilter__input {
+  background: var(--color-bg-inset);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  font-size: var(--text-2xs);
+  padding: 2px 5px;
+  min-width: 0;
+  flex: 1;
+}
+.dt-netfilter__input--sm {
+  flex: 0 0 auto;
+  width: 84px;
+}

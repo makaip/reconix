@@ -28,9 +28,11 @@ import type {
   CapturedRequest,
   NavigateResult,
   NetworkStats,
+  InterceptRule,
   ReplayRequestInput,
   ReplayResult,
   SavedRequest,
+  SaveInterceptRuleInput,
   SaveRequestInput,
   TabsState
 } from '../shared/tabs'
@@ -99,6 +101,16 @@ const api = {
     // pushed whenever the saved set changes (save/delete/send)
     onChanged: (callback: (saved: SavedRequest[]) => void): (() => void) =>
       subscribe('repeater:changed', callback)
+  },
+  intercept: {
+    list: (): Promise<InterceptRule[]> => ipcRenderer.invoke('intercept:list'),
+    save: (input: SaveInterceptRuleInput): Promise<InterceptRule | null> =>
+      ipcRenderer.invoke('intercept:save', input),
+    toggle: (id: string, enabled: boolean): Promise<InterceptRule | null> =>
+      ipcRenderer.invoke('intercept:toggle', id, enabled),
+    delete: (id: string): Promise<boolean> => ipcRenderer.invoke('intercept:delete', id),
+    onChanged: (callback: (rules: InterceptRule[]) => void): (() => void) =>
+      subscribe('intercept:changed', callback)
   },
   devtools: {
     getDocument: (): Promise<CdpNode | null> => ipcRenderer.invoke('devtools:get-document'),

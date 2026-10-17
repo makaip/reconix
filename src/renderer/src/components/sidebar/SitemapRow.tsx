@@ -1,5 +1,5 @@
 import fileMuted from '../../assets/icons/file-muted.svg'
-import type { SitemapNode } from '../../mock/data'
+import type { SitemapNode } from '../../lib/sitemap'
 
 type SitemapRowProps = {
   node: SitemapNode

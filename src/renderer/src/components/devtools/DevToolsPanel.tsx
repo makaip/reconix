@@ -4,6 +4,7 @@ import type { NodeRef } from '../../hooks/useCopilot'
 import { useApplication } from '../../hooks/useApplication'
 import { useConsole } from '../../hooks/useConsole'
 import { buildRows, useDomTree } from '../../hooks/useDomTree'
+import { useIntercept } from '../../hooks/useIntercept'
 import { useNetworkRequests } from '../../hooks/useNetworkRequests'
 import { useRepeater } from '../../hooks/useRepeater'
 import { useResources } from '../../hooks/useResources'
@@ -12,6 +13,7 @@ import Breadcrumbs from './Breadcrumbs'
 import ConsolePanel from './ConsolePanel'
 import DevToolsToolbar, { type DevToolsTab } from './DevToolsToolbar'
 import ElementsTree from './ElementsTree'
+import InterceptPanel from './InterceptPanel'
 import NetworkPanel from './NetworkPanel'
 import RepeaterPanel from './RepeaterPanel'
 import SourcesPanel from './SourcesPanel'
@@ -38,6 +40,7 @@ function DevToolsPanel({
   const rows = useMemo(() => buildRows(state), [state])
   const networkRequests = useNetworkRequests(activeTabId)
   const repeater = useRepeater()
+  const intercept = useIntercept()
   const consoleApi = useConsole()
   const { resources, loaded: resourcesLoaded } = useResources(activeTabId)
   const application = useApplication(activeTabId)
@@ -86,6 +89,7 @@ function DevToolsPanel({
         counts={{
           network: networkRequests.length,
           repeater: repeater.saved.length,
+          intercept: intercept.rules.length,
           console: consoleApi.entries.length
         }}
         extra={
@@ -119,6 +123,7 @@ function DevToolsPanel({
       )}
       {devtoolsTab === 'network' && <NetworkPanel requests={networkRequests} />}
       {devtoolsTab === 'repeater' && <RepeaterPanel api={repeater} />}
+      {devtoolsTab === 'intercept' && <InterceptPanel api={intercept} />}
       {devtoolsTab === 'console' && (
         <ConsolePanel entries={consoleApi.entries} onEvaluate={consoleApi.evaluate} />
       )}
