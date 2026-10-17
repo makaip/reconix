@@ -12,6 +12,14 @@ export interface OpenCodeConfig {
   /** Agent ID to pin new sessions to (opencode.json's `agents.*` key). Falls
    *  back to OpenCode's own default agent ("build") when omitted. */
   agent?: string
+  /** Model to pin new sessions to, as "providerID/modelID"
+   *  (e.g. "google/gemini-3.8-flash"). MUST be set for provider-authed models:
+   *  without it, OpenCode ignores the agent's configured model and falls back
+   *  to its own hosted gateway, which 403s ("free tier only from within
+   *  OpenCode"). Confirmed 2026-10-17 by diffing `opencode run`'s own
+   *  POST /api/session body — it always pins the model with a `{providerID,id}`
+   *  object (note the field is `id`, not `modelID`). */
+  model?: string
 }
 
 export interface RawEvent {
@@ -51,6 +59,16 @@ function toReply(decision: string): 'once' | 'always' | 'reject' {
   return 'reject'
 }
 
+/** "providerID/modelID" → { providerID, id } (OpenCode's session.model shape;
+ *  the model key is `id`, not `modelID`). Only the first slash splits, so
+ *  model ids containing slashes survive. Returns undefined if unparseable. */
+export function parseModel(spec: string | undefined): { providerID: string; id: string } | undefined {
+  if (!spec) return undefined
+  const slash = spec.indexOf('/')
+  if (slash <= 0 || slash === spec.length - 1) return undefined
+  return { providerID: spec.slice(0, slash), id: spec.slice(slash + 1) }
+}
+
 export class HttpOpenCodeTransport implements OpenCodeTransport {
   constructor(private readonly cfg: OpenCodeConfig) {}
 
@@ -73,8 +91,13 @@ export class HttpOpenCodeTransport implements OpenCodeTransport {
   }
 
   async createSession(): Promise<{ id: string }> {
-    const body = JSON.stringify(this.cfg.agent ? { agent: this.cfg.agent } : {})
-    const r = await this.req(PATHS.session, { method: 'POST', body })
+    const payload: Record<string, unknown> = {}
+    if (this.cfg.agent) payload.agent = this.cfg.agent
+    // Pin the model here (not just via agent config) or provider-authed models
+    // get bypassed for OpenCode's gateway — see OpenCodeConfig.model.
+    const model = parseModel(this.cfg.model)
+    if (model) payload.model = model
+    const r = await this.req(PATHS.session, { method: 'POST', body: JSON.stringify(payload) })
     if (!r.ok) throw new Error(`createSession failed: ${r.status}`)
     const { data } = (await r.json()) as { data: { id: string } }
     return { id: data.id }

@@ -41,7 +41,7 @@ import type { AgentEvent, ApprovalDecision, EngineStatus, Policy, ServerStatus }
 import type { CapturedRequest } from '../shared/tabs'
 import type { NetworkCapture } from './network'
 import { createOpenCodeConnector, type OpenCodeConnector } from './opencode'
-import type { RawEvent } from './opencode/transport'
+import { parseModel, type RawEvent } from './opencode/transport'
 import { buildMcpServer } from './mcp'
 import { InMemoryAuditLogger } from './mcp/audit'
 import { startMcpHttpServer, type McpHttpServer } from './mcp/server'
@@ -51,6 +51,12 @@ import type { FindingSink, HistoryReader, NetworkReader, ToolContext, TraceStore
 
 const HOST = '127.0.0.1'
 const OPENCODE_PORT = 4097
+// Model pinned on every session we create (orchestrator + the parser
+// one-shot). Must be set explicitly, not just left to the agent's config:
+// OpenCode otherwise bypasses the agent model and routes to its own hosted
+// gateway, which 403s for a user running their own key (see transport.ts's
+// OpenCodeConfig.model). Keep in sync with .opencode/agents/*.md's `model`.
+const AGENT_MODEL = 'google/gemini-3.8-flash'
 // Must match opencode.json's mcp.servers.reconix.url — not read back from
 // there, since opencode.json is static config and this needs to be a fixed
 // port the running process actually binds to.
@@ -191,10 +197,12 @@ async function runOneShotAgent(
     'content-type': 'application/json'
   }
   try {
+    // Pin the model (not just the agent) — same reason as the orchestrator
+    // session: without it the parser routes to OpenCode's gateway and 403s.
     const sessionRes = await fetch(`${baseUrl}/api/session`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ agent })
+      body: JSON.stringify({ agent, model: parseModel(AGENT_MODEL) })
     })
     if (!sessionRes.ok) {
       console.error(
@@ -619,7 +627,7 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
     starting = (async () => {
       const { baseUrl, password } = await ensureServerInfo()
       const c = createOpenCodeConnector(
-        { baseUrl, password, agent: 'orchestrator' },
+        { baseUrl, password, agent: 'orchestrator', model: AGENT_MODEL },
         {
           onAgentEvent: (ev: AgentEvent) => send('copilot:event', ev),
           persist: (_raw: RawEvent, _normalized: AgentEvent | null) => {
