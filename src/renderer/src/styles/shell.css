@@ -1,7 +1,15 @@
-.shell {
+.app {
   display: flex;
+  flex-direction: column;
   width: 100vw;
   height: 100vh;
+  overflow: hidden;
+}
+
+.shell {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
   overflow: hidden;
   background: var(--color-bg-inset);
 }

@@ -9,6 +9,10 @@ import './styles/badge.css'
 import './styles/sidebar.css'
 import './styles/copilot.css'
 import './styles/devtools.css'
+import './styles/chrome.css'
+
+// lets CSS adjust per OS (e.g. room for the macOS traffic lights)
+document.documentElement.dataset.platform = window.reconix.platform
 
 ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
   <React.StrictMode>

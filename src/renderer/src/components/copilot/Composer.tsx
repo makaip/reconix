@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import send from '../../assets/icons/send.svg'
 import type { ContextAttachment } from '../../hooks/useCopilot'
-import { composerContext } from '../../mock/data'
 import Badge from '../Badge'
 import ContextChip from './ContextChip'
 
@@ -9,9 +8,11 @@ type ComposerProps = {
   attachments: ContextAttachment[]
   onDetach: (id: number) => void
   onSend: (text: string) => void
+  /** Requests captured for the current tab. */
+  requestCount: number
 }
 
-function Composer({ attachments, onDetach, onSend }: ComposerProps): JSX.Element {
+function Composer({ attachments, onDetach, onSend, requestCount }: ComposerProps): JSX.Element {
   const [text, setText] = useState('')
 
   return (
@@ -26,7 +27,7 @@ function Composer({ attachments, onDetach, onSend }: ComposerProps): JSX.Element
     >
       <div className="composer__context">
         <span className="composer__context-label">Context:</span>
-        {composerContext.map((label) => (
+        {['current tab', `${requestCount} requests`, 'scope'].map((label) => (
           <Badge key={label}>{label}</Badge>
         ))}
       </div>

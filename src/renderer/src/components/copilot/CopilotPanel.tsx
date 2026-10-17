@@ -14,9 +14,17 @@ type CopilotPanelProps = {
   /** The DOM node currently being dragged out of DevTools, if any. */
   draggedNode: NodeRef | null
   onNodeDrop: () => void
+  onClose: () => void
+  requestCount: number
 }
 
-function CopilotPanel({ copilot, draggedNode, onNodeDrop }: CopilotPanelProps): JSX.Element {
+function CopilotPanel({
+  copilot,
+  draggedNode,
+  onNodeDrop,
+  onClose,
+  requestCount
+}: CopilotPanelProps): JSX.Element {
   const { messages, attachments, attach, detach, send } = copilot
   const [over, setOver] = useState(false)
   const listRef = useRef<HTMLDivElement>(null)
@@ -39,7 +47,7 @@ function CopilotPanel({ copilot, draggedNode, onNodeDrop }: CopilotPanelProps): 
         <img src={chat} width={16} height={16} alt="" />
         <h2 className="copilot__title">Copilot</h2>
         <Badge>{engagement}</Badge>
-        <button type="button" className="icon-button" aria-label="Close Copilot">
+        <button type="button" className="icon-button" aria-label="Close Copilot" onClick={onClose}>
           <img src={close} width={14} height={14} alt="" />
         </button>
       </header>
@@ -71,7 +79,12 @@ function CopilotPanel({ copilot, draggedNode, onNodeDrop }: CopilotPanelProps): 
         {draggedNode && <DropZone over={over} />}
       </div>
 
-      <Composer attachments={attachments} onDetach={detach} onSend={send} />
+      <Composer
+        attachments={attachments}
+        onDetach={detach}
+        onSend={send}
+        requestCount={requestCount}
+      />
     </aside>
   )
 }

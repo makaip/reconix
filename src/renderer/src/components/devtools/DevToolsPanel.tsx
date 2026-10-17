@@ -8,15 +8,23 @@ import ElementsTree from './ElementsTree'
 import StylesPane from './StylesPane'
 
 type DevToolsPanelProps = {
+  /** Changes when the user switches tabs; the page inspector doesn't carry over. */
+  activeTabId: number | null
   onNodeDragStart: (node: NodeRef) => void
   onNodeDragEnd: () => void
 }
 
-function DevToolsPanel({ onNodeDragStart, onNodeDragEnd }: DevToolsPanelProps): JSX.Element {
+function DevToolsPanel({
+  activeTabId,
+  onNodeDragStart,
+  onNodeDragEnd
+}: DevToolsPanelProps): JSX.Element {
   const { state, loaded, toggle, select } = useDomTree()
   const [rules, setRules] = useState<StyleRule[] | null>(null)
   const [inspecting, setInspecting] = useState(false)
   const rows = useMemo(() => buildRows(state), [state])
+
+  useEffect(() => setInspecting(false), [activeTabId])
 
   // page inspector turns itself off once element has been picked
   useEffect(
