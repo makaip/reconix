@@ -1,10 +1,12 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type {
+  AgentEvent,
   AgentSessionState,
   AgentTask,
   ApprovalDecision,
   ApprovalRequest,
   Finding,
+  SendMessageParams,
   StartAgentParams,
   ToolDescriptor
 } from '../shared/agent'
@@ -112,8 +114,20 @@ const api = {
     resume: (): Promise<void> => ipcRenderer.invoke('agent:resume'),
     getState: (): Promise<AgentSessionState> => ipcRenderer.invoke('agent:get-state'),
     listTools: (): Promise<ToolDescriptor[]> => ipcRenderer.invoke('tool:list'),
+    // §6.1 sendMessage {text}: a user message into the agent session.
+    sendMessage: (params: SendMessageParams): Promise<void> =>
+      ipcRenderer.invoke('sendMessage', params),
+    // §6.1 respondApproval {approvalId, decision, editedParams?}. No code string crosses
+    // the bridge — editedParams is a plain text key/value map only.
+    respondApproval: (decision: ApprovalDecision): Promise<void> =>
+      ipcRenderer.invoke('respondApproval', decision),
+    // Legacy alias kept for backward-compat with earlier consumers.
     respondToApproval: (decision: ApprovalDecision): Promise<void> =>
       ipcRenderer.invoke('approval:respond', decision),
+    // §6.1 agent:event: the one transcript stream (user / reasoning / tool-call /
+    // tool-result / inline approval). Returns an unsubscribe function.
+    onEvent: (callback: (event: AgentEvent) => void): (() => void) =>
+      subscribe('agent:event', callback),
     onState: (callback: (state: AgentSessionState) => void): (() => void) =>
       subscribe('agent:state', callback),
     onPlanUpdate: (callback: (tasks: AgentTask[]) => void): (() => void) =>
