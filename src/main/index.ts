@@ -3,9 +3,10 @@ import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { createBodyStore } from './bodies'
 import { loadScopeChecker } from './engagement'
-import { attachInspector } from './inspector'
+import { attachInspector, combineNetworkSinks } from './inspector'
 import { createInterceptor } from './intercept'
 import { startNetworkCapture, type NetworkCapture } from './network'
+import { createWebSocketCapture } from './websocket'
 import { createReplay } from './replay'
 import { createRepeater } from './repeater'
 import { createSessionManager } from './session'
@@ -81,8 +82,13 @@ function createWindow(): void {
 
   let network: NetworkCapture | undefined
   const bodies = createBodyStore(mainWindow)
+  const websockets = createWebSocketCapture(mainWindow)
   const interceptor = createInterceptor(mainWindow)
-  const inspector = attachInspector(mainWindow, bodies, interceptor.sink)
+  const inspector = attachInspector(
+    mainWindow,
+    combineNetworkSinks(bodies, websockets),
+    interceptor.sink
+  )
   const tabs = createTabManager(mainWindow, {
     onActiveChanged: (target) => inspector.setTarget(target),
     onTabClosed: (tabId) => network?.forgetTab(tabId)
