@@ -24,3 +24,20 @@ button {
   font: inherit;
   color: inherit;
 }
+
+/* thin dark scrollbars so it actually looks good on WSL */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-bg-raised);
+  border: 2px solid transparent;
+  border-radius: 6px;
+  background-clip: padding-box;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
