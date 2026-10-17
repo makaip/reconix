@@ -26,8 +26,22 @@ body {
 input,
 .message__text,
 .dt-tree,
-.dt-styles__rules {
+.dt-styles__rules,
+.dt-network__cell,
+.dt-network__detail,
+.dt-crawler__pageurl,
+.dt-crawler__sitemap,
+.dt-crawler__status,
+.dt-ws__url,
+.dt-ws__payload,
+.dt-ws__meta,
+.dt-table td,
+.dt-application__detail {
   user-select: text;
+}
+
+.dt-network__row--head .dt-network__cell {
+  user-select: none;
 }
 
 button {
