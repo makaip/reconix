@@ -1,0 +1,62 @@
+:root {
+  color-scheme: dark;
+
+  /* surfaces */
+  --color-bg-inset: #1b1b1c;
+  --color-bg-panel: #212122;
+  --color-bg-card: #282829;
+  --color-bg-raised: #343435;
+  --color-border: #454546;
+
+  /* text */
+  --color-text: #e8e8e8;
+  --color-text-muted: #9e9ea1;
+
+  /* accent */
+  --color-accent: #8ab5f7;
+  --color-accent-soft: rgba(138, 181, 247, 0.08);
+  --color-badge-muted: rgba(158, 158, 161, 0.15);
+
+  /* severity */
+  --color-sev-medium: #ffb840;
+  --color-sev-low: #66a6ff;
+  --color-sev-info: var(--color-text-muted);
+
+  /* DevTools chrome look (kind of) */
+  --dt-bg: #282828;
+  --dt-bg-toolbar: #333333;
+  --dt-border: #4a4a4a;
+  --dt-text: #e3e3e3;
+  --dt-text-muted: #999999;
+  --dt-selected: #2e4561;
+  --dt-tag: #5db0d7;
+  --dt-attr: #9bbbdc;
+  --dt-string: #f29766;
+  --dt-property: #5cccd9;
+
+  /* target page placeholder */
+  --page-bg: #f5f7fa;
+  --page-surface: #ffffff;
+  --page-border: #e0e5eb;
+
+  /* typography */
+  --font-sans: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  --text-2xs: 11px;
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-md: 14px;
+
+  /* radii */
+  --radius-xs: 3px;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 10px;
+
+  /* layout */
+  --sidebar-width: 240px;
+  --copilot-width: 360px;
+  --devtools-height: 440px;
+  --pane-gap: 12px;
+}
