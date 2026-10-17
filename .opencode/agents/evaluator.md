@@ -1,14 +1,6 @@
 ---
-description: Fast log, DOM, and network inspector that validates execution results and filters false positives.
 mode: subagent
-model: temp
-permissions:
-  - action: edit
-    resource: "*"
-    effect: deny
-  - action: bash
-    resource: "*"
-    effect: deny
+model: opencode/glm-5.3-flash-free
 ---
 
 You are the Fast Evaluation Subagent for the AI penetration testing browser. Your sole purpose is to analyze raw execution data and verify whether a security hypothesis is correct.
