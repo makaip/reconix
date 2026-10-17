@@ -2,17 +2,44 @@ import { useState, type CSSProperties } from 'react'
 import plus from '../../assets/icons/plus.svg'
 import { findings } from '../../mock/data'
 import { useSitemap } from '../../hooks/useSitemap'
+import type { ResourceDragItem } from '../../lib/dragTypes'
+import { nextSelection } from '../../lib/selection'
+import type { SitemapNode } from '../../lib/sitemap'
 import FindingCard from './FindingCard'
 import SectionHeader from './SectionHeader'
 import SitemapRow from './SitemapRow'
 
 type SidebarProps = {
   style?: CSSProperties
+  onDragStart: () => void
+  onDragEnd: () => void
+  /** Open a sitemap endpoint in the DevTools Sources tab. */
+  onOpenSource: (target: string) => void
 }
 
-function Sidebar({ style }: SidebarProps): JSX.Element {
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+/** The payload a sitemap node contributes to a drag/attach: its host+path is both url and label. */
+const toDragItem = (node: SitemapNode): ResourceDragItem => ({ url: node.id, label: node.id })
+
+function Sidebar({ style, onDragStart, onDragEnd, onOpenSource }: SidebarProps): JSX.Element {
   const sitemap = useSitemap()
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [anchor, setAnchor] = useState<string | null>(null)
+
+  const select = (id: string, mods: { metaKey: boolean; ctrlKey: boolean; shiftKey: boolean }): void => {
+    const result = nextSelection(selected, anchor, id, sitemap.map((n) => n.id), mods)
+    setSelected(result.set)
+    setAnchor(result.anchor)
+  }
+
+  // Dragging a row carries every selected node; dragging an unselected row selects just it first.
+  const dragItems = (id: string): ResourceDragItem[] => {
+    const ids = selected.has(id) ? selected : new Set([id])
+    if (!selected.has(id)) {
+      setSelected(ids)
+      setAnchor(id)
+    }
+    return sitemap.filter((n) => ids.has(n.id) && n.kind === 'page').map(toDragItem)
+  }
 
   return (
     <aside className="sidebar" aria-label="Sitemap and findings" style={style}>
@@ -25,8 +52,12 @@ function Sidebar({ style }: SidebarProps): JSX.Element {
             <SitemapRow
               key={node.id}
               node={node}
-              selected={node.id === selectedId}
-              onSelect={setSelectedId}
+              selected={selected.has(node.id)}
+              onSelect={select}
+              onOpen={() => node.kind === 'page' && onOpenSource(node.id)}
+              dragItems={() => dragItems(node.id)}
+              onDragStart={onDragStart}
+              onDragEnd={onDragEnd}
             />
           ))
         )}

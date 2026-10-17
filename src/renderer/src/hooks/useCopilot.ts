@@ -6,12 +6,20 @@ import { reduceTranscript, type TranscriptItem } from './transcript'
 /** A DOM node being dragged out of DevTools. */
 export type NodeRef = { nodeId: number; label: string; selector: string }
 
-export type ContextAttachment = NodeRef & NodeContext & { id: number }
+/** A source/sitemap file being dragged into Copilot. */
+export type ResourceRef = { url: string; label: string; frameId?: string }
+
+export type NodeAttachment = { kind: 'node'; id: number } & NodeRef & NodeContext
+export type ResourceAttachment = { kind: 'resource'; id: number } & ResourceRef
+export type ContextAttachment = NodeAttachment | ResourceAttachment
 
 export type Copilot = {
   messages: TranscriptItem[]
   attachments: ContextAttachment[]
-  attach: (node: NodeRef) => Promise<void>
+  /** Attach DOM nodes (fetches outerHTML/styles for each); de-duped by selector. */
+  attachNodes: (nodes: NodeRef[]) => Promise<void>
+  /** Attach source/sitemap files; de-duped by URL. */
+  attachResources: (resources: ResourceRef[]) => void
   detach: (id: number) => void
   send: (text: string) => void
   respondApproval: (decision: ApprovalDecision) => void
@@ -33,14 +41,27 @@ export function useCopilot(): Copilot {
 
   const messages = useMemo(() => reduceTranscript(events), [events])
 
-  const attach = useCallback(async (node: NodeRef) => {
-    const context = await window.reconix.devtools.getNodeContext(node.nodeId)
-    if (!context) return
-    setAttachments((current) =>
-      current.some((a) => a.selector === node.selector)
-        ? current
-        : [...current, { ...node, ...context, id: nextId.current++ }]
-    )
+  const attachNodes = useCallback(async (nodes: NodeRef[]) => {
+    for (const node of nodes) {
+      const context = await window.reconix.devtools.getNodeContext(node.nodeId)
+      if (!context) continue
+      setAttachments((current) =>
+        current.some((a) => a.kind === 'node' && a.selector === node.selector)
+          ? current
+          : [...current, { kind: 'node', id: nextId.current++, ...node, ...context }]
+      )
+    }
+  }, [])
+
+  const attachResources = useCallback((resources: ResourceRef[]) => {
+    setAttachments((current) => {
+      const next = [...current]
+      for (const resource of resources) {
+        if (next.some((a) => a.kind === 'resource' && a.url === resource.url)) continue
+        next.push({ kind: 'resource', id: nextId.current++, ...resource })
+      }
+      return next
+    })
   }, [])
 
   const detach = useCallback((id: number) => {
@@ -59,5 +80,5 @@ export function useCopilot(): Copilot {
     void window.reconix.agent.respondApproval(decision)
   }, [])
 
-  return { messages, attachments, attach, detach, send, respondApproval }
+  return { messages, attachments, attachNodes, attachResources, detach, send, respondApproval }
 }

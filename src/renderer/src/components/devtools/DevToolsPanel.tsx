@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type CSSProperties } from 'react'
 import type { StyleRule } from '../../../../shared/devtools'
-import type { NodeRef } from '../../hooks/useCopilot'
+import { nextSelection } from '../../lib/selection'
 import { useApplication } from '../../hooks/useApplication'
 import { useConsole } from '../../hooks/useConsole'
 import { buildRows, useDomTree } from '../../hooks/useDomTree'
@@ -22,21 +22,30 @@ import StylesPane from './StylesPane'
 type DevToolsPanelProps = {
   /** Changes when the user switches tabs; the page inspector doesn't carry over. */
   activeTabId: number | null
-  onNodeDragStart: (node: NodeRef) => void
-  onNodeDragEnd: () => void
+  onDragStart: () => void
+  onDragEnd: () => void
+  /** Request (from the sitemap) to open a file in Sources; the nonce re-triggers repeats. */
+  openSource: { target: string; nonce: number } | null
   style?: CSSProperties
 }
 
 function DevToolsPanel({
   activeTabId,
-  onNodeDragStart,
-  onNodeDragEnd,
+  onDragStart,
+  onDragEnd,
+  openSource,
   style
 }: DevToolsPanelProps): JSX.Element {
   const { state, loaded, toggle, select } = useDomTree()
   const [rules, setRules] = useState<StyleRule[] | null>(null)
   const [inspecting, setInspecting] = useState(false)
   const [devtoolsTab, setDevtoolsTab] = useState<DevToolsTab>('elements')
+  // Multi-selection for the Elements tree (drag/attach). state.selectedId stays the "active"
+  // node that drives Styles, the breadcrumb and $0; the anchor for shift-ranges tracks it.
+  const [treeSel, setTreeSel] = useState<{ set: Set<number>; anchor: number | null }>({
+    set: new Set(),
+    anchor: null
+  })
   const rows = useMemo(() => buildRows(state), [state])
   const networkRequests = useNetworkRequests(activeTabId)
   const repeater = useRepeater()
@@ -46,6 +55,28 @@ function DevToolsPanel({
   const application = useApplication(activeTabId)
 
   useEffect(() => setInspecting(false), [activeTabId])
+
+  // A sitemap double-click opens the file in Sources.
+  useEffect(() => {
+    if (openSource) setDevtoolsTab('sources')
+  }, [openSource])
+
+  // Keep the multi-selection in step when the active node changes from outside the tree
+  // (page inspector pick, keyboard nav): collapse to just that node.
+  useEffect(() => {
+    const id = state.selectedId
+    if (id !== null && !treeSel.set.has(id)) setTreeSel({ set: new Set([id]), anchor: id })
+  }, [state.selectedId])
+
+  const selectRow = (
+    id: number,
+    mods: { metaKey: boolean; ctrlKey: boolean; shiftKey: boolean }
+  ): void => {
+    const ids = rows.filter((row) => row.kind !== 'close').map((row) => row.id)
+    const result = nextSelection(treeSel.set, treeSel.anchor, id, ids, mods)
+    setTreeSel(result)
+    select(id)
+  }
 
   // page inspector turns itself off once element has been picked, and the pick is shown in Elements
   useEffect(
@@ -107,11 +138,13 @@ function DevToolsPanel({
               <ElementsTree
                 state={state}
                 rows={rows}
+                selectedIds={treeSel.set}
+                onSelectRow={selectRow}
                 onSelect={select}
                 onToggle={toggle}
                 onHover={(id) => void window.reconix.devtools.highlight(id)}
-                onNodeDragStart={onNodeDragStart}
-                onNodeDragEnd={onNodeDragEnd}
+                onDragStart={onDragStart}
+                onDragEnd={onDragEnd}
               />
             ) : (
               <p className="dt-empty">Inspector unavailable.</p>
@@ -127,7 +160,15 @@ function DevToolsPanel({
       {devtoolsTab === 'console' && (
         <ConsolePanel entries={consoleApi.entries} onEvaluate={consoleApi.evaluate} />
       )}
-      {devtoolsTab === 'sources' && <SourcesPanel resources={resources} loaded={resourcesLoaded} />}
+      {devtoolsTab === 'sources' && (
+        <SourcesPanel
+          resources={resources}
+          loaded={resourcesLoaded}
+          openTarget={openSource}
+          onDragStart={onDragStart}
+          onDragEnd={onDragEnd}
+        />
+      )}
       {devtoolsTab === 'application' && <ApplicationPanel application={application} />}
     </section>
   )
