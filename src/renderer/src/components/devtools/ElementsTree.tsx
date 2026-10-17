@@ -1,5 +1,8 @@
 import type { KeyboardEvent } from 'react'
 import type { TreeNode, TreeRow, TreeState } from '../../hooks/useDomTree'
+import type { NodeRef } from '../../hooks/useCopilot'
+import { chipLabel, cssSelector } from '../../lib/domLabel'
+import { NODE_DRAG_TYPE } from '../../lib/dragTypes'
 
 const VOID_ELEMENTS = new Set([
   'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'source', 'track', 'wbr'
@@ -82,9 +85,19 @@ type ElementsTreeProps = {
   onSelect: (id: number) => void
   onToggle: (id: number) => void
   onHover: (id: number | null) => void
+  onNodeDragStart: (node: NodeRef) => void
+  onNodeDragEnd: () => void
 }
 
-function ElementsTree({ state, rows, onSelect, onToggle, onHover }: ElementsTreeProps): JSX.Element {
+function ElementsTree({
+  state,
+  rows,
+  onSelect,
+  onToggle,
+  onHover,
+  onNodeDragStart,
+  onNodeDragEnd
+}: ElementsTreeProps): JSX.Element {
   const selectable = rows.filter((row) => row.kind !== 'close')
 
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
@@ -125,8 +138,22 @@ function ElementsTree({ state, rows, onSelect, onToggle, onHover }: ElementsTree
               aria-selected={selected}
               className={selected ? 'dt-row dt-row--selected' : 'dt-row'}
               style={{ paddingLeft: 10 + row.depth * 16 }}
+              draggable={isElement}
               onClick={() => onSelect(row.id)}
               onMouseEnter={() => onHover(isElement ? row.id : null)}
+              onDragStart={(event) => {
+                if (!isElement) return
+                event.dataTransfer.effectAllowed = 'copy'
+                event.dataTransfer.setData(NODE_DRAG_TYPE, String(row.id))
+                event.dataTransfer.setData('text/plain', chipLabel(node))
+                onHover(null)
+                onNodeDragStart({
+                  nodeId: row.id,
+                  label: chipLabel(node),
+                  selector: cssSelector(state.nodes, row.id)
+                })
+              }}
+              onDragEnd={onNodeDragEnd}
             >
               <span
                 className="dt-row__arrow"

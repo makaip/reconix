@@ -1,10 +1,5 @@
 import { NODE_TYPE, type TreeNode, type TreeState } from '../../hooks/useDomTree'
-
-function crumbLabel(node: TreeNode): string {
-  const id = node.attrs.find(([k]) => k === 'id')?.[1]
-  const classes = node.attrs.find(([k]) => k === 'class')?.[1].trim().split(/\s+/).filter(Boolean)
-  return `${node.name}${id ? `#${id}` : ''}${classes?.length ? `.${classes.join('.')}` : ''}`
-}
+import { crumbLabel } from '../../lib/domLabel'
 
 function Breadcrumbs({ state }: { state: TreeState }): JSX.Element {
   const trail: TreeNode[] = []
