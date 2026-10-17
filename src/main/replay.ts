@@ -153,22 +153,24 @@ function send(input: ValidInput): Promise<ReplayResult> {
 
 export type Replay = { close: () => void }
 
+/** A gated send: validate → scope-check → rate-limit → http(s). The single egress path. */
+export type Replayer = (raw: unknown) => Promise<ReplayResult>
+
 /**
- * Host-side request replay for Repeater (ARCHITECTURE.MD §11.1). Every send runs
- * validate (hostile input) → scope-check (DENY by default) → per-host rate limit
- * → Node http(s) with redirects NOT auto-followed. This path does NOT traverse
- * the container egress proxy (that fronts the OpenCode container, not the host),
- * so scope and rate are enforced here instead — scope via the SAME ScopeChecker
- * the proxy compiles from, so verdicts never diverge (§6.5).
+ * Builds the gated send used by both the replay:send IPC (Repeater "resend") and
+ * the Repeater store's send. Every call runs validate (hostile input) → scope-check
+ * (DENY by default) → per-host rate limit → Node http(s) with redirects NOT
+ * auto-followed. This path does NOT traverse the container egress proxy (that fronts
+ * the OpenCode container, not the host), so scope and rate are enforced here instead
+ * — scope via the SAME ScopeChecker the proxy compiles from, so verdicts never
+ * diverge (§6.5). Keeping ONE replayer means every host-side send is gated identically.
  */
-export function createReplay(
-  win: BrowserWindow,
+export function createReplayer(
   scopeChecker: ScopeChecker,
   rate: RateConfig = DEFAULT_RATE
-): Replay {
+): Replayer {
   const limiter = makeLimiter(rate)
-
-  const run = async (raw: unknown): Promise<ReplayResult> => {
+  return async (raw: unknown): Promise<ReplayResult> => {
     const valid = validate(raw)
     if (!valid.ok) return { ok: false, reason: 'invalid', error: valid.error }
     const { value } = valid
@@ -180,15 +182,24 @@ export function createReplay(
     }
     return send(value)
   }
+}
+
+/** Host-side request replay for Repeater (ARCHITECTURE.MD §11.1). Wires replay:send to a Replayer. */
+export function createReplay(
+  win: BrowserWindow,
+  scopeChecker: ScopeChecker,
+  rate: RateConfig = DEFAULT_RATE
+): Replay & { replayer: Replayer } {
+  const replayer = createReplayer(scopeChecker, rate)
 
   ipcMain.removeHandler('replay:send')
   ipcMain.handle('replay:send', (event, raw: ReplayRequestInput) =>
     event.sender === win.webContents
-      ? run(raw)
+      ? replayer(raw)
       : Promise.resolve<ReplayResult>({ ok: false, reason: 'invalid', error: 'unauthorized sender' })
   )
 
   const close = (): void => ipcMain.removeHandler('replay:send')
   win.on('closed', close)
-  return { close }
+  return { close, replayer }
 }

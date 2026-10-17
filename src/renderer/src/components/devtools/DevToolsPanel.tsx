@@ -5,6 +5,7 @@ import { useApplication } from '../../hooks/useApplication'
 import { useConsole } from '../../hooks/useConsole'
 import { buildRows, useDomTree } from '../../hooks/useDomTree'
 import { useNetworkRequests } from '../../hooks/useNetworkRequests'
+import { useRepeater } from '../../hooks/useRepeater'
 import { useResources } from '../../hooks/useResources'
 import ApplicationPanel from './ApplicationPanel'
 import Breadcrumbs from './Breadcrumbs'
@@ -12,6 +13,7 @@ import ConsolePanel from './ConsolePanel'
 import DevToolsToolbar, { type DevToolsTab } from './DevToolsToolbar'
 import ElementsTree from './ElementsTree'
 import NetworkPanel from './NetworkPanel'
+import RepeaterPanel from './RepeaterPanel'
 import SourcesPanel from './SourcesPanel'
 import StylesPane from './StylesPane'
 
@@ -35,6 +37,7 @@ function DevToolsPanel({
   const [devtoolsTab, setDevtoolsTab] = useState<DevToolsTab>('elements')
   const rows = useMemo(() => buildRows(state), [state])
   const networkRequests = useNetworkRequests(activeTabId)
+  const repeater = useRepeater()
   const consoleApi = useConsole()
   const { resources, loaded: resourcesLoaded } = useResources(activeTabId)
   const application = useApplication(activeTabId)
@@ -80,7 +83,11 @@ function DevToolsPanel({
         onToggleInspect={toggleInspect}
         activeTab={devtoolsTab}
         onTabChange={setDevtoolsTab}
-        counts={{ network: networkRequests.length, console: consoleApi.entries.length }}
+        counts={{
+          network: networkRequests.length,
+          repeater: repeater.saved.length,
+          console: consoleApi.entries.length
+        }}
         extra={
           devtoolsTab === 'console' ? (
             <button type="button" className="dt-text-button" onClick={consoleApi.clear}>
@@ -111,6 +118,7 @@ function DevToolsPanel({
         </div>
       )}
       {devtoolsTab === 'network' && <NetworkPanel requests={networkRequests} />}
+      {devtoolsTab === 'repeater' && <RepeaterPanel api={repeater} />}
       {devtoolsTab === 'console' && (
         <ConsolePanel entries={consoleApi.entries} onEvaluate={consoleApi.evaluate} />
       )}
