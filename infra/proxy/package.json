@@ -1,0 +1,13 @@
+{
+  "name": "reconix-egress-proxy",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Scope-enforcing egress proxy for the OpenCode container (Reconix 5.D).",
+  "scripts": {
+    "start": "tsx server.ts"
+  },
+  "dependencies": {
+    "tsx": "4.19.2"
+  }
+}

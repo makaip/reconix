@@ -1,6 +1,10 @@
 import type { CopilotMessage } from '../../mock/data'
 import ContextChip from './ContextChip'
 
+// All target-derived content (message.text, context labels, mapping field/column,
+// footnote) is rendered through React `{value}` interpolation, i.e. as text nodes.
+// No dangerouslySetInnerHTML / innerHTML anywhere here — reflected payloads and tool
+// output can never be parsed as markup. Keep it this way (ARCHITECTURE §5.A).
 function Message({ message }: { message: CopilotMessage }): JSX.Element {
   if (message.role === 'user') {
     return (

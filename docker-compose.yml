@@ -1,0 +1,64 @@
+# Reconix platform stack (5.D). Two services:
+#   opencode     — the agent server. No free egress; its only route out is the
+#                  proxy. Its port is published to 127.0.0.1 ONLY.
+#   egress-proxy — the scope-enforcing wall every outbound byte goes through.
+#
+# Image tags are PINNED (never `latest`); the exact chosen tags/digests live in
+# VERSIONS.lock. Secrets come from the environment / an .env file (see
+# .env.example) — nothing sensitive is baked in.
+services:
+  opencode:
+    # PINNED tag — placeholder; the exact chosen tag is recorded in VERSIONS.lock.
+    # Override via OPENCODE_IMAGE_TAG in .env; the default is the recorded pin.
+    image: sst/opencode:${OPENCODE_IMAGE_TAG:-0.5.9}
+    restart: unless-stopped
+    depends_on:
+      - egress-proxy
+    environment:
+      # Server auth — supplied from the environment, never hard-coded.
+      OPENCODE_SERVER_PASSWORD: ${OPENCODE_SERVER_PASSWORD:?set OPENCODE_SERVER_PASSWORD in your environment or .env}
+      # No free egress: every outbound request must traverse the proxy.
+      HTTP_PROXY: http://egress-proxy:8888
+      HTTPS_PROXY: http://egress-proxy:8888
+      http_proxy: http://egress-proxy:8888
+      https_proxy: http://egress-proxy:8888
+      # Never proxy in-container loopback.
+      NO_PROXY: localhost,127.0.0.1
+      no_proxy: localhost,127.0.0.1
+    ports:
+      # Published to the loopback interface of the HOST ONLY — never 0.0.0.0.
+      - "127.0.0.1:${OPENCODE_HOST_PORT:-4096}:4096"
+    volumes:
+      # Optional persisted session state.
+      - opencode-sessions:/root/.local/share/opencode
+    networks:
+      - reconix
+
+  egress-proxy:
+    build:
+      # Context is the REPO ROOT so the image can copy the single-source scope
+      # compiler from src/ (keeps proxy and per-tool checker from drifting).
+      context: .
+      dockerfile: infra/proxy/Dockerfile
+    restart: unless-stopped
+    environment:
+      SCOPE_CONFIG_PATH: /etc/reconix/scope.json
+      PROXY_LISTEN_HOST: 0.0.0.0 # bound inside the compose network only; NOT published
+      PROXY_LISTEN_PORT: "8888"
+      # Rate limiter — "safe to pound" is a human gate, OFF by default.
+      SAFE_TO_POUND: ${SAFE_TO_POUND:-false}
+      RATE_RPS_PER_TARGET: ${RATE_RPS_PER_TARGET:-1}
+    volumes:
+      # Mount the engagement's ScopeConfig (matches src/shared/scope.ts shape).
+      - ${SCOPE_CONFIG_FILE:-./infra/scope.example.json}:/etc/reconix/scope.json:ro
+    # Deliberately NO `ports:` — the proxy is reachable only on the internal
+    # reconix network, never from the host.
+    networks:
+      - reconix
+
+networks:
+  reconix:
+    driver: bridge
+
+volumes:
+  opencode-sessions:

@@ -1,0 +1,31 @@
+# Reconix pinned versions (5.D). One pinned thing per line.
+# NOTHING here may be `latest`. Values marked VERIFY are placeholders chosen
+# without registry access on the dev host (darwin); confirm each against the
+# real registry/npm and replace the digest before any non-dev deployment.
+
+# --- OpenCode server container image -------------------------------------
+# Image used by the `opencode` service in docker-compose.yml (default for
+# OPENCODE_IMAGE_TAG). Pinned by tag; pin by digest too once verified.
+opencode.image            = sst/opencode:0.5.9            # VERIFY tag + namespace against registry
+opencode.image.digest     = sha256:REPLACE_WITH_VERIFIED_OPENCODE_DIGEST  # VERIFY
+
+# --- OpenCode SDK (used by the Electron main process via the SDK client) --
+opencode.sdk              = @opencode-ai/sdk@0.5.9        # VERIFY against npm; keep in lockstep with image
+
+# --- Base image digests ---------------------------------------------------
+# Egress-proxy base (infra/proxy/Dockerfile). Pin tag AND digest.
+base.node                 = node:22.11.0-alpine3.20       # VERIFY
+base.node.digest          = sha256:REPLACE_WITH_VERIFIED_NODE_DIGEST       # VERIFY
+
+# --- Proxy runtime dependency ---------------------------------------------
+proxy.tsx                 = tsx@4.19.2
+
+# --- Dev/test toolchain (pins matching package.json) ----------------------
+dev.vitest                = vitest@2.1.9
+
+# --- Self-hosted model weights (6.6) — placeholders -----------------------
+# The inference endpoint is an explicit allowed destination in the egress
+# proxy (ScopeConfig.infra); its weights are pinned here once chosen.
+model.name                = PLACEHOLDER_MODEL_NAME        # e.g. served orchestrator/evaluator weights
+model.revision            = PLACEHOLDER_WEIGHTS_REVISION  # git/hf revision or checkpoint hash
+model.sha256              = PLACEHOLDER_WEIGHTS_SHA256     # integrity hash of the weights artifact

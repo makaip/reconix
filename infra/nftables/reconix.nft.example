@@ -1,0 +1,30 @@
+#!/usr/sbin/nft -f
+# EXAMPLE output of infra/nftables/generate.ts for infra/scope.example.json
+# with resolver 127.0.0.11 (Docker embedded DNS). Regenerate; do not hand-edit.
+# engagement: example-engagement
+flush ruleset
+
+table inet reconix_scope {
+  chain output {
+    type filter hook output priority 0; policy drop;
+
+    # Allow loopback and already-established flows.
+    oif "lo" accept
+    ct state established,related accept
+
+    # DNS only to the one internal resolver; drop+count all other :53
+    # (this is where DNS-exfil attempts die).
+    ip daddr 127.0.0.11 udp dport 53 accept
+    ip daddr 127.0.0.11 tcp dport 53 accept
+    udp dport 53 counter drop
+    tcp dport 53 counter drop
+
+    # Compiled in-scope destinations (accept rules from CompiledScope.nftRules).
+    ip daddr 10.13.37.0/24 tcp dport { 80, 443, 3000 } counter accept
+
+    # Everything else — non-target addresses, raw sockets, other protocols —
+    # falls through to the policy drop above. This is the catch-all drop
+    # (CompiledScope.nftRules ends in {action:"drop"}).
+    counter drop
+  }
+}

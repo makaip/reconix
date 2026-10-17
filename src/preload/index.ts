@@ -33,6 +33,10 @@ function subscribe<T>(channel: string, callback: (payload: T) => void): () => vo
   return () => ipcRenderer.removeListener(channel, listener)
 }
 
+// Fixed, named surface only. No method takes a code string that executes in the
+// UI/renderer: devtools.evaluate forwards an expression to the TARGET page over CDP
+// in main, it is not an eval channel into this window. index.d.ts mirrors this via
+// `typeof api`, so the two stay in sync automatically.
 const api = {
   ping: (): Promise<string> => ipcRenderer.invoke('ping'),
   platform: process.platform,
