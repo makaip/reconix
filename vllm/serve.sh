@@ -1,11 +1,7 @@
-#!/usr/bin/env bash
 # vLLM servers as named profiles. One env file per servable model:
 #   serving/profiles/<name>.env: MODEL, PORT, SERVED_NAME, GPU_FRACTION, MAX_LEN, EXTRA_ARGS
 #   optional per profile:        BIND_HOST (default 127.0.0.1), TOOL_PARSER (e.g. hermes)
-# The GPU memory budget is the contract: running profiles' fractions must sum to <= 1.0.
 # `stop` kills only the PID this script started (recorded in $DATA_ROOT/logs/serving/<name>.pid),
-# never `pkill vllm` -- other people's servers are not ours to kill.
-#
 # Usage:
 #   ./serve.sh serve  <profile>
 #   ./serve.sh stop   <profile|all>
@@ -13,10 +9,8 @@
 #   ./serve.sh logs   <profile>        # tail -f the log
 #   ./serve.sh test   <profile>        # list models + one chat completion
 #
-# Env: DATA_ROOT (default ../data), HEALTH_TRIES (x5s, default 180), FORCE=1 (skip budget check)
-#      BIND_HOST   overrides the profile's bind address (use 0.0.0.0 so a container can reach it)
-#      VLLM_API_KEY  if set, vLLM requires "Authorization: Bearer $VLLM_API_KEY" on /v1/*
-#                    (read from the environment by vLLM itself, so it never appears in `ps`)
+#   BIND_HOST   use 0.0.0.0 so a container can reach it
+
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -96,7 +90,7 @@ cmd_serve() {
   BIND_HOST="${bind_override:-${BIND_HOST:-127.0.0.1}}"
   TOOL_PARSER="${TOOL_PARSER:-}"
 
-  # Tool calling: OpenCode needs it. Add the flags unless the profile already set them.
+  # Tool calling
   if [[ -n "$TOOL_PARSER" && "$EXTRA_ARGS" != *"--tool-call-parser"* ]]; then
     EXTRA_ARGS="$EXTRA_ARGS --enable-auto-tool-choice --tool-call-parser $TOOL_PARSER"
   fi
@@ -132,7 +126,6 @@ cmd_serve() {
 
   local i
   for ((i = 0; i < HEALTH_TRIES; i++)); do
-    # /health is unauthenticated in vLLM, so no key is needed here.
     if curl -sf "http://$probe:$PORT/health" >/dev/null; then
       echo "$name healthy (pid $pid, log $logf)"
       echo "  endpoint (host):      http://$probe:$PORT/v1"
