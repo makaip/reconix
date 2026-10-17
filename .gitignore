@@ -20,3 +20,6 @@ build/
 
 # Environment / Credentials
 .env
+
+arch.md
+r.md
