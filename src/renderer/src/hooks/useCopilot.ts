@@ -6,7 +6,12 @@ import { isSubagentTool, type CopilotMessage, type TranscriptPart } from '../com
 /** A DOM node being dragged out of DevTools. */
 export type NodeRef = { nodeId: number; label: string; selector: string }
 
-export type ContextAttachment = NodeRef & NodeContext & { id: number }
+/** A source/sitemap file being dragged into Copilot. */
+export type ResourceRef = { url: string; label: string; frameId?: string }
+
+export type NodeAttachment = { kind: 'node'; id: number } & NodeRef & NodeContext
+export type ResourceAttachment = { kind: 'resource'; id: number } & ResourceRef
+export type ContextAttachment = NodeAttachment | ResourceAttachment
 
 export type Copilot = {
   messages: CopilotMessage[]
@@ -17,7 +22,10 @@ export type Copilot = {
   thinking: boolean
   /** True while a turn is in flight — drives the Suspend button. */
   busy: boolean
-  attach: (node: NodeRef) => Promise<void>
+  /** Attach DOM nodes (fetches outerHTML/styles for each); de-duped by selector. */
+  attachNodes: (nodes: NodeRef[]) => Promise<void>
+  /** Attach source/sitemap files; de-duped by URL. */
+  attachResources: (resources: ResourceRef[]) => void
   detach: (id: number) => void
   send: (text: string) => void
   /** Interrupts the agent's current turn (OpenCode session interrupt) without
@@ -161,14 +169,27 @@ export function useCopilot(): Copilot {
     return unsubscribe
   }, [])
 
-  const attach = useCallback(async (node: NodeRef) => {
-    const context = await window.reconix.devtools.getNodeContext(node.nodeId)
-    if (!context) return
-    setAttachments((current) =>
-      current.some((a) => a.selector === node.selector)
-        ? current
-        : [...current, { ...node, ...context, id: nextId.current++ }]
-    )
+  const attachNodes = useCallback(async (nodes: NodeRef[]) => {
+    for (const node of nodes) {
+      const context = await window.reconix.devtools.getNodeContext(node.nodeId)
+      if (!context) continue
+      setAttachments((current) =>
+        current.some((a) => a.kind === 'node' && a.selector === node.selector)
+          ? current
+          : [...current, { kind: 'node', id: nextId.current++, ...node, ...context }]
+      )
+    }
+  }, [])
+
+  const attachResources = useCallback((resources: ResourceRef[]) => {
+    setAttachments((current) => {
+      const next = [...current]
+      for (const resource of resources) {
+        if (next.some((a) => a.kind === 'resource' && a.url === resource.url)) continue
+        next.push({ kind: 'resource', id: nextId.current++, ...resource })
+      }
+      return next
+    })
   }, [])
 
   const detach = useCallback((id: number) => {
@@ -205,5 +226,5 @@ export function useCopilot(): Copilot {
     window.reconix.copilot.interrupt().finally(() => setBusy(false))
   }, [])
 
-  return { messages, attachments, thinking, busy, attach, detach, send, suspend }
+  return { messages, attachments, thinking, busy, attachNodes, attachResources, detach, send, suspend }
 }

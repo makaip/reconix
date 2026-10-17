@@ -1,12 +1,17 @@
-import { app, shell, BrowserWindow, ipcMain } from 'electron'
+import { app, shell, BrowserWindow, ipcMain, session } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
-import { attachInspector } from './inspector'
-import { startNetworkCapture, type NetworkCapture } from './network'
-import { createSessionManager } from './session'
-import { createTabManager } from './tabs'
+import { createBodyStore } from './bodies'
 import { createCopilotBridge, type CopilotBridge } from './copilot'
+import { loadScopeChecker } from './engagement'
+import { attachInspector } from './inspector'
+import { createInterceptor } from './intercept'
+import { startNetworkCapture, type NetworkCapture } from './network'
+import { createReplay } from './replay'
+import { createRepeater } from './repeater'
+import { createSessionManager } from './session'
 import { runSmoke } from './smoke'
+import { createTabManager } from './tabs'
 
 // keep in sync with --tabbar-height and --color-bg-deep in tokens.css
 const TAB_BAR_HEIGHT = 40
@@ -54,11 +59,38 @@ function createWindow(): void {
         }),
     webPreferences: {
       preload: join(__dirname, '../preload/index.cjs'),
-      sandbox: false,
+      // The UI window runs fully sandboxed: no Node in the renderer. The preload
+      // (src/preload/index.ts) is sandbox-safe — it only pulls contextBridge +
+      // ipcRenderer from require('electron'), both allowed in sandboxed preloads.
+      sandbox: true,
       contextIsolation: true,
       nodeIntegration: false
     }
   })
+
+  // Strict CSP backstop for the UI window (default-src 'self', no 'unsafe-inline').
+  // CSP split dev vs prod: the electron-vite dev server injects inline scripts/styles
+  // and talks over ws: for HMR, which a no-'unsafe-inline' policy would break — so in
+  // dev we rely on the looser <meta> CSP in src/renderer/index.html and add NO header.
+  // In production we attach the strict policy here. It is applied via defaultSession,
+  // which the UI window uses; the target WebContentsViews run on their own session
+  // partition (TARGET_PARTITION in tabs.ts), so this never touches target pages.
+  // data: is kept only for img/font because Vite inlines small SVG icons as data URIs;
+  // it introduces no inline-script/style execution path.
+  if (!is.dev) {
+    session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+      callback({
+        responseHeaders: {
+          ...details.responseHeaders,
+          'Content-Security-Policy': [
+            "default-src 'self'; script-src 'self'; style-src 'self'; " +
+              "img-src 'self' data:; font-src 'self' data:; connect-src 'self'; " +
+              "object-src 'none'; base-uri 'self'; frame-src 'none'"
+          ]
+        }
+      })
+    })
+  }
 
   mainWindow.on('ready-to-show', () => {
     mainWindow.show()
@@ -77,7 +109,9 @@ function createWindow(): void {
   let network: NetworkCapture | undefined
   copilotBridge = createCopilotBridge(mainWindow, () => network)
 
-  const inspector = attachInspector(mainWindow)
+  const bodies = createBodyStore(mainWindow)
+  const interceptor = createInterceptor(mainWindow)
+  const inspector = attachInspector(mainWindow, bodies, interceptor.sink)
   const tabs = createTabManager(mainWindow, {
     onActiveChanged: (target, tabId) => {
       inspector.setTarget(target)
@@ -87,6 +121,11 @@ function createWindow(): void {
     beforeNavigate: () => copilotBridge?.waitUntilReady() ?? Promise.resolve()
   })
   network = startNetworkCapture(mainWindow, tabs)
+  // Host-side replay (Repeater) gates every send on the engagement scope; no
+  // scope loaded -> deny all (default-deny holds). Same scope.json the proxy uses.
+  const { replayer } = createReplay(mainWindow, loadScopeChecker())
+  // Repeater reuses the one gated replayer so its sends are scope-/rate-checked too.
+  createRepeater(mainWindow, replayer)
   createSessionManager(mainWindow)
 
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {

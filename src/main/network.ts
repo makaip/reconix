@@ -3,6 +3,7 @@ import type { CapturedRequest, NetworkStats } from '../shared/tabs'
 import { TARGET_PARTITION, type TabManager } from './tabs'
 
 const MAX_REQUESTS = 2000
+const BROADCAST_LIMIT = 200
 const STATS_THROTTLE_MS = 150
 
 export type NetworkCapture = {
@@ -28,12 +29,32 @@ export function startNetworkCapture(win: BrowserWindow, tabs: TabManager): Netwo
     return { total: requests.size, perTab }
   }
 
-  const scheduleStats = (): void => {
+  // sinceId filters to requests captured after a given id — ids are
+  // monotonically increasing per-session (Electron's own request counter),
+  // so a plain string/numeric comparison is a valid "cursor" without needing
+  // to track insertion order separately.
+  const list = (opts?: { tabId?: number; sinceId?: string; limit?: number }): CapturedRequest[] => {
+    const sinceNum = opts?.sinceId !== undefined ? Number(opts.sinceId) : undefined
+    const filtered = [...requests.values()].filter(
+      (r) =>
+        (opts?.tabId === undefined || r.tabId === opts.tabId) &&
+        (sinceNum === undefined || Number(r.id) > sinceNum)
+    )
+    return filtered.slice(-(opts?.limit ?? BROADCAST_LIMIT))
+  }
+
+  // Matches list()'s default cap: most recent 200 across all tabs, in request-start order.
+  const recentRequests = (): CapturedRequest[] => list()
+
+  // One throttled broadcast for both the aggregate counts (status bar) and the full
+  // request list (Network panel) — callers don't need to know which one changed.
+  const scheduleBroadcast = (): void => {
     if (statsTimer) return
     statsTimer = setTimeout(() => {
       statsTimer = null
       if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
         win.webContents.send('network:stats', stats())
+        win.webContents.send('network:requests', recentRequests())
       }
     }, STATS_THROTTLE_MS)
   }
@@ -58,13 +79,14 @@ export function startNetworkCapture(win: BrowserWindow, tabs: TabManager): Netwo
       const oldest = requests.keys().next().value
       if (oldest !== undefined) requests.delete(oldest)
     }
-    scheduleStats()
+    scheduleBroadcast()
   })
 
   webRequest.onBeforeSendHeaders((details, callback) => {
     callback({ requestHeaders: details.requestHeaders })
     const entry = requests.get(String(details.id))
     if (entry) entry.requestHeaders = details.requestHeaders
+    // headers alone aren't shown in the request list, so no broadcast needed here
   })
 
   webRequest.onCompleted((details) => {
@@ -74,26 +96,14 @@ export function startNetworkCapture(win: BrowserWindow, tabs: TabManager): Netwo
     entry.fromCache = details.fromCache
     entry.responseHeaders = details.responseHeaders
     entry.durationMs = Math.max(0, Math.round(details.timestamp - entry.startedAt))
+    scheduleBroadcast()
   })
 
   webRequest.onErrorOccurred((details) => {
     const entry = requests.get(String(details.id))
     if (entry) entry.error = details.error
+    scheduleBroadcast()
   })
-
-  // sinceId filters to requests captured after a given id — ids are
-  // monotonically increasing per-session (Electron's own request counter),
-  // so a plain string/numeric comparison is a valid "cursor" without needing
-  // to track insertion order separately.
-  const list = (opts?: { tabId?: number; sinceId?: string; limit?: number }): CapturedRequest[] => {
-    const sinceNum = opts?.sinceId !== undefined ? Number(opts.sinceId) : undefined
-    const filtered = [...requests.values()].filter(
-      (r) =>
-        (opts?.tabId === undefined || r.tabId === opts.tabId) &&
-        (sinceNum === undefined || Number(r.id) > sinceNum)
-    )
-    return filtered.slice(-(opts?.limit ?? 200))
-  }
 
   const handle = (channel: string, fn: (...args: unknown[]) => unknown): void => {
     ipcMain.removeHandler(channel)
@@ -115,7 +125,7 @@ export function startNetworkCapture(win: BrowserWindow, tabs: TabManager): Netwo
   return {
     forgetTab: (tabId) => {
       for (const [id, request] of requests) if (request.tabId === tabId) requests.delete(id)
-      scheduleStats()
+      scheduleBroadcast()
     },
     list,
     get: (id) => requests.get(id)

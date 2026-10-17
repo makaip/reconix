@@ -1,8 +1,8 @@
-import type { KeyboardEvent } from 'react'
+import { useEffect, useRef, type KeyboardEvent } from 'react'
 import type { TreeNode, TreeRow, TreeState } from '../../hooks/useDomTree'
-import type { NodeRef } from '../../hooks/useCopilot'
+import { NODE_TYPE } from '../../hooks/useDomTree'
 import { chipLabel, cssSelector } from '../../lib/domLabel'
-import { NODE_DRAG_TYPE } from '../../lib/dragTypes'
+import { NODE_DRAG_TYPE, type NodeDragItem } from '../../lib/dragTypes'
 
 const VOID_ELEMENTS = new Set([
   'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'source', 'track', 'wbr'
@@ -82,23 +82,49 @@ function RowContent({ row, node, nodes }: { row: TreeRow; node: TreeNode; nodes:
 type ElementsTreeProps = {
   state: TreeState
   rows: TreeRow[]
+  /** Every node in the current multi-selection (highlighted). */
+  selectedIds: Set<number>
+  /** Click with modifier info, so cmd/ctrl toggles and shift ranges. */
+  onSelectRow: (id: number, mods: { metaKey: boolean; ctrlKey: boolean; shiftKey: boolean }) => void
+  /** Sets the active node (keyboard nav); collapses the multi-selection to it. */
   onSelect: (id: number) => void
   onToggle: (id: number) => void
   onHover: (id: number | null) => void
-  onNodeDragStart: (node: NodeRef) => void
-  onNodeDragEnd: () => void
+  onDragStart: () => void
+  onDragEnd: () => void
 }
 
 function ElementsTree({
   state,
   rows,
+  selectedIds,
+  onSelectRow,
   onSelect,
   onToggle,
   onHover,
-  onNodeDragStart,
-  onNodeDragEnd
+  onDragStart,
+  onDragEnd
 }: ElementsTreeProps): JSX.Element {
   const selectable = rows.filter((row) => row.kind !== 'close')
+  const treeRef = useRef<HTMLDivElement>(null)
+
+  // Builds the drag payload: the whole selection when the dragged row is part of it, else just it.
+  const dragItems = (id: number): NodeDragItem[] => {
+    const ids = selectedIds.has(id) && selectedIds.size > 1 ? [...selectedIds] : [id]
+    return ids
+      .map((nodeId) => state.nodes.get(nodeId))
+      .filter((node): node is TreeNode => node?.type === NODE_TYPE.element)
+      .map((node) => ({
+        nodeId: node.id,
+        label: chipLabel(node),
+        selector: cssSelector(state.nodes, node.id)
+      }))
+  }
+
+  // keeps the selection on screen, e.g. after picking a deeply nested element in the page
+  useEffect(() => {
+    treeRef.current?.querySelector('.dt-row--selected')?.scrollIntoView({ block: 'nearest' })
+  }, [state.selectedId])
 
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
     const index = selectable.findIndex((row) => row.id === state.selectedId)
@@ -118,6 +144,7 @@ function ElementsTree({
 
   return (
     <div
+      ref={treeRef}
       className="dt-tree"
       role="tree"
       tabIndex={0}
@@ -128,7 +155,8 @@ function ElementsTree({
         {rows.map((row) => {
           const node = state.nodes.get(row.id)
           if (!node) return null
-          const selected = row.id === state.selectedId && row.kind !== 'close'
+          const selected = selectedIds.has(row.id) && row.kind !== 'close'
+          const active = row.id === state.selectedId && row.kind !== 'close'
           const expandable = row.kind === 'open' || row.kind === 'collapsed'
           const isElement = node.type === 1
           return (
@@ -139,21 +167,28 @@ function ElementsTree({
               className={selected ? 'dt-row dt-row--selected' : 'dt-row'}
               style={{ paddingLeft: 10 + row.depth * 16 }}
               draggable={isElement}
-              onClick={() => onSelect(row.id)}
+              onClick={(event) =>
+                onSelectRow(row.id, {
+                  metaKey: event.metaKey,
+                  ctrlKey: event.ctrlKey,
+                  shiftKey: event.shiftKey
+                })
+              }
               onMouseEnter={() => onHover(isElement ? row.id : null)}
               onDragStart={(event) => {
                 if (!isElement) return
+                const items = dragItems(row.id)
+                if (items.length === 0) {
+                  event.preventDefault()
+                  return
+                }
                 event.dataTransfer.effectAllowed = 'copy'
-                event.dataTransfer.setData(NODE_DRAG_TYPE, String(row.id))
-                event.dataTransfer.setData('text/plain', chipLabel(node))
+                event.dataTransfer.setData(NODE_DRAG_TYPE, JSON.stringify(items))
+                event.dataTransfer.setData('text/plain', items.map((item) => item.label).join('\n'))
                 onHover(null)
-                onNodeDragStart({
-                  nodeId: row.id,
-                  label: chipLabel(node),
-                  selector: cssSelector(state.nodes, row.id)
-                })
+                onDragStart()
               }}
-              onDragEnd={onNodeDragEnd}
+              onDragEnd={onDragEnd}
             >
               <span
                 className="dt-row__arrow"
@@ -170,7 +205,7 @@ function ElementsTree({
                 {row.kind === 'open' ? '▼' : row.kind === 'collapsed' ? '▶' : ''}
               </span>
               <RowContent row={row} node={node} nodes={state.nodes} />
-              {selected && isElement && <span className="dt-muted">{' == $0'}</span>}
+              {active && isElement && <span className="dt-muted">{' == $0'}</span>}
             </div>
           )
         })}

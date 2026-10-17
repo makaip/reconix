@@ -1,0 +1,459 @@
+# ARCHITECTURE.md
+
+## Reconix — AI-Driven Penetration-Testing Browser
+
+**Stack:** Electron (TS) · Chromium/CDP · OpenCode 2.0 (agent runtime, self-hosted via Docker) · MCP tool layer · self-hosted inference
+**Status:** Design locked for MVP. Built by 4 engineers who implement exclusively through coding agents.
+
+> This is a v2 rewrite. It supersedes the original two-browser design. If you read the old doc, the headline changes are: (1) **single Electron-owned browser**, not a separate Playwright instance; (2) **MCP is the enforcement chokepoint**; (3) **scope is enforced at the container network boundary**, not just per-tool; (4) **we self-host the model** and own that infra; (5) the agent drives Chromium through **per-domain CDP wrappers**, never raw `cdp.send`.
+
+---
+
+## 0. How to use this document (read this first)
+
+Everyone on this team writes code by directing coding agents. That changes how we have to work, and this doc is built for it:
+
+1. **Contracts are frozen before implementation.** The seams between the four workstreams (Section 6) are fixed first and do not change without all four people agreeing. An agent implementing one component must be able to code against a *stable* description of everything it talks to. Moving a contract mid-build silently invalidates three other people's agent context.
+2. **Each workstream is a self-contained vertical.** One person + their agent owns one vertical (Section 4). The component spec for that vertical (Section 5) is written to be pasted into an agent as context with minimal external reading.
+3. **Mock at the seams, integrate late.** Build your vertical against *mocked* versions of the contracts (a fake MCP tool, a stub IPC bridge, a canned model endpoint). Don't wait on another person's real implementation. Integration is a scheduled event, not an assumption.
+4. **The spine spike comes before everything (Section 7).** Because OpenCode 2.0's API is beta and moving, we prove the end-to-end round trip *once, together*, before anyone builds a vertical on top of assumptions.
+5. **Pin every version.** OpenCode, the SDK, the model weights, the base images. Beta surfaces move between releases. Record exact versions in `VERSIONS.lock` and treat upgrades as deliberate, reviewed events.
+
+When you hand a section to an agent, hand it: this doc's Section 6 (contracts), the Section 5 subsection for your vertical, and Section 3 (overview) for context. That is enough to start.
+
+---
+
+## 1. Objectives & non-goals
+
+**Objectives**
+- Observable autonomy — every agent action is visible in a real browser viewport the human can watch.
+- Human-in-the-loop safety — mutating/destructive actions pause for explicit approval.
+- Hard scope containment — the system is *physically incapable* of acting outside the authorized engagement scope, not merely instructed to stay in it.
+- Traceable output — every action and approval is recorded as a semantic audit artifact that backs the report and the engagement's legal defensibility.
+- Self-reliant inference — we run our own model; no third-party provider sees target data or our prompts.
+
+**Non-goals (MVP)**
+- Distributed/multi-target scanning, multi-user collaboration, compliance-template reporting (OWASP ASVS/PCI mappings), dynamic agent-authored tooling. All deferred.
+
+---
+
+## 2. Threat & trust model (the frame everything else serves)
+
+- **The target is hostile by assumption.** We deliberately load attacker-authored content all day. The target's DOM/JS is untrusted input — not because the target is defending against us, but because we don't author it.
+- **The agent is capable but not trusted as a boundary.** It can be wrong, confused by injected content, or jailbroken. Security must not depend on the agent behaving. Enforcement lives in layers the agent cannot reach.
+- **OpenCode's process is privileged-but-untrusted.** Its tools/plugins can run arbitrary code; it runs isolated in its own container. Its permission system is a *policy/UX* layer, never our containment boundary.
+- **Containment is layered, and the layers fail differently.** Per-tool checks are precise and semantic; the network boundary is a blunt catch-all; process/partition isolation bounds blast radius. We rely on their intersection, never a single wall.
+
+The recurring test for any component that touches the target: **"if the agent sends the worst possible input here, what's the damage?"** If the answer depends on the agent being well-behaved, it's not done.
+
+---
+
+## 3. System overview
+
+```
+┌──────────────────────────── Electron App (host, privileged) ─────────────────────────────┐
+│                                                                                            │
+│  Renderer (sandboxed Chromium UI)          Preload (contextBridge)        Main (Node)      │
+│  ┌───────────────────────────────┐         ┌────────────────────┐    ┌──────────────────┐ │
+│  │ Chat/agent transcript         │◀───IPC──▶│ window.reconix.*   │◀──▶│ IPC hub          │ │
+│  │ Live viewport (target mirror) │  (named, │ (narrow, fixed,    │    │ OpenCode adapter │ │
+│  │ Approval surface (inline)     │  typed)  │  no-code-channel)  │    │ SSE→IPC fan-out  │ │
+│  │ Report preview                │         └────────────────────┘    │ Engagement store │ │
+│  └───────────────────────────────┘                                   │ (SQLite, host)   │ │
+│                                                                       │ MCP tool server  │ │
+│  Target browser (separate WebContentsView, sandboxed, own partition)  │ CDP driver       │ │
+│  ┌───────────────────────────────┐                                   └───────┬──────────┘ │
+│  │ target page under test        │◀────────────── CDP ──────────────────────▶│            │
+│  │ (no Node, isolated partition) │                                           │            │
+│  └───────────────────────────────┘                                           │            │
+└──────────────────────────────────────────────────────────────────────────────┼───────────┘
+                                                                                 │ HTTP + SSE
+                                              ┌──────────────────────────────────▼──────────┐
+                                              │ Docker: OpenCode server (0.0.0.0 in-container)│
+                                              │  planner + Recon/Exploit/Verify subagents     │
+                                              │  model router → self-hosted inference         │
+                                              │  built-in shell/file tools DISABLED           │
+                                              │  reaches browser ONLY via MCP tool server     │
+                                              └───────────────┬───────────────────────────────┘
+                                                              │ all egress
+                                              ┌───────────────▼───────────────────────────────┐
+                                              │ Egress proxy (scope allowlist + logging)        │
+                                              │  + nftables floor (drop non-target dests)       │
+                                              └───────────────┬───────────────────────────────┘
+                                                      ┌───────┴────────┐
+                                              in-scope target(s)   self-hosted inference endpoint
+```
+
+Data flow of one agent action: human goal → Main → OpenCode session → subagent selects an **MCP tool** → OpenCode permission hook fires for mutating/destructive tiers → Main relays approval request → human decides in transcript → Main responds via SDK → tool handler (in Main) scope-checks, drives the target view over CDP, writes the audit record as a side effect → result streams back → Main fans out to renderer and persists.
+
+---
+
+## 4. The four workstreams (ownership)
+
+Four people, four verticals. **Dev 1 owns two components** — the Electron client (5.A) *and* the custom capability tools (5.E: fuzzers, regex breakers, payload generators) — because both are "author UI/logic, don't touch the enforcement plumbing." The MCP server + CDP wrappers + scope enforcement stay a *separate* vertical (Dev 3). Component letters are used in Section 5; a dev may own more than one.
+
+| Dev | Components | Owns | Talks to (contracts) |
+|---|---|---|---|
+| **Dev 1 — Client & Custom Tools** | 5.A + 5.E | Renderer UI (transcript, viewport, inline approvals, report preview), preload bridge, UI-window wiring; custom capability tools (fuzzers, regex breakers, payload/mutation generators, response analyzers) exposed as MCP tools | IPC (6.1); registers tools into Dev 3's MCP server (6.2) |
+| **Dev 2 — Orchestration & Data** | 5.B | Main process: OpenCode lifecycle + SDK adapter, SSE→IPC fan-out, approval relay, SQLite engagement store, audit + findings | IPC (6.1), MCP (6.2), OpenCode events (6.3), DB schema (6.4), model endpoint (6.6) |
+| **Dev 3 — Tools & Browser control** | 5.C | MCP tool *server* (the enforcement chokepoint), per-domain CDP wrappers, in-handler scope checks, audit write-through, target-view lifecycle & CDP driving | MCP (6.2), DB write-through (6.4), scope config (6.5) |
+| **Dev 4 — Platform / Security / Model** | 5.D | Docker compose, egress proxy + nftables, OpenCode config & built-in lockdown, self-hosted inference serving, `VERSIONS.lock` | scope config (6.5), model endpoint (6.6), OpenCode config |
+
+The seams between these four are Section 6. If you find yourself needing to know *how* another vertical works internally, stop — you should only need its contract.
+
+**Critical seam — custom tools (5.E) do not egress.** Dev 1's fuzzers/regex-breakers are *generators and analyzers*: they produce candidate payloads and inspect responses, they never open a socket or send to a target themselves. All target traffic — including sending a fuzz payload — goes through Dev 3's scope-checked, tiered, audited network tools (`navigate`, `replay_request`, `set_intercept_rule`), which hit Dev 4's egress proxy + rate limiter. A custom tool that could send on its own would route around scope, audit, tiering, and rate-limiting in one move. 5.E tools register into Dev 3's server and inherit its `schema-validate → scope-check → audit → tier` contract; they are pure-compute (tier R/P) unless they call back through a Dev 3 send primitive.
+
+### Definite tasks
+
+**Dev 1 — Client & Custom Tools**
+
+*Frontend (5.A):*
+1. UI-window `webPreferences`: flip `sandbox: false` → `sandbox: true` in `src/main/index.ts`; keep `contextIsolation: true`, `nodeIntegration: false`. Add a strict CSP (`default-src 'self'`, no `unsafe-inline`).
+2. Preload: expose `window.reconix` with *exactly* the 6.1 methods; no method accepts a code string. Ship `src/preload/index.d.ts`.
+3. Transcript: render the `agent:event` stream (user / reasoning / tool-call / inline-approval) as **text nodes only** — no `innerHTML`/`dangerouslySetInnerHTML` on any target-derived content. Inline approve / deny / edit controls.
+4. Wire against the mock `agent:event` emitter + fake approval resolver already on the `ui` branch; swap to the real 6.3 shape once Phase 0 freezes it.
+5. Bind the already-scaffolded sidebar/report panels (`ui` branch) to real findings/sitemap data from 6.1.
+
+*Custom tools (5.E):*
+6. Build each custom tool as a **pure-compute** MCP tool registered into Dev 3's server: typed input schema, typed output schema, tier R or P, **no network**.
+7. Fuzzing payload generator — emits payload sets (encodings, boundary values, injection corpora) as data for the agent to feed into Dev 3's `replay_request`.
+8. Regex breaker — given a regex, emit ReDoS / catastrophic-backtracking candidate strings as data.
+9. Response analyzers — body differ, status/length/timing diff, entropy/encoding detectors, operating on bodies Dev 3's tools returned.
+10. Any tool that must iterate requests calls Dev 3's send primitive; it never opens a socket itself.
+
+**Dev 2 — Orchestration & Data (5.B)**
+1. OpenCode adapter: `createOpencodeClient({ baseUrl, password })` against Dev 4's container; one session per engagement; readiness wait + auto-restart w/ backoff; surface connection status over IPC.
+2. SSE subscriber: per event → (a) forward to renderer as `agent:event` (6.1) *and* (b) persist to store (6.4), one pass.
+3. Approval relay: on a permission event, forward to UI, block, return the human's decision through the SDK to unblock OpenCode.
+4. SQLite store on the host: `tool_calls` + `approvals` append-only (agent can never write), `findings` separate; pin columns/indexes — closes open-decision 3.
+5. Write-through logger API that Dev 3's handlers call; back `query_log` with a narrow structured query (never a DB handle).
+6. Freeze 6.1 + 6.4; publish a mock event emitter + mock logger for Dev 1 and Dev 3 to build against.
+
+**Dev 3 — Tools & Browser control (5.C)**
+1. MCP tool server: the *only* path the agent can act through. No generic passthrough, no eval-shaped tool, no raw shell/db/socket. Expose a registration API so Dev 1's 5.E tools slot in under the same enforcement.
+2. Handler pipeline on every tool: schema-validate (as hostile) → scope-check (6.5) → execute → audit write-through (6.4), before *and* after. No code path acts without recording.
+3. Page-power CDP wrappers as named/tiered tools: DOM, Runtime, Input, CSS, Emulation, Page-minus-navigate, Network *read*, Fetch *inspect*; `eval_in_page` tier P.
+4. Scope-critical gated tools: `navigate` (tier M, scope-checked), `set_intercept_rule` / `replay_request` (gated). `replay_request` is the send primitive Dev 1's fuzzers call.
+5. Reject raw `cdp.send`; never expose `Target.*` / `Browser.*`.
+6. Target `WebContentsView` CDP driving: attach the debugger to target views *only* — assert ≠ UI `webContents` at every `Runtime.evaluate` call site.
+7. Risk tier R/P/M/D on every tool; expose the tier map to Dev 2 for OpenCode's permission config.
+
+**Dev 4 — Platform / Security / Model (5.D)**
+1. `docker-compose.yml`: OpenCode container, pinned image, port → `127.0.0.1:<hostPort>`, `OPENCODE_SERVER_PASSWORD`, optional session volume.
+2. OpenCode config: disable built-in tools (shell, file-edit); assert the agent's visible tool list == our MCP tools only.
+3. Egress proxy holding the scope allowlist: in-scope → forward + log, else drop + log. The model endpoint is an explicit allowed internal destination.
+4. nftables/iptables floor: drop any packet to a non-target address; kill raw sockets / DNS exfil.
+5. Rate-limiting at the proxy (human-gated "safe to pound" config).
+6. Define scope-config format (6.5); compile it to proxy rules + nftables; hand Dev 3 the per-tool scope-check API.
+7. Self-hosted model: pick a tool-calling-capable model, serve it behind the 6.6 endpoint, prove tool-calling completions in the Phase-0 spike, freeze 6.6. Maintain `VERSIONS.lock`.
+
+---
+
+## 5. Component specs
+
+### 5.A Frontend / Electron shell (Owner A)
+
+**Renderer** is a pure view. No Node, no filesystem, no authoritative state — it renders what Main broadcasts and sends user intent back.
+
+- `webPreferences` for the **UI window**: `contextIsolation: true`, `nodeIntegration: false`, `sandbox: true`. The UI never gets Node.
+- All Main↔Renderer traffic goes through the **preload contextBridge** exposing `window.reconix.*` — a narrow, fixed, named API (6.1). **No method accepts a code string or acts as an eval channel.** There is no path by which agent-chosen code executes in the UI window.
+- **Render all target-derived content as text, never markup.** Response bodies, titles, reflected payloads, headers, tool outputs — text nodes only. No `innerHTML`/`dangerouslySetInnerHTML` on anything that originated outside our own code. This is the single most likely real bug in the whole system; it is a standing rule for every PR in this vertical.
+- Apply a strict CSP to the UI (`default-src 'self'`, no `unsafe-inline`) as a backstop.
+
+**The chat transcript is an agent transcript, not a chatbot.** It interleaves user messages, agent reasoning, tool calls, and **inline approval requests**. Approvals are not a separate modal system — they arrive as events in the same stream (6.1 `agent:event`) and render in place with approve / deny / edit controls.
+
+**Viewport:** the target renders in its own `WebContentsView`. For MVP, show it directly (it's a real view in our app). Decision still open (Section 8) on whether the human interacts with it directly vs. a controlled overlay; build the pane to display first, wire interaction behind a flag.
+
+**Target `WebContentsView` hardening** (A owns the wiring; C owns the CDP driving of it): `nodeIntegration: false`, `contextIsolation: true`, `sandbox: true`, `webSecurity: true` (never disabled), its own `session` partition (`persist:target-<engagementId>`) never shared with the UI, `setPermissionRequestHandler`/`setPermissionCheckHandler` deny-all by default, `will-navigate` + `setWindowOpenHandler` gated by the scope check. No privileged preload on the target view.
+
+### 5.B Orchestration & Data (Owner B)
+
+**OpenCode adapter.** Main spawns OpenCode (via D's Docker setup), connects over HTTP with `@opencode-ai/sdk` (`createOpencodeClient({ baseUrl, ... }`), `createOpencodeServer` as fallback launcher). One OpenCode **session per engagement**; session history is held server-side so prompts don't resend the transcript.
+
+- Server binds `0.0.0.0` **inside** the container; the port is published to `127.0.0.1` on the host (D owns the mapping). Connect to `http://127.0.0.1:<hostPort>`.
+- `OPENCODE_SERVER_PASSWORD` is set at spawn and passed to the client.
+- **Supervision:** readiness wait before first use, auto-restart with backoff, connection-status surfaced to the UI.
+
+**Event fan-out.** OpenCode streams events (assistant output, reasoning, tool calls, permission requests) over SSE. Main subscribes, and for every event does two things: (1) forward to the renderer as `agent:event` (6.1), and (2) persist to the engagement store (6.4). *Capture-as-you-stream* — the audit record is a side effect of events passing through, not a separate step.
+
+**Approval relay.** When a permission request arrives, Main forwards it to the UI, blocks, and on the human's response sends the decision back through the SDK to unblock OpenCode. Main is transport + policy relay; the UI makes the decision.
+
+**Engagement store (SQLite, on the host — Main side, so container death never loses it).** B owns the schema (6.4) and the write path. Two record classes that must stay distinct:
+- **Audit log** (`tool_calls`, `approvals`) — append-only, written by the tool layer as a mechanical consequence of execution. The legal/evidence artifact. The agent can never write here.
+- **Findings** (`findings`) — the agent's evidence-backed conclusions, human-reviewed. Separate store, separate table.
+
+The agent's *only* read access to its history is via the `query_log` MCP tool (C builds it, B backs it) — a narrow structured query, never a DB handle.
+
+### 5.C Tools & Browser control (Owner C)
+
+**C owns the MCP tool server** — the agent's entire means of affecting anything. See the full catalog in the Appendix; the governing rules:
+
+1. **The tool surface is the allowlist.** A capability that isn't a named tool with a typed schema cannot be expressed by the agent. There is no generic passthrough, no `eval`-shaped tool, no raw DB/socket/shell.
+2. **Handlers validate as hostile, then scope-check, before acting.** Schema validation (structural) catches malformed; *policy* validation (semantic — is this URL/target in scope) catches the well-formed bad thing. The handler never trusts that the agent "already checked."
+3. **Risk tier per tool** drives gating: **R** read-only (auto), **P** page-mutating/sandbox-only (auto), **M** mutating (approval), **D** destructive (explicit approval + rate-limit). Tier is also what OpenCode's permission config keys off.
+4. **Audit write is inseparable from execute.** Before: intent (tool, resolved params, target, tier). After: outcome (result ref, error, ts). No code path acts without recording.
+
+**CDP strategy — per-domain wrappers, never raw `cdp.send`.** The agent gets *wide* power over the target page and *gated* power over navigation/network, because those two are the scope and isolation boundaries.
+
+- **Page-power domains → wide passthrough tools** (DOM, Runtime, Input, CSS, Emulation, Page-minus-navigate, Network *read*, Fetch *inspect*). These are near-raw in expressiveness — e.g. `eval_in_page(expression)` passes arbitrary expressions — but each is a *named, logged, tiered* tool so the semantic audit line and tier survive. Safe to be generous here: the target view is process-isolated and has no Node, and any network it generates hits D's egress proxy.
+- **Scope-critical methods → stay named & gated.** `navigate` is its own scope-checked tool. Network/Fetch *rewriting* (`set_intercept_rule`, `replay_request`) is its own gated tool. Not because the agent is untrusted with the page, but because these methods *are* the scope boundary.
+- **Never exposed:** `Target.*`/`Browser.*` target creation/attachment — that's a path out of the one isolated view. Raw `cdp.send` is rejected outright: it has no handler, so scope, logging, and tiering all evaporate at once.
+
+**C owns driving the target `WebContentsView` over CDP** (attach the debugger to target views *only*, never the UI's `webContents` — assert this at every `Runtime.evaluate` call site).
+
+### 5.D Platform / Security / Model (Owner D)
+
+**Docker & OpenCode hardening.**
+- OpenCode runs in its own container. Compose file, image pinning, volume for OpenCode session data (optional — our audit store is source of truth; mount only if restart-survival of OpenCode's own sessions is wanted).
+- **Disable OpenCode built-in tools — shell and file-edit especially.** This is load-bearing: MCP enforcement only holds if MCP is the *only* path out. Audit everything OpenCode exposes by default; the agent's visible tool list must be exactly our MCP tools and nothing else. A reachable built-in shell routes around scope, audit, tiering, and approval in one move.
+
+**Network enforcement — the piece that lets everything upstream relax.**
+- The OpenCode container has **no free egress.** Its only route out is the **egress proxy**, which holds the scope allowlist: in-scope destination → forwarded + logged; anything else → dropped + logged.
+- An **nftables/iptables floor** drops any packet to a non-target address even if the proxy is bypassed — the dumb wall behind the smart one. Non-HTTP traffic (raw sockets, DNS exfil) dies here.
+- **Rate-limiting lives at the proxy.** Scope control bounds *where* traffic goes, not *how hard* it hits an in-scope host — a fuzzer flattening an in-scope prod box is still in-scope and still bad. Rate limits + "is this target safe to pound" stays a human-gated judgment.
+- The self-hosted inference endpoint is an **allowed internal destination** in the proxy config — the container must reach the model, and that path is explicit, not open internet.
+
+**Self-hosted model (Section 9).** D owns serving, selection, and the endpoint contract (6.6).
+
+### 5.E Custom capability tools (Owner: Dev 1)
+
+Custom offensive/analysis tools — **fuzzers, regex breakers, payload & mutation generators, response analyzers** — authored by Dev 1 and registered into Dev 3's MCP server (5.C). They are the agent's *reasoning amplifiers*, not its reach.
+
+- **They generate and analyze; they never egress.** A tool here produces payloads as data or inspects a response body Dev 3's tools already fetched. No socket, no DNS, no file, no shell. Sending a payload at a target is always a separate call to Dev 3's `replay_request` / `navigate`, which carry the scope check, audit line, tier, and (via Dev 4) the rate limit. This is what keeps 5.E outside the enforcement burden and the chokepoint intact.
+- **They are pure-compute MCP tools (tier R or P).** Typed input/output schema, deterministic where possible, no hidden state. They slot into 5.C's registration API and inherit its `schema-validate → scope-check → audit → tier` pipeline like any other tool.
+- **Examples:** `gen_fuzz_payloads(corpus, encodings, boundaries) → string[]`; `break_regex(pattern) → redos_candidates[]`; `diff_responses(a, b) → delta`; `detect_encoding(body) → report`. The agent chains these into Dev 3's send tools; the loop (generate → send → analyze) lives in the agent's reasoning, logged at every send.
+
+---
+
+## 6. Frozen contracts (the seams)
+
+> Changing anything in this section requires all four owners to agree, because each change invalidates agent context elsewhere. Version this section; date every change.
+
+### 6.1 IPC contract (A ↔ B)
+
+Renderer → Main (via `window.reconix.*`, `ipcRenderer.invoke`):
+
+| Method | Payload | Purpose |
+|---|---|---|
+| `startEngagement` | `{ goal, scope, policy }` | begin a run |
+| `sendMessage` | `{ text }` | user message into the agent session |
+| `respondApproval` | `{ approvalId, decision, editedParams? }` | human decision on a gated action |
+| `pause` / `resume` | `{}` | global pause/resume |
+| `exportReport` | `{ format }` | render/export |
+| `queryHistory` | `{ filter }` | read engagement store for display |
+
+Main → Renderer (via `webContents.send`, consumed through preload `on`):
+
+| Channel | Payload | Purpose |
+|---|---|---|
+| `agent:event` | normalized event (`kind`, body) — covers message deltas, reasoning, tool calls, **approval requests**, results | the one transcript stream |
+| `viewport:state` | current target view status | viewport chrome |
+| `server:status` | `{ state, detail }` | OpenCode connection banner |
+| `finding:new` | finding object | live report |
+
+Payloads are structured-cloneable only (no functions/class instances across the bridge).
+
+### 6.2 MCP tool contract (OpenCode ↔ C)
+
+Each tool declares `{ name, description, inputSchema (JSON Schema), outputSchema, riskTier }`. The full catalog is the Appendix. B and A treat tools as opaque by name + tier; C owns their internals. Adding a tool requires: narrowest-version check, worst-argument check, tier assignment (Section 2 test).
+
+### 6.3 OpenCode event contract (OpenCode → B)
+
+B normalizes OpenCode's SSE events into the `agent:event` shape above. **Exact event names and the permission request/response API are verified against the pinned SDK version during the spine spike (Section 7) and recorded here then.** (Beta surface — do not hardcode from memory.)
+
+### 6.4 Engagement store schema (B owns; C writes audit through B's logger)
+
+- `engagements(id, goal, scope_json, policy_json, started_at, stopped_at, status)`
+- `messages(id, engagement_id, role, content, ts)` — transcript (cheap passenger)
+- `tool_calls(id, engagement_id, tool, params_json, target, risk_tier, result_ref, error, ts)` — **audit, append-only**
+- `approvals(id, tool_call_id, decision, edited_params_json, actor, ts)` — **audit, append-only**
+- `findings(id, engagement_id, schema_json, evidence_ref, status, ts)` — agent conclusions, human-reviewed
+- `traces(id, engagement_id, kind, path)` — refs to HAR/screenshots stored as files on disk
+
+`tool_calls` + `approvals` are the reason this store exists. Exact column refinement is an open item (Section 8) but the shape is frozen.
+
+### 6.5 Scope config (D defines; C enforces per-tool; D enforces at network)
+
+A single scope definition is the source of truth, consumed in two places: C's handlers (semantic per-action check) and D's proxy/nftables (network floor). Shape: `{ allowed_hosts[], allowed_cidrs[], denied[], rate_limits{} }`. One representation, two enforcement layers — they must read the same object.
+
+### 6.6 Model endpoint contract (D serves; B/OpenCode consume)
+
+D serves an **OpenAI-compatible** inference endpoint (`/v1/chat/completions` with **tool/function-calling** support). OpenCode's model router points at it. Contract: base URL, model name(s), max context, auth token, and a declared guarantee of reliable tool-call formatting. See Section 9.
+
+---
+
+## 7. Build sequencing
+
+**Phase 0 — the spine spike (all four, together, before verticals).**
+Prove, in a bare script with `console.log` instead of a UI: Docker-spawn OpenCode → HTTP-connect via SDK → create session → send a prompt → register **one** trivial MCP tool → watch the tool call come back → watch **one permission event fire** → respond to it → confirm the model endpoint (self-hosted) actually serves the completion with a tool call. This de-risks the beta API and the serving stack at once. **Record the resolved 6.3 and 6.6 details here.** Nothing else starts until this round trip is green.
+
+**Phase 1 — parallel verticals against mocks.**
+- Dev 1 builds the UI + bridge against a mock `agent:event` emitter and a fake approval, *and* writes the 5.E custom tools as pure-compute units against Dev 3's mock registration API + mock `replay_request`.
+- Dev 2 builds the adapter + store against the spike's real OpenCode + a mock tool.
+- Dev 3 builds the MCP server + CDP wrappers against a real `WebContentsView` + a mock scope config, exposing the registration API Dev 1's 5.E tools plug into.
+- Dev 4 builds Docker + proxy + nftables + the served model, and the OpenCode lockdown config.
+
+**Phase 2 — integrate at the seams**, in this order: B↔D (adapter to real container + real model) → C↔B (real tools logging to real store) → A↔B (real transcript + approvals) → C target view ↔ A viewport.
+
+**Phase 3 — the loop**, against **deliberately-vulnerable localhost targets only** (OWASP Juice Shop, DVWA). Recon → probe → finding → report, end to end. No real target until scope enforcement (6.5 both layers) is proven.
+
+---
+
+## 8. Open decisions (tracked, non-blocking for MVP)
+
+1. **Recon extraction schema** — exact fields per extracted entity (forms/inputs/endpoints/links), and how identity (url + selector + dom-state ref) is encoded so Verify can reproduce. Everything recon-shaped keys off this. *Owner: C + B.*
+2. **`navigate` / `get_dom_extract` return shapes** — the concrete data contract tool outputs return into. *Owner: C.*
+3. **Engagement-store column refinement** — precise columns/indexes for `tool_calls` and `approvals`. *Owner: B.*
+4. **Viewport interaction model** — human watches a mirror vs. interacts with the target view directly (and if direct, how input is mediated). *Owner: A.*
+5. **Egress proxy specifics** — proxy choice, how scope rules compile to proxy + nftables config, where rate-limiting sits. *Owner: D.*
+6. **Code-gen / `run_tool` / sandbox tiers** — brokered external tools (nmap/nuclei/sqlmap): allowlist, argv-not-shell, resource caps, microVM tier. Deferred; reactivates the untrusted-code question when turned on. *Owner: C + D.*
+
+---
+
+## 9. Self-hosted model (new responsibility — Owner D)
+
+We run our own inference. This removes any third-party provider from the target-data path and makes the model a component we own, operate, and secure.
+
+**Why it's a real workstream, not a config line:**
+
+- **Tool-calling is a hard selection constraint.** OpenCode is agentic — the model must emit reliable, well-formed tool calls. Many open-weight models are weak at this. Model choice is gated on *demonstrated* tool-call reliability against our MCP schemas, verified in the Phase-0 spike. A model that reasons well but tool-calls poorly is disqualified.
+- **Two model roles** (from the recon design): a *cheap/fast* model for per-page DOM extraction, a *stronger* model for planner/exploit reasoning over the accumulated structured extracts (where the larger context window is spent). Serve either as two models or one model at two settings; OpenCode's model router selects per step. The extractor's context can be small; the planner's should be roomy.
+- **Serving stack.** An OpenAI-compatible server (e.g. vLLM / TGI / SGLang class) exposing `/v1/chat/completions` with function-calling. D owns GPU provisioning, the serving process, weight management, and throughput/latency targets. Pin weights + server version in `VERSIONS.lock`.
+
+**Security responsibilities (the model is in the trust path):**
+
+- **Lock the endpoint down.** It is reachable only from the OpenCode container, via an auth token, over an internal address that is an *explicit allowed destination* in the egress proxy — never exposed to the open internet, never on `0.0.0.0` publicly.
+- **The model reads untrusted DOM.** Same robustness property as the rest of the system: the extractor model is fed attacker-authored content and must be kept on a tight extract-to-schema contract that it cannot be talked out of. It emits structured data only; it never takes actions — actions are the agent's MCP calls, which are separately gated. A page that tries to prompt-inject the extractor can corrupt an extraction (a reliability bug) but cannot cause an out-of-scope or unlogged action (those are enforced downstream, not by the model).
+- **Prompts and target data stay in-house.** The reason we self-host: nothing about the engagement leaves our infrastructure. Treat the inference logs with the same care as the audit store — they contain target data.
+
+**Ops:**
+
+- Capacity: the per-page extractor runs at high frequency across a crawl — size serving for that load, not for the occasional planner call. The extractor is the throughput driver.
+- Failure mode: if inference is down, the agent is dead. Surface model-endpoint health alongside OpenCode `server:status`; the supervision story (7, B's adapter) must cover "model unreachable," not just "OpenCode unreachable."
+
+---
+
+## 10. Security model summary (consolidated)
+
+Layered, intersecting, failing differently:
+
+| Layer | Enforces | Owner |
+|---|---|---|
+| Tool surface = allowlist | agent can only express named capabilities | C |
+| Handler validation + scope check | well-formed-bad-input rejected before action | C |
+| Risk tier + OpenCode permission hook | mutating/destructive pause for human | C + B |
+| OpenCode built-ins disabled | MCP is the *only* path out | D |
+| Egress proxy (scope + log) | traffic can only reach in-scope targets; network audit | D |
+| nftables floor | non-target destinations dropped even if proxy bypassed | D |
+| Container isolation | OpenCode's arbitrary-code risk bounded to the box | D |
+| Target-view sandbox + partition | hostile page can't reach UI or escape its view | A + C |
+| Render-as-text rule | target content can't execute in our UI | A |
+| Audit-as-side-effect | complete, unforgeable record of actions + approvals | B + C |
+| Self-hosted, locked inference | target data never leaves our infra; model can't be a pivot | D |
+
+No single layer is trusted to be airtight. The agent is contained by their intersection: it can only act through tools, the tools won't do unsafe things, anything routing around the tools still can't leave the box, and everything that happens is recorded.
+
+---
+
+## Appendix — MCP tool catalog
+
+Tiers: **R** read-only (auto) · **P** page-mutating, sandbox-only (auto) · **M** mutating (approval) · **D** destructive (explicit approval + rate-limit). All tools scope-checked at handler + backstopped by egress proxy; all log as a side effect.
+
+**Session & scope (R):** `get_scope` · `get_engagement_state`
+
+**Navigation & page read (R):** `navigate` *(scope-checked; returns status + final post-redirect url + compact extract)* · `get_page_info` · `get_dom_extract` *(schema'd: forms/inputs/endpoints/links in+out of scope/headers/CSRF presence, each with identity)* · `list_forms` · `list_links` · `get_headers` · `get_cookies` · `screenshot`
+
+**Page interaction & CDP page-power (P):** `click` · `fill` · `dispatch_input` *(raw CDP Input)* · `query_dom` · `set_dom` · `eval_in_page` *(arbitrary Runtime.evaluate in target page; output rendered as text in UI)* · `set_emulation` *(CSS/Emulation)*
+
+**Network inspection & interception (R/M):** `get_network_log` (R) · `get_request` (R) · `set_intercept_rule` (M, CDP Fetch rewrite) · `replay_request` (M, scope-checked)
+
+**Active probes / exploit (M/D):** `submit_form` (M) · `probe_reflection` (M, benign markers — detection not weaponization) · `vary_parameter` (M, rate-limited — IDOR/BAC + fuzzing differential) · `run_tool` (D, brokered external binaries — **post-MVP**, see 8.6)
+
+**Verify & evidence (R):** `reproduce` *(replay stored interaction)* · `collect_evidence` *(screenshot + req/resp + trace ref)*
+
+**Findings & history:** `record_finding` *(agent conclusions; requires evidence/trace ref; human-reviewed; writes findings table NOT audit log)* · `query_log` (R) *(agent's only history access; narrow structured query, never a DB handle)*
+
+**MVP subset:** session/scope + navigation/read + page-interaction + `screenshot` + `query_log` + `record_finding` + `probe_reflection`. Network interception, `vary_parameter`, `run_tool` come after the spine is green.
+
+**Never exposed:** raw `cdp.send`, `Target.*`/`Browser.*` creation/attach, any shell/file/eval-into-UI capability.
+
+## 11. Path to product — feature gap analysis
+
+The MVP proves the architecture (agent → MCP → scope-checked tool → audited action). It does not yet have the feature surface a pentester would choose over Burp/ZAP/Caido. This section inventories what's missing, maps each item to the tiering/ownership model already frozen in Sections 5–6, and orders it so nothing here requires re-opening a frozen contract.
+
+**How to read this table:** *Tier* uses the existing R/P/M/D scale. *Vertical* uses the existing A/B/C/D ownership split. *Seam?* flags whether the item is pure addition (new tool/table, no contract change) or touches a frozen contract (6.1–6.6) and therefore needs sign-off from all four owners before work starts.
+
+### 11.1 Traffic & request-manipulation core
+
+The category Burp/ZAP/Caido win on today. Most of this is new MCP tools under C's existing pipeline — no new enforcement model needed, just more named, tiered tools.
+
+| Feature | Tier | Vertical | Seam? |
+|---|---|---|---|
+| Repeater — save/tag/diff arbitrary requests, response comparison view | R/M | C (tools) + A (UI panel) | No — new tool + new UI panel |
+| Intruder/fuzzer at scale (payload positions, wordlists, grep-match/extract) | M, rate-limited | C + D (rate limit) + E (payload gen, already scoped in 5.E) | No |
+| Match/replace rules (auto-rewrite headers/tokens on the fly) | M | C | No |
+| Full sitemap built passively from navigation history | R | C (populate) + A (render) | No — reads existing `tool_calls`/trace data |
+| HAR import/export | R | B (store) + A (export UI) | No |
+| Request history: filter by host/status/param/size, regex search | R | B (query) + A (UI) | Extends `query_log` — check it stays narrow (6.4 note) |
+
+### 11.2 Session & auth-flow tooling
+
+This is where an AI-driven, multi-session browser can actually beat the incumbents (Section 1 objective: "observable autonomy," Section 5.A target-view partitioning already supports this).
+
+| Feature | Tier | Vertical | Seam? |
+|---|---|---|---|
+| Multiple concurrent isolated sessions (user A / user B / admin) for IDOR/authz diffing | P/M | A (partition mgmt, extends 5.A's `persist:target-<engagementId>` pattern) + C (session-switch tool) | **Yes** — extends the partition-per-engagement model to partition-per-session-within-engagement; needs 6.1 (`session:switch` IPC) and 6.4 (tag `tool_calls` with session id) |
+| Record/replay login flows, token refresh | M | C | No |
+| JWT decode/edit/resign | P (decode), M (resign+replay) | E (decode/edit as pure-compute) + C (replay) | No — fits the existing 5.E "generate, never egress" pattern exactly |
+| OAuth/SAML flow visualization | R | C (capture) + A (render) | No |
+| Cookie/storage flag analyzer (Secure/HttpOnly/SameSite, CSP/CORS header checks) | R | E (pure analysis on data C already fetched) | No |
+
+### 11.3 Integration layer (external tool brokering)
+
+This reactivates **Open Decision 8.6** (`run_tool`, deferred post-MVP). It's the single biggest remaining piece of unowned risk, so treat it as its own mini-spike, not a feature to bolt on.
+
+| Tool class | Examples | Containment requirement |
+|---|---|---|
+| Recon | subfinder, amass, httpx, katana, nmap, naabu | argv-only invocation (never shell string), same egress-proxy + nftables floor as the OpenCode container — a broker that bypasses the floor defeats Section 10 entirely |
+| Active scanners | Nuclei, Nikto | **D** tier — rate-limited, explicit approval, resource-capped |
+| Exploitation aids | sqlmap, dalfox, jwt_tool, SSRFmap | **D** tier, microVM or equivalent sandboxing per Open Decision 8.6, output parsed into `findings` schema not raw dumped to agent context |
+| OOB/callback | Interactsh-class server | Needs an explicit allowed internal destination in the egress proxy (same treatment as the model endpoint in 6.6) + a `get_oob_hits` **R** tool |
+
+**Design requirement carried over from Section 2's test:** every broker call answers "what's the worst input here" the same way existing tools do — argv allowlist (never raw shell), resource/time caps, output size caps before it reaches agent context, and the same before/after audit write-through as every other tool. This is a C+D joint vertical; do not let it ship as a shortcut that skips the handler pipeline.
+
+### 11.4 Reporting & evidence (closes Objective: "traceable output")
+
+| Feature | Tier | Vertical | Seam? |
+|---|---|---|---|
+| Finding templates / severity scoring (CVSS or custom) | — | B (schema) + A (UI) | Extends `findings.schema_json` — no new seam, already designed for this |
+| Export: Markdown / PDF / JSON / SARIF | — | A (render) + B (data) | No |
+| Evidence bundle (screenshot + req/resp + trace, already captured by `collect_evidence`) packaged per finding | — | B | No |
+| DefectDojo / Dradis / PwnDoc export integration | — | B (new exporter) | No — one-way data push, doesn't touch the agent trust boundary at all |
+| Compliance-template mappings (ASVS/PCI) | — | Deferred per Section 1 non-goals | Revisit post-MVP |
+
+### 11.5 Extensibility
+
+| Feature | Notes |
+|---|---|
+| Plugin/extension API for community-authored tools | Must register through C's existing pipeline (5.C rule 1: "tool surface is the allowlist"). A third-party tool is just another 5.E-shaped or 5.C-shaped registrant — **never a new trust boundary.** Any plugin API that lets a third party add a tool *outside* schema-validate → scope-check → audit → tier reopens the exact hole Section 10 closes. |
+| Scriptable match/replace / custom extractors | Same rule — sandboxed, pure-compute, registered, tiered. |
+
+### 11.6 Product/ops surface (not security-critical, but blocking for "real product")
+
+| Feature | Vertical | Notes |
+|---|---|---|
+| Multi-engagement management (switch between concurrent engagements, archive/resume) | B | `engagements` table already supports this; needs UI (A) and session lifecycle (does OpenCode hold one session per engagement concurrently, or serialize? — resolve during 11.2's session work) |
+| Licensing / update channel | D | Orthogonal to the security model; standard app-distribution concern |
+| Multi-user / collaboration on one engagement | Deferred per Section 1 non-goals | Would need per-action attribution beyond `approvals.actor` (already a column) — smaller lift than it looks, but still post-MVP |
+| Performance: context management for long engagements (Section 9 ops note on extractor throughput) | D + B | The "summarize/search instead of dumping raw history" problem — `query_log`'s narrow interface (6.4) is the existing mitigation; watch whether it's narrow enough under real load |
+
+### 11.7 Suggested ordering
+
+1. **11.1 (traffic core)** — pure tool additions, no seam changes, highest user-visible value, do first.
+2. **11.2 session/auth tooling** — one real seam (multi-session partitioning); scope it as its own mini-spike like Phase 0, since it touches 6.1/6.4.
+3. **11.4 (reporting)** — no seams, can run in parallel with 1–2.
+4. **11.3 (external tool brokering)** — highest containment risk; do only after 1–2 are stable and the team has more MCP-pipeline mileage. Treat Open Decision 8.6 as a gate, not a checkbox.
+5. **11.5 (plugin API)** — last; you want the internal tool pipeline battle-tested before anyone outside the four owners can register into it.
+6. **11.6 (ops surface)** — interleave as needed; none of it blocks security posture.
+
+Nothing in this section proposes a new trust boundary. Every addition either slots into C's existing `schema-validate → scope-check → audit → tier` pipeline or is pure UI/data-plumbing on top of stores B already owns. If a future feature *can't* be described that way, that's the signal to stop and re-open Section 6 deliberately — not to special-case it in.

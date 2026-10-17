@@ -1,0 +1,58 @@
+import { describe, expect, it } from 'vitest'
+import type { CapturedRequest } from '../../../shared/tabs'
+import { fromHar, toHar } from './har'
+
+const req = (over: Partial<CapturedRequest>): CapturedRequest => ({
+  id: '1',
+  tabId: 1,
+  method: 'GET',
+  url: 'https://app.test/a?x=1',
+  resourceType: 'xhr',
+  startedAt: 1_700_000_000_000,
+  ...over
+})
+
+describe('toHar', () => {
+  it('produces a valid HAR 1.2 log with request/response fields', () => {
+    const har = toHar([
+      req({
+        method: 'POST',
+        statusCode: 201,
+        durationMs: 42,
+        requestHeaders: { 'X-Test': '1' },
+        responseHeaders: { 'Content-Type': ['application/json'] }
+      })
+    ])
+    expect(har.log.version).toBe('1.2')
+    const entry = har.log.entries[0]
+    expect(entry.request.method).toBe('POST')
+    expect(entry.request.queryString).toEqual([{ name: 'x', value: '1' }])
+    expect(entry.request.headers).toEqual([{ name: 'X-Test', value: '1' }])
+    expect(entry.response.status).toBe(201)
+    expect(entry.response.content.mimeType).toBe('application/json')
+    expect(entry.time).toBe(42)
+    expect(entry.startedDateTime).toBe(new Date(1_700_000_000_000).toISOString())
+  })
+})
+
+describe('fromHar', () => {
+  it('round-trips entries produced by toHar', () => {
+    const har = toHar([req({ method: 'PUT', statusCode: 200, durationMs: 5, requestHeaders: { A: 'b' } })])
+    const parsed = fromHar(har)
+    expect(parsed).toHaveLength(1)
+    expect(parsed[0]).toMatchObject({
+      method: 'PUT',
+      url: 'https://app.test/a?x=1',
+      status: 200,
+      requestHeaders: { A: 'b' },
+      durationMs: 5
+    })
+  })
+
+  it('returns [] for non-HAR input and skips malformed entries', () => {
+    expect(fromHar(null)).toEqual([])
+    expect(fromHar({})).toEqual([])
+    expect(fromHar({ log: { entries: 'nope' } })).toEqual([])
+    expect(fromHar({ log: { entries: [{ request: { method: 'GET' } }, 42] } })).toEqual([])
+  })
+})

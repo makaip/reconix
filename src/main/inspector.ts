@@ -1,5 +1,18 @@
 import { BrowserWindow, WebContents, ipcMain } from 'electron'
-import type { CdpNode, DevToolsEvent, NodeContext, StyleRule } from '../shared/devtools'
+import type {
+  CdpNode,
+  ConsoleEntry,
+  ConsoleLevel,
+  CookieInfo,
+  DevToolsEvent,
+  NodeContext,
+  ResourceContent,
+  ResourceInfo,
+  ResourceRef,
+  StorageArea,
+  StorageEntry,
+  StyleRule
+} from '../shared/devtools'
 
 const FORWARDED_EVENTS = new Set([
   'DOM.documentUpdated',
@@ -40,10 +53,120 @@ type CssRule = {
 }
 type SheetInfo = { url: string; inline: boolean }
 
+// --- Console / Runtime --------------------------------------------------------
+
+type RemoteObject = {
+  type: string
+  subtype?: string
+  className?: string
+  value?: unknown
+  description?: string
+  unserializableValue?: string
+}
+type ExceptionDetails = { text: string; lineNumber: number; exception?: RemoteObject }
+type ConsoleApiCalledParams = { type: string; args: RemoteObject[]; timestamp: number }
+type ExceptionThrownParams = { timestamp: number; exceptionDetails: ExceptionDetails }
+type LogEntry = { source: string; level: string; text: string; timestamp: number; url?: string }
+type LogEntryAddedParams = { entry: LogEntry }
+type ExecutionContext = { id: number; auxData?: { isDefault?: boolean } }
+type ExecutionContextCreatedParams = { context: ExecutionContext }
+type ExecutionContextDestroyedParams = { executionContextId: number }
+
+const CONSOLE_LEVELS: Record<string, ConsoleLevel> = {
+  error: 'error',
+  warning: 'warning',
+  info: 'info',
+  debug: 'debug'
+}
+const LOG_LEVELS: Record<string, ConsoleLevel> = {
+  error: 'error',
+  warning: 'warning',
+  info: 'info',
+  verbose: 'debug'
+}
+
+/** Best-effort text form of a CDP RemoteObject — not a full inspector, just enough to read in a log line. */
+function formatRemoteObject(obj: RemoteObject | undefined): string {
+  if (!obj) return 'undefined'
+  if (obj.unserializableValue !== undefined) return obj.unserializableValue
+  switch (obj.type) {
+    case 'undefined':
+      return 'undefined'
+    case 'string':
+      return typeof obj.value === 'string' ? obj.value : String(obj.value)
+    case 'number':
+    case 'boolean':
+    case 'bigint':
+      return String(obj.value)
+    case 'symbol':
+    case 'function':
+      return obj.description ?? obj.type
+    case 'object':
+      if (obj.subtype === 'null') return 'null'
+      return obj.description ?? obj.className ?? 'Object'
+    default:
+      return obj.description ?? String(obj.value ?? obj.type)
+  }
+}
+
+// --- Sources -------------------------------------------------------------------
+
+type PageResource = { url: string; type: string; mimeType: string }
+type PageFrame = { id: string; url: string }
+type PageFrameResourceTree = {
+  frame: PageFrame
+  resources: PageResource[]
+  childFrames?: PageFrameResourceTree[]
+}
+
+function flattenResourceTree(tree: PageFrameResourceTree): ResourceInfo[] {
+  const out: ResourceInfo[] = [
+    { frameId: tree.frame.id, url: tree.frame.url, type: 'Document', mimeType: 'text/html' }
+  ]
+  for (const resource of tree.resources) {
+    out.push({ frameId: tree.frame.id, url: resource.url, type: resource.type, mimeType: resource.mimeType })
+  }
+  for (const child of tree.childFrames ?? []) out.push(...flattenResourceTree(child))
+  return out
+}
+
+// --- Application (cookies + storage) -------------------------------------------
+
+type CdpCookie = {
+  name: string
+  value: string
+  domain: string
+  path: string
+  expires: number
+  httpOnly: boolean
+  secure: boolean
+  sameSite?: 'Strict' | 'Lax' | 'None'
+}
+
+const storageExpression = (area: StorageArea): string =>
+  area === 'local' ? 'window.localStorage' : 'window.sessionStorage'
+
 const MAX_OUTER_HTML = 50_000
+const MAX_RESOURCE_CONTENT = 300_000
 
 const isNodeId = (value: unknown): value is number =>
   typeof value === 'number' && Number.isInteger(value) && value > 0
+const isNonEmptyString = (value: unknown): value is string =>
+  typeof value === 'string' && value.length > 0
+const isResourceRef = (value: unknown): value is ResourceRef => {
+  if (typeof value !== 'object' || value === null) return false
+  const v = value as Record<string, unknown>
+  return isNonEmptyString(v.frameId) && typeof v.url === 'string'
+}
+const isStorageArea = (value: unknown): value is StorageArea => value === 'local' || value === 'session'
+const isStorageItemRef = (value: unknown): value is { area: StorageArea; key: string } => {
+  if (typeof value !== 'object' || value === null) return false
+  const v = value as Record<string, unknown>
+  return isStorageArea(v.area) && typeof v.key === 'string'
+}
+const isStorageSetPayload = (value: unknown): value is { area: StorageArea; key: string; value: string } =>
+  isStorageItemRef(value) && typeof (value as Record<string, unknown>).value === 'string'
+const isCookieName = (value: unknown): value is string => typeof value === 'string' && value.length > 0
 
 function toProperties(style: CssStyle): StyleRule['properties'] {
   // note that declared properties carry implicit: false
@@ -77,11 +200,44 @@ export type Inspector = {
   setTarget: (target: WebContents | null) => void
 }
 
-export function attachInspector(win: BrowserWindow): Inspector {
+/**
+ * Optional sink for CDP Network.* events. The inspector owns the single debugger
+ * client per webContents, so response-body capture (bodies.ts) can't attach its
+ * own; instead it rides this hook, receiving the inspector's bound `send`.
+ */
+export type InspectorSend = <T>(method: string, params?: object) => Promise<T>
+
+export type NetworkSink = {
+  handleNetworkEvent: (method: string, params: Record<string, unknown>, send: InspectorSend) => void
+  reset: () => void
+}
+
+/**
+ * Optional sink for CDP Fetch.* events (request interception / match-replace). Rides
+ * the same single debugger as NetworkSink. `onAttached` fires once the debugger is
+ * live on a new target so the interceptor can (re-)enable Fetch if it holds rules.
+ */
+export type InterceptSink = {
+  handleFetchEvent: (method: string, params: Record<string, unknown>, send: InspectorSend) => void
+  onAttached: (send: InspectorSend) => void
+  reset: () => void
+}
+
+export function attachInspector(
+  win: BrowserWindow,
+  networkSink?: NetworkSink,
+  interceptSink?: InterceptSink
+): Inspector {
   let current: WebContents | null = null
   let ready: Promise<boolean> = Promise.resolve(false)
   let stopListening: (() => void) | null = null
   const sheets = new Map<string, SheetInfo>()
+  // Console entry ids and the REPL's execution context — reset on every target switch,
+  // and the context id also tracks Runtime.executionContext{Created,Destroyed,sCleared}
+  // so it stays valid across in-tab navigations (setTarget isn't called for those).
+  let entryCounter = 0
+  let contextId: number | null = null
+  const newEntryId = (): string => `c${++entryCounter}`
 
   const send = <T>(method: string, params?: object): Promise<T> => {
     if (!current || current.isDestroyed()) return Promise.reject(new Error('No inspected page'))
@@ -99,8 +255,9 @@ export function attachInspector(win: BrowserWindow): Inspector {
       const { nodeIds } = await send<{ nodeIds: number[] }>('DOM.pushNodesByBackendIdsToFrontend', {
         backendNodeIds: [backendNodeId]
       })
-      await send('Overlay.setInspectMode', { mode: 'none' })
       if (isNodeId(nodeIds[0])) emit({ method: 'Reconix.nodeInspected', params: { nodeId: nodeIds[0] } })
+      // CDP rejects setInspectMode without a highlightConfig, even when turning it off
+      await send('Overlay.setInspectMode', { mode: 'none', highlightConfig: HIGHLIGHT_CONFIG })
     } catch (error) {
       console.error('Could not resolve inspected node:', error)
     }
@@ -118,6 +275,12 @@ export function attachInspector(win: BrowserWindow): Inspector {
     }
     current = target
     sheets.clear()
+    entryCounter = 0
+    contextId = null
+    // requestIds are per-target; drop the previous target's captured bodies.
+    networkSink?.reset()
+    // A fresh debugger session starts with Fetch disabled; the interceptor re-enables on attach.
+    interceptSink?.reset()
 
     if (!target) {
       ready = Promise.resolve(false)
@@ -132,6 +295,54 @@ export function attachInspector(win: BrowserWindow): Inspector {
         sheets.set(header.styleSheetId, { url: header.sourceURL, inline: header.isInline })
       } else if (method === 'Overlay.inspectNodeRequested') {
         void resolveInspected(params.backendNodeId as number)
+      } else if (method === 'Runtime.consoleAPICalled') {
+        const p = params as unknown as ConsoleApiCalledParams
+        if (p.type === 'clear') {
+          emit({ method: 'Reconix.consoleCleared', params: {} })
+          return
+        }
+        const entry: ConsoleEntry = {
+          id: newEntryId(),
+          level: CONSOLE_LEVELS[p.type] ?? 'log',
+          text: p.args.map(formatRemoteObject).join(' '),
+          source: 'console',
+          timestamp: p.timestamp
+        }
+        emit({ method: 'Reconix.consoleEntry', params: { entry } })
+      } else if (method === 'Runtime.exceptionThrown') {
+        const { exceptionDetails, timestamp } = params as unknown as ExceptionThrownParams
+        const entry: ConsoleEntry = {
+          id: newEntryId(),
+          level: 'error',
+          text: exceptionDetails.exception
+            ? formatRemoteObject(exceptionDetails.exception)
+            : exceptionDetails.text,
+          source: 'exception',
+          timestamp
+        }
+        emit({ method: 'Reconix.consoleEntry', params: { entry } })
+      } else if (method === 'Log.entryAdded') {
+        const { entry: logEntry } = params as unknown as LogEntryAddedParams
+        const entry: ConsoleEntry = {
+          id: newEntryId(),
+          level: LOG_LEVELS[logEntry.level] ?? 'log',
+          text: logEntry.url ? `${logEntry.text} (${logEntry.url})` : logEntry.text,
+          source: 'log',
+          timestamp: logEntry.timestamp
+        }
+        emit({ method: 'Reconix.consoleEntry', params: { entry } })
+      } else if (method === 'Runtime.executionContextCreated') {
+        const { context } = params as unknown as ExecutionContextCreatedParams
+        if (contextId === null || context.auxData?.isDefault) contextId = context.id
+      } else if (method === 'Runtime.executionContextDestroyed') {
+        const { executionContextId } = params as unknown as ExecutionContextDestroyedParams
+        if (contextId === executionContextId) contextId = null
+      } else if (method === 'Runtime.executionContextsCleared') {
+        contextId = null
+      } else if (method.startsWith('Network.')) {
+        networkSink?.handleNetworkEvent(method, params, send)
+      } else if (method.startsWith('Fetch.')) {
+        interceptSink?.handleFetchEvent(method, params, send)
       } else if (FORWARDED_EVENTS.has(method)) {
         emit({ method, params } as DevToolsEvent)
       }
@@ -144,6 +355,12 @@ export function attachInspector(win: BrowserWindow): Inspector {
       await dbg.sendCommand('DOM.enable')
       await dbg.sendCommand('CSS.enable')
       await dbg.sendCommand('Overlay.enable')
+      await dbg.sendCommand('Runtime.enable')
+      await dbg.sendCommand('Log.enable')
+      await dbg.sendCommand('Page.enable')
+      await dbg.sendCommand('Network.enable')
+      // Debugger is live on this target; let the interceptor re-enable Fetch if it has rules.
+      interceptSink?.onAttached(send)
       return true
     })().catch((error) => {
       console.error('Inspector failed to attach:', error)
@@ -247,6 +464,146 @@ export function attachInspector(win: BrowserWindow): Inspector {
     return true
   })
 
+  // --- Console -------------------------------------------------------------
+
+  handle('devtools:console-evaluate', async (expression): Promise<ConsoleEntry | null> => {
+    if (typeof expression !== 'string' || !expression.trim()) return null
+    const timestamp = Date.now()
+    if (contextId === null) {
+      return {
+        id: newEntryId(),
+        level: 'error',
+        text: 'No execution context available for this page yet.',
+        source: 'eval-result',
+        timestamp
+      }
+    }
+    try {
+      const { result, exceptionDetails } = await send<{
+        result: RemoteObject
+        exceptionDetails?: ExceptionDetails
+      }>('Runtime.evaluate', {
+        expression,
+        contextId,
+        returnByValue: false,
+        generatePreview: true,
+        awaitPromise: true,
+        userGesture: true
+      })
+      if (exceptionDetails) {
+        return {
+          id: newEntryId(),
+          level: 'error',
+          text: exceptionDetails.exception
+            ? formatRemoteObject(exceptionDetails.exception)
+            : exceptionDetails.text,
+          source: 'eval-result',
+          timestamp
+        }
+      }
+      return { id: newEntryId(), level: 'log', text: formatRemoteObject(result), source: 'eval-result', timestamp }
+    } catch (error) {
+      return {
+        id: newEntryId(),
+        level: 'error',
+        text: error instanceof Error ? error.message : String(error),
+        source: 'eval-result',
+        timestamp
+      }
+    }
+  })
+
+  // --- Sources ---------------------------------------------------------------
+
+  handle('devtools:get-resources', async (): Promise<ResourceInfo[]> => {
+    const { frameTree } = await send<{ frameTree: PageFrameResourceTree }>('Page.getResourceTree')
+    return flattenResourceTree(frameTree)
+  })
+
+  handle('devtools:get-resource-content', async (ref): Promise<ResourceContent | null> => {
+    if (!isResourceRef(ref)) return null
+    const { content, base64Encoded } = await send<{ content: string; base64Encoded: boolean }>(
+      'Page.getResourceContent',
+      { frameId: ref.frameId, url: ref.url }
+    )
+    if (base64Encoded) return { content: '', truncated: false, binary: true }
+    return {
+      content: content.slice(0, MAX_RESOURCE_CONTENT),
+      truncated: content.length > MAX_RESOURCE_CONTENT,
+      binary: false
+    }
+  })
+
+  // --- Application: cookies + storage -----------------------------------------
+
+  handle('devtools:get-cookies', async (): Promise<CookieInfo[]> => {
+    // Every tab shares TARGET_PARTITION's session, so an unscoped query would leak
+    // other tabs' cookies into this page's panel — always scope to the current URL.
+    const url = current?.getURL()
+    if (!url) return []
+    const { cookies } = await send<{ cookies: CdpCookie[] }>('Network.getAllCookies', { urls: [url] })
+    return cookies.map((cookie) => ({
+      name: cookie.name,
+      value: cookie.value,
+      domain: cookie.domain,
+      path: cookie.path,
+      expires: cookie.expires,
+      httpOnly: cookie.httpOnly,
+      secure: cookie.secure,
+      sameSite: cookie.sameSite
+    }))
+  })
+
+  handle('devtools:delete-cookie', async (name) => {
+    if (!isCookieName(name)) return null
+    // Scoped to the current page's URL for the same reason get-cookies is.
+    const url = current?.getURL()
+    if (!url) return null
+    await send('Network.deleteCookies', { name, url })
+    return true
+  })
+
+  handle('devtools:get-storage', async (area): Promise<StorageEntry[] | null> => {
+    if (!isStorageArea(area)) return null
+    if (contextId === null) return []
+    const { result } = await send<{ result: RemoteObject }>('Runtime.evaluate', {
+      expression: `Object.entries(${storageExpression(area)})`,
+      contextId,
+      returnByValue: true
+    })
+    const entries = Array.isArray(result.value) ? (result.value as [string, string][]) : []
+    return entries.map(([key, value]) => ({ key, value: String(value) }))
+  })
+
+  handle('devtools:set-storage-item', async (payload) => {
+    if (!isStorageSetPayload(payload)) return null
+    if (contextId === null) return null
+    const { area, key, value } = payload
+    // JSON.stringify both sides so the key/value are safely embedded as string literals
+    await send('Runtime.evaluate', {
+      expression: `${storageExpression(area)}.setItem(${JSON.stringify(key)}, ${JSON.stringify(value)})`,
+      contextId
+    })
+    return true
+  })
+
+  handle('devtools:delete-storage-item', async (ref) => {
+    if (!isStorageItemRef(ref)) return null
+    if (contextId === null) return null
+    await send('Runtime.evaluate', {
+      expression: `${storageExpression(ref.area)}.removeItem(${JSON.stringify(ref.key)})`,
+      contextId
+    })
+    return true
+  })
+
+  handle('devtools:clear-storage', async (area) => {
+    if (!isStorageArea(area)) return null
+    if (contextId === null) return null
+    await send('Runtime.evaluate', { expression: `${storageExpression(area)}.clear()`, contextId })
+    return true
+  })
+
   win.on('closed', () => {
     for (const channel of [
       'devtools:get-document',
@@ -254,7 +611,16 @@ export function attachInspector(win: BrowserWindow): Inspector {
       'devtools:get-styles',
       'devtools:get-node-context',
       'devtools:highlight',
-      'devtools:set-inspect-mode'
+      'devtools:set-inspect-mode',
+      'devtools:console-evaluate',
+      'devtools:get-resources',
+      'devtools:get-resource-content',
+      'devtools:get-cookies',
+      'devtools:delete-cookie',
+      'devtools:get-storage',
+      'devtools:set-storage-item',
+      'devtools:delete-storage-item',
+      'devtools:clear-storage'
     ]) {
       ipcMain.removeHandler(channel)
     }
