@@ -26,7 +26,7 @@ function CopilotPanel({
   requestCount,
   style
 }: CopilotPanelProps): JSX.Element {
-  const { messages, attachments, attach, detach, send } = copilot
+  const { messages, attachments, attach, detach, send, respondApproval } = copilot
   const [over, setOver] = useState(false)
   const listRef = useRef<HTMLDivElement>(null)
 
@@ -74,7 +74,7 @@ function CopilotPanel({
         }}
       >
         {messages.map((message) => (
-          <Message key={message.id} message={message} />
+          <Message key={message.id} item={message} onRespondApproval={respondApproval} />
         ))}
         <div className="copilot__spacer" />
         {draggedNode && <DropZone over={over} />}
