@@ -3,7 +3,12 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <!-- restrictive CSP for the renderer, but we can loosen as needed -->
+    <!--
+      Dev CSP. electron-vite's HMR needs inline styles, so this keeps
+      style-src 'unsafe-inline'. Production gets a strict no-'unsafe-inline'
+      policy via an onHeadersReceived header in src/main/index.ts; both apply
+      in prod and the browser takes the intersection (the strict header wins).
+    -->
     <meta
       http-equiv="Content-Security-Policy"
       content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:"
