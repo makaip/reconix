@@ -30,3 +30,19 @@ smoke-output/
 reconix.env
 
 CLAUDE.md
+
+# Python / uv
+.venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+.pyd
+.ruff_cache/
+.pytest_cache/
+dist/
+build/
+*.egg-info/
+
+# Environment / Credentials
+.env
