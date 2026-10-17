@@ -18,6 +18,9 @@ PROFILES="$ROOT/profiles"
 DATA_ROOT="${DATA_ROOT:-$ROOT/../data}"
 LOGS="$DATA_ROOT/logs/serving"
 HEALTH_TRIES="${HEALTH_TRIES:-180}"
+export CUDA_HOME=/usr/local/cuda-13.0
+export PATH=$CUDA_HOME/bin:$PATH
+export VLLM_ATTENTION_BACKEND=TRITON_ATTN
 
 die()   { echo "$*" >&2; exit 2; }
 usage() { sed -n '8,14p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
