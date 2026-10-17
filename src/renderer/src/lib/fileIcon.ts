@@ -1,0 +1,166 @@
+/**
+ * File-type icons for sitemap/source rows. The SVGs are vendored from
+ * material-icon-theme (MIT, see assets/icons/files/LICENSE) so they ship in the
+ * bundle and render offline — no CDN fetches.
+ */
+const icons = import.meta.glob<string>('../assets/icons/files/*.svg', {
+  eager: true,
+  query: '?url',
+  import: 'default'
+})
+
+const icon = (name: string): string => icons[`../assets/icons/files/${name}.svg`]
+
+/** Lowercased extension → icon name. */
+const BY_EXTENSION: Record<string, string> = {
+  js: 'javascript',
+  mjs: 'javascript',
+  cjs: 'javascript',
+  jsx: 'react',
+  ts: 'typescript',
+  mts: 'typescript',
+  cts: 'typescript',
+  tsx: 'react_ts',
+  map: 'json',
+  html: 'html',
+  htm: 'html',
+  xhtml: 'html',
+  shtml: 'html',
+  css: 'css',
+  scss: 'sass',
+  sass: 'sass',
+  less: 'less',
+  styl: 'stylus',
+  json: 'json',
+  jsonld: 'json',
+  webmanifest: 'json',
+  xml: 'xml',
+  rss: 'xml',
+  atom: 'xml',
+  wsdl: 'xml',
+  svg: 'svg',
+  png: 'image',
+  jpg: 'image',
+  jpeg: 'image',
+  gif: 'image',
+  webp: 'image',
+  avif: 'image',
+  bmp: 'image',
+  ico: 'favicon',
+  woff: 'font',
+  woff2: 'font',
+  ttf: 'font',
+  otf: 'font',
+  eot: 'font',
+  py: 'python',
+  php: 'php',
+  phtml: 'php',
+  java: 'java',
+  jsp: 'java',
+  do: 'java',
+  action: 'java',
+  rb: 'ruby',
+  erb: 'ruby',
+  go: 'go',
+  rs: 'rust',
+  md: 'markdown',
+  markdown: 'markdown',
+  yml: 'yaml',
+  yaml: 'yaml',
+  toml: 'toml',
+  sh: 'console',
+  bash: 'console',
+  cgi: 'console',
+  pl: 'perl',
+  pm: 'perl',
+  ini: 'settings',
+  conf: 'settings',
+  cfg: 'settings',
+  env: 'settings',
+  config: 'settings',
+  txt: 'document',
+  csv: 'document',
+  lock: 'lock',
+  vue: 'vue',
+  c: 'c',
+  h: 'c',
+  cpp: 'cpp',
+  cc: 'cpp',
+  hpp: 'cpp',
+  cs: 'csharp',
+  aspx: 'csharp',
+  asp: 'csharp',
+  ashx: 'csharp',
+  asmx: 'csharp',
+  axd: 'csharp',
+  cshtml: 'razor',
+  razor: 'razor',
+  kt: 'kotlin',
+  swift: 'swift',
+  dart: 'dart',
+  scala: 'scala',
+  lua: 'lua',
+  ex: 'elixir',
+  exs: 'elixir',
+  erl: 'erlang',
+  hs: 'haskell',
+  clj: 'clojure',
+  r: 'r',
+  jl: 'julia',
+  coffee: 'coffee',
+  graphql: 'graphql',
+  gql: 'graphql',
+  sql: 'database',
+  db: 'database',
+  sqlite: 'database',
+  pem: 'certificate',
+  crt: 'certificate',
+  cer: 'certificate',
+  key: 'key',
+  log: 'log',
+  wasm: 'webassembly',
+  mp3: 'audio',
+  wav: 'audio',
+  ogg: 'audio',
+  m4a: 'audio',
+  mp4: 'video',
+  webm: 'video',
+  mov: 'video',
+  m3u8: 'video',
+  pdf: 'pdf',
+  zip: 'zip',
+  gz: 'zip',
+  tgz: 'zip',
+  tar: 'zip',
+  rar: 'zip',
+  '7z': 'zip',
+  bak: 'template',
+  old: 'template',
+  tmpl: 'template',
+  tpl: 'template',
+  url: 'url'
+}
+
+/** Exact (lowercased) filenames that beat the extension lookup. */
+const BY_NAME: Record<string, string> = {
+  'robots.txt': 'robots',
+  'package.json': 'nodejs',
+  'package-lock.json': 'lock',
+  'yarn.lock': 'lock',
+  '.env': 'settings',
+  '.htaccess': 'settings',
+  'web.config': 'settings',
+  graphql: 'graphql'
+}
+
+/** Icon for a path or URL segment like "/app.min.js" or "robots.txt"; endpoints with no extension get the HTTP icon. */
+export function fileIcon(name: string): string {
+  const base = name.replace(/^\/+/, '').split(/[?#]/)[0].toLowerCase()
+  const named = BY_NAME[base]
+  if (named) return icon(named)
+  const dot = base.lastIndexOf('.')
+  const ext = dot > 0 ? base.slice(dot + 1) : dot === 0 ? base.slice(1) : ''
+  return icon(BY_EXTENSION[ext] ?? 'http')
+}
+
+export const folderIcon = (open: boolean): string => icon(open ? 'folder-open' : 'folder')

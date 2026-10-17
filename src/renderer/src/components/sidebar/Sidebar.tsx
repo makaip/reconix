@@ -1,4 +1,4 @@
-import { useState, type CSSProperties } from 'react'
+import { useMemo, useState, type CSSProperties } from 'react'
 import plus from '../../assets/icons/plus.svg'
 import { findings } from '../../mock/data'
 import { useSitemap } from '../../hooks/useSitemap'
@@ -24,9 +24,29 @@ function Sidebar({ style, onDragStart, onDragEnd, onOpenSource }: SidebarProps):
   const sitemap = useSitemap()
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [anchor, setAnchor] = useState<string | null>(null)
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
+
+  // Rows under a collapsed folder are hidden; nodes are in tree order so a depth cutoff suffices.
+  const visible = useMemo(() => {
+    const out: SitemapNode[] = []
+    let hideBelow = Infinity
+    for (const node of sitemap) {
+      if (node.depth > hideBelow) continue
+      hideBelow = node.kind === 'folder' && collapsed.has(node.id) ? node.depth : Infinity
+      out.push(node)
+    }
+    return out
+  }, [sitemap, collapsed])
+
+  const toggle = (id: string): void =>
+    setCollapsed((current) => {
+      const next = new Set(current)
+      if (!next.delete(id)) next.add(id)
+      return next
+    })
 
   const select = (id: string, mods: { metaKey: boolean; ctrlKey: boolean; shiftKey: boolean }): void => {
-    const result = nextSelection(selected, anchor, id, sitemap.map((n) => n.id), mods)
+    const result = nextSelection(selected, anchor, id, visible.map((n) => n.id), mods)
     setSelected(result.set)
     setAnchor(result.anchor)
   }
@@ -48,11 +68,13 @@ function Sidebar({ style, onDragStart, onDragEnd, onOpenSource }: SidebarProps):
         {sitemap.length === 0 ? (
           <p className="dt-empty">No requests captured yet.</p>
         ) : (
-          sitemap.map((node) => (
+          visible.map((node) => (
             <SitemapRow
               key={node.id}
               node={node}
               selected={selected.has(node.id)}
+              collapsed={collapsed.has(node.id)}
+              onToggle={() => toggle(node.id)}
               onSelect={select}
               onOpen={() => node.kind === 'page' && onOpenSource(node.id)}
               dragItems={() => dragItems(node.id)}

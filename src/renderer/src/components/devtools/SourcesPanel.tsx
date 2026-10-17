@@ -1,7 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { ResourceInfo } from '../../../../shared/devtools'
 import { RESOURCE_DRAG_TYPE, type ResourceDragItem } from '../../lib/dragTypes'
+import { highlight } from '../../lib/highlight'
 import { nextSelection } from '../../lib/selection'
+import { detectLanguage, prettyPrint } from '../../lib/sourceFormat'
 
 type SourcesPanelProps = {
   resources: ResourceInfo[]
@@ -48,6 +50,16 @@ function SourcesPanel({
   const [anchor, setAnchor] = useState<string | null>(null)
   const [content, setContent] = useState<string | null>(null)
   const [state, setState] = useState<'idle' | 'loading' | 'binary' | 'error'>('idle')
+  const [pretty, setPretty] = useState(true)
+  const [truncated, setTruncated] = useState(false)
+
+  const language = active ? detectLanguage(active) : 'plaintext'
+  // Pretty-print + highlight once per loaded source, not on every render.
+  const html = useMemo(() => {
+    if (content === null) return ''
+    const formatted = pretty ? prettyPrint(content, language) : content
+    return highlight(truncated ? `${formatted}\n\n… truncated …` : formatted, language)
+  }, [content, language, pretty, truncated])
 
   const reveal = (resource: ResourceInfo): void => {
     setActive(resource)
@@ -83,7 +95,8 @@ function SourcesPanel({
           setState('binary')
           return
         }
-        setContent(result.truncated ? `${result.content}\n\n… truncated …` : result.content)
+        setContent(result.content)
+        setTruncated(result.truncated)
         setState('idle')
       })
       .catch(() => {
@@ -174,7 +187,24 @@ function SourcesPanel({
         {active && state === 'error' && (
           <p className="dt-network__detail-empty">Couldn't load this resource.</p>
         )}
-        {active && state === 'idle' && content !== null && <pre className="dt-sources__code">{content}</pre>}
+        {active && state === 'idle' && content !== null && (
+          <>
+            <div className="dt-sources__toolbar">
+              <span className="dt-muted">{language}</span>
+              <button
+                type="button"
+                className={pretty ? 'dt-sources__pretty dt-sources__pretty--on' : 'dt-sources__pretty'}
+                aria-pressed={pretty}
+                title="Pretty print"
+                onClick={() => setPretty((on) => !on)}
+              >
+                {'{ }'}
+              </button>
+            </div>
+            {/* highlight() escapes all source text; see SECURITY note in lib/highlight.ts */}
+            <pre className="dt-sources__code hljs" dangerouslySetInnerHTML={{ __html: html }} />
+          </>
+        )}
       </div>
     </div>
   )
