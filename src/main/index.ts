@@ -5,10 +5,32 @@ import { attachInspector } from './inspector'
 import { startNetworkCapture, type NetworkCapture } from './network'
 import { createSessionManager } from './session'
 import { createTabManager } from './tabs'
+import { createCopilotBridge, type CopilotBridge } from './copilot'
+import { runSmoke } from './smoke'
 
 // keep in sync with --tabbar-height and --color-bg-deep in tokens.css
 const TAB_BAR_HEIGHT = 40
 const TAB_BAR_COLOR = '#18181a'
+
+// Dev-mode convenience: pulls provider keys (e.g. GOOGLE_GENERATIVE_AI_API_KEY)
+// out of a gitignored .env at the project root into process.env, so the
+// `opencode serve` child copilot.ts spawns inherits them. No-op if the file
+// doesn't exist — never required for the app to start.
+//
+// Deliberately NOT process.loadEnvFile() with no arg: that resolves against
+// process.cwd(), which is wherever the OS launched Electron from — not
+// necessarily the project root (confirmed: under a test launcher it was a
+// scratch directory with no .env, silently swallowed by this try/catch, and
+// everything downstream failed for a confusing, unrelated-looking reason).
+// app.getAppPath() is what's actually guaranteed to be the project root in
+// dev mode.
+try {
+  process.loadEnvFile(join(app.getAppPath(), '.env'))
+} catch {
+  // no .env present — fine, OpenCode just won't have provider auth yet.
+}
+
+let copilotBridge: CopilotBridge | null = null
 
 function createWindow(): void {
   const mainWindow = new BrowserWindow({
@@ -55,6 +77,7 @@ function createWindow(): void {
   })
   network = startNetworkCapture(mainWindow, tabs)
   createSessionManager(mainWindow)
+  copilotBridge = createCopilotBridge(mainWindow)
 
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
@@ -63,8 +86,15 @@ function createWindow(): void {
   }
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   electronApp.setAppUserModelId('com.reconix.app')
+
+  // Guarded smoke harness: exercises the MCP + OpenCode modules in the real
+  // Electron main process, then exits. No effect on normal startup.
+  if (process.env['RECONIX_SMOKE']) {
+    await runSmoke()
+    return
+  }
 
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)
@@ -83,4 +113,8 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit()
   }
+})
+
+app.on('before-quit', () => {
+  void copilotBridge?.stop()
 })

@@ -1,0 +1,56 @@
+// Tool definition shape (ARCHITECTURE §6.2). Every capability the agent has is
+// one of these; a capability that is not a Tool cannot be expressed.
+
+import type { EngagementId, Policy, RiskTier, TraceRef } from '../../shared/contracts'
+import type { CdpDriver } from './cdp'
+import type { JsonSchema } from './validate'
+import type { ScopeChecker } from './scope'
+
+// Sinks the handlers need, beyond the driver. Audit is NOT here — the pipeline
+// owns audit so a handler can never skip it.
+export interface TraceStore {
+  save(kind: 'screenshot' | 'reqresp' | 'trace', data: Buffer | string): Promise<TraceRef>
+}
+export interface FindingSink {
+  record(schema: unknown, evidenceRef: string): Promise<string> // -> findingId (findings table)
+}
+export interface HistoryReader {
+  query(filter: unknown): Promise<unknown[]> // backs query_log; never a DB handle
+}
+
+export interface ToolContext {
+  engagementId: EngagementId
+  scope: ScopeChecker
+  policy: Policy
+  cdp: CdpDriver
+  traces: TraceStore
+  findings: FindingSink
+  history: HistoryReader
+}
+
+export interface Tool<I = unknown, O = unknown> {
+  name: string
+  description: string
+  riskTier: RiskTier
+  inputSchema: JsonSchema
+  outputSchema: JsonSchema
+  /** Hostile structural validation. Throws ToolInputError on malformed input. */
+  parse(raw: unknown): I
+  /** Scope-relevant target (URL/host) for the pipeline to enforce, if any. */
+  target?(input: I): string | undefined
+  execute(input: I, ctx: ToolContext): Promise<O>
+}
+
+// Helper to keep tool definitions terse and well-typed.
+export function defineTool<I, O>(t: Tool<I, O>): Tool<I, O> {
+  return t
+}
+
+// MCP wire descriptor (what the server advertises to OpenCode).
+export interface ToolDescriptor {
+  name: string
+  description: string
+  inputSchema: JsonSchema
+  outputSchema: JsonSchema
+  riskTier: RiskTier
+}

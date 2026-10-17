@@ -1,0 +1,45 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "default_agent": "orchestrator",
+  "permissions": [
+    {
+      "action": "bash",
+      "resource": "*",
+      "effect": "allow"
+    },
+    {
+      "action": "edit",
+      "resource": "src/**",
+      "effect": "allow"
+    },
+    {
+      "action": "subagent",
+      "resource": "*",
+      "effect": "allow"
+    }
+  ],
+  "agents": {
+    "orchestrator": {
+      "mode": "primary",
+      "description": "Lead strategist that analyzes target pages, generates hypotheses, and directs test execution.",
+      "model": "google/gemini-3.8-flash"
+    },
+    "evaluator": {
+      "mode": "subagent",
+      "description": "Fast log, DOM, and network inspector that validates execution results and filters false positives.",
+      "model": "google/gemini-3.8-flash",
+      "permissions": [
+        {
+          "action": "edit",
+          "resource": "*",
+          "effect": "deny"
+        },
+        {
+          "action": "bash",
+          "resource": "*",
+          "effect": "deny"
+        }
+      ]
+    }
+  }
+}

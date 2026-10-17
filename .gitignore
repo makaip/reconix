@@ -1,8 +1,26 @@
+# Node / Electron
 node_modules/
 out/
 dist/
 *.log
 .DS_Store
-arch.md
-r.mdrelease/
+release/
 smoke-output/
+
+# Python / uv
+.venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+.pyd
+.ruff_cache/
+.pytest_cache/
+build/
+*.egg-info/
+
+# Environment / Credentials
+.env
+
+arch.md
+r.md

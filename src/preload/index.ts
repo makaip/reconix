@@ -10,6 +10,11 @@ import type {
 } from '../shared/agent'
 import type { CdpNode, DevToolsEvent, NodeContext, StyleRule } from '../shared/devtools'
 import type { CapturedRequest, NavigateResult, NetworkStats, TabsState } from '../shared/tabs'
+// Aliased: shared/agent.ts already exports a (differently-shaped) ApprovalDecision,
+// imported above for the `agent` namespace below. TODO: these are two parallel
+// approval-decision shapes for what's conceptually the same concept — worth
+// reconciling once `agent.*` vs `copilot.*` below gets sorted out.
+import type { AgentEvent, ApprovalDecision as CopilotApprovalDecision, ServerStatus } from '../shared/contracts'
 
 // typed surface is exposed to renderer but renderer never accesses ipcRenderer directly
 export type Bounds = { x: number; y: number; width: number; height: number }
@@ -82,6 +87,23 @@ const api = {
       subscribe('approval:request', callback),
     onFinding: (callback: (finding: Finding) => void): (() => void) =>
       subscribe('finding:new', callback)
+  },
+  copilot: {
+    // Resolves once OpenCode has durably admitted the message; the reply
+    // itself streams in separately through onEvent.
+    send: (text: string): Promise<{ messageId: string }> => ipcRenderer.invoke('copilot:send', text),
+    respondApproval: (approvalId: string, decision: CopilotApprovalDecision): Promise<void> =>
+      ipcRenderer.invoke('copilot:respond-approval', approvalId, decision),
+    onEvent: (callback: (event: AgentEvent) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, payload: AgentEvent): void => callback(payload)
+      ipcRenderer.on('copilot:event', listener)
+      return () => ipcRenderer.removeListener('copilot:event', listener)
+    },
+    onStatus: (callback: (status: ServerStatus) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, payload: ServerStatus): void => callback(payload)
+      ipcRenderer.on('copilot:status', listener)
+      return () => ipcRenderer.removeListener('copilot:status', listener)
+    }
   }
 }
 
