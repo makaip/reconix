@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from 'react'
 import type { DiffResponsesOutput } from '../../../../shared/tools'
 import type { ReplayResult, SavedRequest } from '../../../../shared/tabs'
 import type { RepeaterApi } from '../../hooks/useRepeater'
+import { useResizable } from '../../hooks/useResizable'
+import ResizeHandle from '../chrome/ResizeHandle'
 
 const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS']
 
@@ -89,6 +91,7 @@ function RepeaterPanel({ api }: RepeaterPanelProps): JSX.Element {
   const { saved, save, remove, send, diff } = api
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [draft, setDraft] = useState<Draft>(EMPTY)
+  const listResize = useResizable({ axis: 'x', initial: 220, min: 140, max: 600, storageKey: 'repeater.list' })
   const [diffResult, setDiffResult] = useState<DiffResponsesOutput | null>(null)
   const [busy, setBusy] = useState(false)
 
@@ -142,7 +145,7 @@ function RepeaterPanel({ api }: RepeaterPanelProps): JSX.Element {
 
   return (
     <div className="rep">
-      <div className="rep__list">
+      <div className="rep__list" style={{ width: listResize.size }}>
         <button type="button" className="dt-text-button rep__new" onClick={newRequest}>
           + New
         </button>
@@ -163,6 +166,12 @@ function RepeaterPanel({ api }: RepeaterPanelProps): JSX.Element {
           ))
         )}
       </div>
+
+      <ResizeHandle
+        orientation="vertical"
+        dragging={listResize.dragging}
+        onPointerDown={listResize.onHandlePointerDown}
+      />
 
       <div className="rep__editor">
         <div className="rep__row">

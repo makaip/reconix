@@ -7,7 +7,9 @@ import { buildRows, useDomTree } from '../../hooks/useDomTree'
 import { useIntercept } from '../../hooks/useIntercept'
 import { useNetworkRequests } from '../../hooks/useNetworkRequests'
 import { useRepeater } from '../../hooks/useRepeater'
+import { useResizable } from '../../hooks/useResizable'
 import { useResources } from '../../hooks/useResources'
+import ResizeHandle from '../chrome/ResizeHandle'
 import ApplicationPanel from './ApplicationPanel'
 import Breadcrumbs from './Breadcrumbs'
 import ConsolePanel from './ConsolePanel'
@@ -40,6 +42,14 @@ function DevToolsPanel({
   const [rules, setRules] = useState<StyleRule[] | null>(null)
   const [inspecting, setInspecting] = useState(false)
   const [devtoolsTab, setDevtoolsTab] = useState<DevToolsTab>('elements')
+  const stylesResize = useResizable({
+    axis: 'x',
+    initial: 330,
+    min: 200,
+    max: 800,
+    invert: true,
+    storageKey: 'elements.styles'
+  })
   // Multi-selection for the Elements tree (drag/attach). state.selectedId stays the "active"
   // node that drives Styles, the breadcrumb and $0; the anchor for shift-ranges tracks it.
   const [treeSel, setTreeSel] = useState<{ set: Set<number>; anchor: number | null }>({
@@ -151,7 +161,12 @@ function DevToolsPanel({
             )}
             <Breadcrumbs state={state} />
           </div>
-          <StylesPane rules={rules} />
+          <ResizeHandle
+            orientation="vertical"
+            dragging={stylesResize.dragging}
+            onPointerDown={stylesResize.onHandlePointerDown}
+          />
+          <StylesPane rules={rules} style={{ width: stylesResize.size }} />
         </div>
       )}
       {devtoolsTab === 'network' && <NetworkPanel requests={networkRequests} />}

@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import type { CookieInfo, StorageArea, StorageEntry } from '../../../../shared/devtools'
 import type { ApplicationApi } from '../../hooks/useApplication'
+import { useResizable } from '../../hooks/useResizable'
+import ResizeHandle from '../chrome/ResizeHandle'
 
 type ApplicationPanelProps = {
   application: ApplicationApi
@@ -160,11 +162,17 @@ function StorageTable({
 }
 
 function ApplicationPanel({ application }: ApplicationPanelProps): JSX.Element {
+  const listResize = useResizable({ axis: 'x', initial: 220, min: 140, max: 600, storageKey: 'application.list' })
   const [section, setSection] = useState<Section>('cookies')
 
   return (
     <div className="dt-application">
-      <div className="dt-sources__list" role="tree" aria-label="Application storage">
+      <div
+        className="dt-sources__list"
+        role="tree"
+        aria-label="Application storage"
+        style={{ width: listResize.size }}
+      >
         <button
           type="button"
           className={section === 'cookies' ? 'dt-sources__row dt-sources__row--selected' : 'dt-sources__row'}
@@ -191,6 +199,11 @@ function ApplicationPanel({ application }: ApplicationPanelProps): JSX.Element {
         </button>
       </div>
 
+      <ResizeHandle
+        orientation="vertical"
+        dragging={listResize.dragging}
+        onPointerDown={listResize.onHandlePointerDown}
+      />
       <div className="dt-application__detail">
         {section === 'cookies' && <CookiesTable cookies={application.cookies} onDelete={application.deleteCookie} />}
         {section === 'local' && (

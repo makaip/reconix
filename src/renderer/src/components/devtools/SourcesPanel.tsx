@@ -1,9 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { ResourceInfo } from '../../../../shared/devtools'
+import { useResizable } from '../../hooks/useResizable'
 import { RESOURCE_DRAG_TYPE, type ResourceDragItem } from '../../lib/dragTypes'
+import { fileIcon } from '../../lib/fileIcon'
 import { highlight } from '../../lib/highlight'
 import { nextSelection } from '../../lib/selection'
 import { detectLanguage, prettyPrint } from '../../lib/sourceFormat'
+import ResizeHandle from '../chrome/ResizeHandle'
 
 type SourcesPanelProps = {
   resources: ResourceInfo[]
@@ -50,6 +53,7 @@ function SourcesPanel({
   const [anchor, setAnchor] = useState<string | null>(null)
   const [content, setContent] = useState<string | null>(null)
   const [state, setState] = useState<'idle' | 'loading' | 'binary' | 'error'>('idle')
+  const listResize = useResizable({ axis: 'x', initial: 220, min: 140, max: 600, storageKey: 'sources.list' })
   const [pretty, setPretty] = useState(true)
   const [truncated, setTruncated] = useState(false)
 
@@ -144,7 +148,12 @@ function SourcesPanel({
 
   return (
     <div className="dt-sources">
-      <div className="dt-sources__list" role="tree" aria-label="Page resources">
+      <div
+        className="dt-sources__list"
+        role="tree"
+        aria-label="Page resources"
+        style={{ width: listResize.size }}
+      >
         {!loaded && <p className="dt-empty">Loading…</p>}
         {loaded && resources.length === 0 && <p className="dt-empty">No resources loaded.</p>}
         {resources.map((resource) => (
@@ -174,11 +183,18 @@ function SourcesPanel({
             }}
             onDragEnd={onDragEnd}
           >
+            <img src={fileIcon(resourceLabel(resource.url))} width={14} height={14} alt="" />
             <span className="dt-sources__row-name">{resourceLabel(resource.url)}</span>
             <span className="dt-sources__row-type dt-muted">{resource.type}</span>
           </button>
         ))}
       </div>
+
+      <ResizeHandle
+        orientation="vertical"
+        dragging={listResize.dragging}
+        onPointerDown={listResize.onHandlePointerDown}
+      />
 
       <div className="dt-sources__viewer">
         {!active && <p className="dt-network__detail-empty">Select a resource to view its source.</p>}
