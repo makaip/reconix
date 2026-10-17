@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: Linux, os: ubuntu-latest }
+          - { name: macOS, os: macos-latest }
+          - { name: Windows, os: windows-latest }
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+      # Linux has no display on CI, so run Electron under a virtual one.
+      - name: Install Xvfb
+        if: runner.os == 'Linux'
+        run: command -v xvfb-run || (sudo apt-get update && sudo apt-get install -y xvfb)
+
+      - name: Smoke test (built app)
+        if: runner.os != 'Linux'
+        run: npm run test:smoke
+
+      - name: Smoke test (built app, Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a npm run test:smoke
+
+      - name: Package (unpacked, unsigned)
+        run: npx electron-builder --dir
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+
+      - name: Smoke test (packaged app)
+        if: runner.os != 'Linux'
+        run: npm run test:smoke:packaged
+
+      - name: Smoke test (packaged app, Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a npm run test:smoke:packaged
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-screenshots-${{ matrix.name }}
+          path: smoke-output/
+          if-no-files-found: ignore

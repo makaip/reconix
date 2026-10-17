@@ -23,3 +23,6 @@ build/
 
 arch.md
 r.md
+release/
+smoke-output/
+

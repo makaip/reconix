@@ -10,22 +10,23 @@ function Sidebar(): JSX.Element {
 
   return (
     <aside className="sidebar" aria-label="Sitemap and findings">
-      <SectionHeader label="SITEMAP" count={sitemap.length} badgeTone="muted" />
-      {sitemap.map((node) => (
-        <SitemapRow
-          key={node.id}
-          node={node}
-          selected={node.id === selectedId}
-          onSelect={setSelectedId}
-        />
-      ))}
+      <div className="sidebar__scroll">
+        <SectionHeader label="Sitemap" count={sitemap.length} />
+        {sitemap.map((node) => (
+          <SitemapRow
+            key={node.id}
+            node={node}
+            selected={node.id === selectedId}
+            onSelect={setSelectedId}
+          />
+        ))}
 
-      <SectionHeader label="FINDINGS" count={findings.length} />
-      {findings.map((finding) => (
-        <FindingCard key={finding.id} finding={finding} />
-      ))}
+        <SectionHeader label="Findings" count={findings.length} />
+        {findings.map((finding) => (
+          <FindingCard key={finding.id} finding={finding} />
+        ))}
+      </div>
 
-      <div className="sidebar__spacer" />
       <button type="button" className="add-note">
         <img src={plus} width={13} height={13} alt="" />
         <span>Add note to engagement</span>

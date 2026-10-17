@@ -1,51 +1,63 @@
-.sidebar__spacer {
+/* layout for the sidebar itself lives in shell.css */
+.sidebar__scroll {
   flex: 1 1 0;
   min-height: 0;
+  overflow-y: auto;
 }
 
 .section-header {
   display: flex;
   align-items: center;
-  padding: 10px 4px 6px;
+  height: 28px;
+  padding: 0 10px;
+  background: var(--color-bg-bar);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.section-header:not(:first-child) {
+  border-top: 1px solid var(--color-border-subtle);
 }
 
 .section-header__label {
   flex: 1 1 0;
   min-width: 0;
   margin: 0;
-  font-size: var(--text-2xs);
+  font-size: var(--text-xs);
   font-weight: 600;
-  letter-spacing: 0.8px;
-  color: var(--color-text-muted);
+  color: var(--color-text);
+}
+
+.section-header__count {
+  font-size: var(--text-2xs);
+  color: var(--color-text-faint);
 }
 
 .sitemap-row {
-  flex: none;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   width: 100%;
-  height: 26px;
-  padding: 5px 12px 5px 8px;
+  height: 24px;
+  padding: 0 10px 0 10px;
   background: none;
   border: 0;
-  border-left: 2px solid transparent;
-  border-radius: var(--radius-md);
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  color: var(--color-text);
+  color: var(--color-text-muted);
   text-align: left;
-  cursor: pointer;
+  cursor: default;
 }
 
 .sitemap-row:hover {
-  background: var(--color-bg-card);
+  background: var(--color-hover);
+}
+
+.sitemap-row--folder {
+  color: var(--color-text);
 }
 
 .sitemap-row--selected,
 .sitemap-row--selected:hover {
-  background: var(--color-bg-raised);
-  border-left-color: var(--color-accent);
+  background: var(--color-selection);
+  color: var(--color-text);
 }
 
 .sitemap-row img {
@@ -60,29 +72,26 @@
 }
 
 .finding-card {
-  flex: none;
   display: flex;
-  align-items: flex-start;
+  align-items: baseline;
   gap: 8px;
   width: 100%;
-  padding: 7px 8px;
-  background: var(--color-bg-card);
+  padding: 5px 10px;
+  background: none;
   border: 0;
-  border-radius: var(--radius-md);
   text-align: left;
-  cursor: pointer;
+  cursor: default;
 }
 
 .finding-card:hover {
-  background: var(--color-bg-raised);
+  background: var(--color-hover);
 }
 
 .finding-card__severity {
   flex: none;
-  padding: 3px 2px 3px 0;
-  font-family: var(--font-mono);
+  width: 44px;
   font-size: var(--text-2xs);
-  font-weight: 500;
+  font-weight: 600;
 }
 
 .finding-card__severity--medium {
@@ -100,7 +109,6 @@
 .finding-card__title {
   flex: 1 1 0;
   min-width: 0;
-  font-size: var(--text-xs);
   color: var(--color-text);
 }
 
@@ -110,15 +118,16 @@
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 8px 10px;
-  background: none;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  font-size: var(--text-xs);
+  height: 32px;
+  padding: 0 10px;
+  background: var(--color-bg-bar);
+  border: 0;
+  border-top: 1px solid var(--color-border);
   color: var(--color-text-muted);
   cursor: pointer;
 }
 
 .add-note:hover {
-  background: var(--color-bg-card);
+  background: var(--color-bg-raised);
+  color: var(--color-text);
 }

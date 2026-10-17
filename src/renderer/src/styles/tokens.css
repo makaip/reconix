@@ -1,67 +1,57 @@
 :root {
   color-scheme: dark;
 
-  /* surfaces */
-  --color-bg-inset: #1b1b1c;
-  --color-bg-panel: #212122;
-  --color-bg-card: #282829;
-  --color-bg-raised: #343435;
-  --color-border: #454546;
+  /* surfaces, darkest to lightest. one neutral ramp shared by the app and devtools */
+  --color-bg-deep: #18181a;
+  --color-bg-inset: #151517;
+  --color-bg-panel: #1f1f21;
+  --color-bg-bar: #29292c;
+  --color-bg-raised: #38383c;
+  --color-hover: rgba(255, 255, 255, 0.07);
+  --color-border: #3a3a3e;
+  --color-border-subtle: #2d2d30;
 
   /* text */
-  --color-text: #e8e8e8;
-  --color-text-muted: #9e9ea1;
+  --color-text: #e8e8ea;
+  --color-text-muted: #a0a0a6;
+  --color-text-faint: #77777d;
 
-  /* accent */
-  --color-accent: #8ab5f7;
-  --color-accent-soft: rgba(138, 181, 247, 0.08);
-  --color-badge-muted: rgba(158, 158, 161, 0.15);
-  --color-success: #40d98c;
-  --color-success-soft: rgba(64, 217, 140, 0.14);
+  /* accent is used sparingly: focus rings, drop targets, the active devtools tab */
+  --color-accent: #4a9eff;
+  --color-selection: #2c4a6e;
+  --color-success: #4fb286;
 
   /* severity */
-  --color-sev-medium: #ffb840;
-  --color-sev-low: #66a6ff;
+  --color-sev-medium: #e0a030;
+  --color-sev-low: #5aa0f0;
   --color-sev-info: var(--color-text-muted);
 
-  /* DevTools chrome look (kind of) */
-  --dt-bg: #282828;
-  --dt-bg-toolbar: #333333;
-  --dt-border: #4a4a4a;
-  --dt-text: #e3e3e3;
-  --dt-text-muted: #999999;
-  --dt-selected: #2e4561;
-  --dt-tag: #5db0d7;
+  /* syntax colors for the DOM tree and styles pane */
+  --dt-tag: #6cb6df;
   --dt-attr: #9bbbdc;
-  --dt-string: #f29766;
-  --dt-property: #5cccd9;
+  --dt-string: #e8946a;
+  --dt-property: #6cc9d2;
 
   /* target page placeholder */
-  --page-bg: #f5f7fa;
-  --page-surface: #ffffff;
-  --page-border: #e0e5eb;
+  --page-bg: #ffffff;
 
-  /* typography */
-  --font-sans: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-  --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  /* typography. system fonts so the app matches each OS like a native tool */
+  --font-sans: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace;
   --text-2xs: 11px;
   --text-xs: 12px;
   --text-sm: 13px;
-  --text-md: 14px;
 
   /* radii */
-  --radius-xs: 3px;
-  --radius-sm: 4px;
-  --radius-md: 6px;
-  --radius-lg: 8px;
-  --radius-xl: 10px;
+  --radius-sm: 3px;
+  --radius-md: 4px;
 
   /* layout */
   --sidebar-width: 240px;
   --copilot-width: 360px;
-  --devtools-height: 440px;
-  --pane-gap: 12px;
+  --devtools-height: 380px;
   --tabbar-height: 40px;
-  --toolbar-height: 52px;
-  --statusbar-height: 26px;
+  --toolbar-height: 42px;
+  --statusbar-height: 24px;
+  --header-height: 34px;
 }
