@@ -26,3 +26,21 @@ r.md
 release/
 smoke-output/
 
+<<<<<<< HEAD
+=======
+# Python / uv
+.venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+.pyd
+.ruff_cache/
+.pytest_cache/
+dist/
+build/
+*.egg-info/
+
+# Environment / Credentials
+.env
+>>>>>>> dbc615c (updated .gitignore to include python and uv files)
