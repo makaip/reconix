@@ -28,3 +28,5 @@ smoke-output/
 
 # vllm keys
 reconix.env
+
+CLAUDE.md
