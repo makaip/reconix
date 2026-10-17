@@ -23,7 +23,15 @@ import type {
   StorageEntry,
   StyleRule
 } from '../shared/devtools'
-import type { CapturedBody, CapturedRequest, NavigateResult, NetworkStats, TabsState } from '../shared/tabs'
+import type {
+  CapturedBody,
+  CapturedRequest,
+  NavigateResult,
+  NetworkStats,
+  ReplayRequestInput,
+  ReplayResult,
+  TabsState
+} from '../shared/tabs'
 
 // typed surface is exposed to renderer but renderer never accesses ipcRenderer directly
 export type Bounds = { x: number; y: number; width: number; height: number }
@@ -65,6 +73,9 @@ const api = {
     // Full req/resp record (incl. bodies) for one CDP request on the inspected target.
     getBody: (requestId: string): Promise<CapturedBody | null> =>
       ipcRenderer.invoke('network:get-body', requestId),
+    // Repeater: resend an arbitrary request. Scope- and rate-gated in main.
+    replay: (input: ReplayRequestInput): Promise<ReplayResult> =>
+      ipcRenderer.invoke('replay:send', input),
     onStats: (callback: (stats: NetworkStats) => void): (() => void) =>
       subscribe('network:stats', callback),
     // full capture list (all tabs, most recent 200), pushed whenever any request changes

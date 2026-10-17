@@ -2,8 +2,10 @@ import { app, shell, BrowserWindow, ipcMain, session } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { createBodyStore } from './bodies'
+import { loadScopeChecker } from './engagement'
 import { attachInspector } from './inspector'
 import { startNetworkCapture, type NetworkCapture } from './network'
+import { createReplay } from './replay'
 import { createSessionManager } from './session'
 import { createTabManager } from './tabs'
 
@@ -83,6 +85,9 @@ function createWindow(): void {
     onTabClosed: (tabId) => network?.forgetTab(tabId)
   })
   network = startNetworkCapture(mainWindow, tabs)
+  // Host-side replay (Repeater) gates every send on the engagement scope; no
+  // scope loaded -> deny all (default-deny holds). Same scope.json the proxy uses.
+  createReplay(mainWindow, loadScopeChecker())
   createSessionManager(mainWindow)
 
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
