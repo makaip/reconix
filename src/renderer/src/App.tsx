@@ -37,6 +37,7 @@ function App(): JSX.Element {
         onActivate={(id) => void window.reconix.tabs.activate(id)}
         onClose={(id) => void window.reconix.tabs.close(id)}
         onNew={() => void window.reconix.tabs.create()}
+        onMove={(id, toIndex) => void window.reconix.tabs.move(id, toIndex)}
       />
       <Toolbar
         url={activeTab?.url ?? ''}

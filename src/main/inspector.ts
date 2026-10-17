@@ -228,8 +228,9 @@ export function attachInspector(win: BrowserWindow): Inspector {
       const { nodeIds } = await send<{ nodeIds: number[] }>('DOM.pushNodesByBackendIdsToFrontend', {
         backendNodeIds: [backendNodeId]
       })
-      await send('Overlay.setInspectMode', { mode: 'none' })
       if (isNodeId(nodeIds[0])) emit({ method: 'Reconix.nodeInspected', params: { nodeId: nodeIds[0] } })
+      // CDP rejects setInspectMode without a highlightConfig, even when turning it off
+      await send('Overlay.setInspectMode', { mode: 'none', highlightConfig: HIGHLIGHT_CONFIG })
     } catch (error) {
       console.error('Could not resolve inspected node:', error)
     }

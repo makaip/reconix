@@ -49,6 +49,8 @@ const api = {
     create: (url?: string): Promise<number> => ipcRenderer.invoke('tabs:create', url),
     close: (id: number): Promise<void> => ipcRenderer.invoke('tabs:close', id),
     activate: (id: number): Promise<void> => ipcRenderer.invoke('tabs:activate', id),
+    // moves a tab so it ends up at `toIndex` in the tab strip
+    move: (id: number, toIndex: number): Promise<void> => ipcRenderer.invoke('tabs:move', id, toIndex),
     onState: (callback: (state: TabsState) => void): (() => void) => subscribe('tabs:state', callback)
   },
   network: {

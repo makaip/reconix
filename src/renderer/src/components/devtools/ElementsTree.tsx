@@ -1,4 +1,4 @@
-import type { KeyboardEvent } from 'react'
+import { useEffect, useRef, type KeyboardEvent } from 'react'
 import type { TreeNode, TreeRow, TreeState } from '../../hooks/useDomTree'
 import type { NodeRef } from '../../hooks/useCopilot'
 import { chipLabel, cssSelector } from '../../lib/domLabel'
@@ -99,6 +99,12 @@ function ElementsTree({
   onNodeDragEnd
 }: ElementsTreeProps): JSX.Element {
   const selectable = rows.filter((row) => row.kind !== 'close')
+  const treeRef = useRef<HTMLDivElement>(null)
+
+  // keeps the selection on screen, e.g. after picking a deeply nested element in the page
+  useEffect(() => {
+    treeRef.current?.querySelector('.dt-row--selected')?.scrollIntoView({ block: 'nearest' })
+  }, [state.selectedId])
 
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
     const index = selectable.findIndex((row) => row.id === state.selectedId)
@@ -118,6 +124,7 @@ function ElementsTree({
 
   return (
     <div
+      ref={treeRef}
       className="dt-tree"
       role="tree"
       tabIndex={0}
