@@ -45,13 +45,6 @@
       }
     }
   },
-  "mcp": {
-    "reconix": {
-      "type": "remote",
-      "url": "{env:RECONIX_MCP_URL}",
-      "enabled": true
-    }
-  },
   "permissions": [
     {
       "action": "bash",
