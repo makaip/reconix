@@ -105,6 +105,7 @@ function NetworkPanel({ requests }: NetworkPanelProps): JSX.Element {
           Export HAR
         </button>
       </div>
+      <div className="dt-network__body">
       <div className="dt-network__list" role="table" aria-label="Network requests">
         {filtered.length === 0 ? (
           <p className="dt-empty">
@@ -182,6 +183,7 @@ function NetworkPanel({ requests }: NetworkPanelProps): JSX.Element {
             </section>
           </>
         )}
+      </div>
       </div>
     </div>
   )
