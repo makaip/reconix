@@ -62,3 +62,32 @@ export type CapturedBody = {
   /** ms since epoch when the body was captured. */
   capturedAt: number
 }
+
+/** A request the user resends via Repeater (host-side replay). Validated as hostile. */
+export type ReplayRequestInput = {
+  method: string
+  url: string
+  headers?: Record<string, string>
+  body?: string
+}
+
+/** Why a replay was rejected before or during the send. */
+export type ReplayRejectReason = 'invalid' | 'denied' | 'rate-limited' | 'network'
+
+/**
+ * Result of a replay. The success shape is a superset of diffResponses'
+ * ResponseLike (status/body/headers/timingMs), so a result feeds the diff tool
+ * directly. Redirects are NOT auto-followed — `redirectedTo` surfaces the target
+ * so scope can be re-checked before any manual follow.
+ */
+export type ReplayResult =
+  | {
+      ok: true
+      status: number
+      headers: Record<string, string>
+      body: string
+      bodyTruncated: boolean
+      timingMs: number
+      redirectedTo?: string
+    }
+  | { ok: false; reason: ReplayRejectReason; error: string }
