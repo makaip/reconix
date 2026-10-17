@@ -24,6 +24,12 @@ export type StyleRule = {
   properties: StyleProperty[]
 }
 
+export type NodeContext = {
+  outerHTML: string
+  truncated: boolean
+  computedStyle: Record<string, string>
+}
+
 export type DevToolsEvent =
   | { method: 'DOM.documentUpdated'; params: Record<string, never> }
   | { method: 'DOM.setChildNodes'; params: { parentId: number; nodes: CdpNode[] } }

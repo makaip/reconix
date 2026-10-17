@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { CdpNode, DevToolsEvent, StyleRule } from '../shared/devtools'
+import type { CdpNode, DevToolsEvent, NodeContext, StyleRule } from '../shared/devtools'
 
 // typed surface is exposed to renderer but renderer never accesses ipcRenderer directly
 export type Bounds = { x: number; y: number; width: number; height: number }
@@ -17,6 +17,8 @@ const api = {
       ipcRenderer.invoke('devtools:request-children', nodeId),
     getStyles: (nodeId: number): Promise<StyleRule[] | null> =>
       ipcRenderer.invoke('devtools:get-styles', nodeId),
+    getNodeContext: (nodeId: number): Promise<NodeContext | null> =>
+      ipcRenderer.invoke('devtools:get-node-context', nodeId),
     highlight: (nodeId: number | null): Promise<boolean | null> =>
       ipcRenderer.invoke('devtools:highlight', nodeId),
     setInspectMode: (enabled: boolean): Promise<boolean | null> =>

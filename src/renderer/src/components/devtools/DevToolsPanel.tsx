@@ -1,12 +1,18 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { StyleRule } from '../../../../shared/devtools'
+import type { NodeRef } from '../../hooks/useCopilot'
 import { buildRows, useDomTree } from '../../hooks/useDomTree'
 import Breadcrumbs from './Breadcrumbs'
 import DevToolsToolbar from './DevToolsToolbar'
 import ElementsTree from './ElementsTree'
 import StylesPane from './StylesPane'
 
-function DevToolsPanel(): JSX.Element {
+type DevToolsPanelProps = {
+  onNodeDragStart: (node: NodeRef) => void
+  onNodeDragEnd: () => void
+}
+
+function DevToolsPanel({ onNodeDragStart, onNodeDragEnd }: DevToolsPanelProps): JSX.Element {
   const { state, loaded, toggle, select } = useDomTree()
   const [rules, setRules] = useState<StyleRule[] | null>(null)
   const [inspecting, setInspecting] = useState(false)
@@ -54,6 +60,8 @@ function DevToolsPanel(): JSX.Element {
               onSelect={select}
               onToggle={toggle}
               onHover={(id) => void window.reconix.devtools.highlight(id)}
+              onNodeDragStart={onNodeDragStart}
+              onNodeDragEnd={onNodeDragEnd}
             />
           ) : (
             <p className="dt-empty">Inspector unavailable.</p>

@@ -220,3 +220,13 @@
   border-radius: var(--radius-md);
   cursor: pointer;
 }
+
+.drop-zone--over {
+  background: rgba(138, 181, 247, 0.18);
+}
+
+.composer__attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}

@@ -1,5 +1,5 @@
 import { BrowserWindow, WebContents, ipcMain } from 'electron'
-import type { CdpNode, DevToolsEvent, StyleRule } from '../shared/devtools'
+import type { CdpNode, DevToolsEvent, NodeContext, StyleRule } from '../shared/devtools'
 
 const FORWARDED_EVENTS = new Set([
   'DOM.documentUpdated',
@@ -35,6 +35,8 @@ type CssStyle = {
 }
 type CssRule = { origin: string; selectorList: { text: string }; style: CssStyle }
 type SheetInfo = { url: string; inline: boolean }
+
+const MAX_OUTER_HTML = 50_000
 
 const isNodeId = (value: unknown): value is number =>
   typeof value === 'number' && Number.isInteger(value) && value > 0
@@ -169,6 +171,21 @@ export function attachInspector(win: BrowserWindow, target: WebContents): void {
     return rules
   })
 
+  handle('devtools:get-node-context', async (nodeId): Promise<NodeContext | null> => {
+    if (!isNodeId(nodeId)) return null
+    const [html, computed] = await Promise.all([
+      send<{ outerHTML: string }>('DOM.getOuterHTML', { nodeId }),
+      send<{ computedStyle: { name: string; value: string }[] }>('CSS.getComputedStyleForNode', {
+        nodeId
+      })
+    ])
+    return {
+      outerHTML: html.outerHTML.slice(0, MAX_OUTER_HTML),
+      truncated: html.outerHTML.length > MAX_OUTER_HTML,
+      computedStyle: Object.fromEntries(computed.computedStyle.map((p) => [p.name, p.value]))
+    }
+  })
+
   handle('devtools:highlight', async (nodeId) => {
     if (nodeId === null) await send('Overlay.hideHighlight')
     else if (isNodeId(nodeId)) {
@@ -190,6 +207,7 @@ export function attachInspector(win: BrowserWindow, target: WebContents): void {
       'devtools:get-document',
       'devtools:request-children',
       'devtools:get-styles',
+      'devtools:get-node-context',
       'devtools:highlight',
       'devtools:set-inspect-mode'
     ]) {
