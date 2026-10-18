@@ -1,7 +1,7 @@
 // Shared main-process contracts. Mirrors ARCHITECTURE.md §6 and API.md §1/§3.
 // Changing a type here is a §6 contract change — version it (CONTRACTS_VERSION).
 
-export const CONTRACTS_VERSION = '0.3.0'
+export const CONTRACTS_VERSION = '0.4.0'
 
 // ─── Risk tiers (API.md §3 / ARCHITECTURE §5.C) ───────────────────────────────
 // R read-only (auto) · P page-mutating, sandbox-only (auto)
@@ -51,7 +51,17 @@ export type AgentEvent =
       riskTier: RiskTier
       target?: string
     }
-  | { kind: 'tool.result'; callId: ToolCallId; ok: boolean; resultRef?: string; error?: string }
+  | {
+      kind: 'tool.result'
+      callId: ToolCallId
+      ok: boolean
+      resultRef?: string
+      error?: string
+      /** Flattened tool output (stdout, file text, fetched page …) for the
+       *  transcript. Absent when the tool produced no textual output; may be
+       *  truncated for very large results. */
+      output?: string
+    }
   | {
       kind: 'approval.request'
       approvalId: ApprovalId

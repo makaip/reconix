@@ -300,7 +300,7 @@ export function useCopilot(): Copilot {
           return
         }
         case 'tool.result': {
-          updateTool(ev.callId, { status: ev.ok ? 'ok' : 'error', error: ev.error })
+          updateTool(ev.callId, { status: ev.ok ? 'ok' : 'error', error: ev.error, output: ev.output })
           toolOwner.current.delete(ev.callId)
           if (browserCalls.current.delete(ev.callId)) {
             const remaining = Array.from(browserCalls.current.values())

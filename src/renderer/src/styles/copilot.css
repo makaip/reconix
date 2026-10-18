@@ -760,6 +760,28 @@
   word-break: break-word;
 }
 
+.tool-block__body-label {
+  margin: 8px 0 3px;
+  color: var(--color-text-faint);
+  font-size: var(--text-2xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.tool-block__body-label:first-child {
+  margin-top: 0;
+}
+
+.tool-block__output {
+  max-height: 320px;
+  margin: 0;
+  overflow: auto;
+  color: var(--color-text);
+  font-size: var(--text-2xs);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .tool-block__error {
   margin: 6px 0 0;
   font-size: var(--text-2xs);
