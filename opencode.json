@@ -96,6 +96,16 @@
       "effect": "ask"
     },
     {
+      "action": "reconix_crawl_start",
+      "resource": "*",
+      "effect": "ask"
+    },
+    {
+      "action": "reconix_repeater_send",
+      "resource": "*",
+      "effect": "ask"
+    },
+    {
       "action": "bash",
       "resource": "*",
       "effect": "allow"
