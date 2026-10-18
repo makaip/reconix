@@ -26,6 +26,7 @@ function Sidebar({ style, onDragStart, onDragEnd, onOpenSource }: SidebarProps):
   const sitemap = useSitemap()
   const findings = useFindings()
   const engagement = useEngagement()
+  const [goalDraft, setGoalDraft] = useState('')
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [anchor, setAnchor] = useState<string | null>(null)
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
@@ -225,16 +226,31 @@ function Sidebar({ style, onDragStart, onDragEnd, onOpenSource }: SidebarProps):
             </button>
           </>
         ) : (
-          <button
-            type="button"
-            className="sidebar__engagement-btn"
-            onClick={() => {
-              const goal = window.prompt('Engagement goal…')
-              if (goal && goal.trim()) void engagement.start(goal.trim())
-            }}
-          >
-            Start engagement
-          </button>
+          <>
+            <input
+              type="text"
+              className="sidebar__engagement-input"
+              placeholder="Engagement goal…"
+              value={goalDraft}
+              onChange={(e) => setGoalDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && goalDraft.trim()) {
+                  void engagement.start(goalDraft.trim()).then(() => setGoalDraft(''))
+                }
+              }}
+            />
+            <button
+              type="button"
+              className="sidebar__engagement-btn"
+              disabled={!goalDraft.trim()}
+              onClick={() => {
+                if (!goalDraft.trim()) return
+                void engagement.start(goalDraft.trim()).then(() => setGoalDraft(''))
+              }}
+            >
+              Start engagement
+            </button>
+          </>
         )}
       </div>
 
