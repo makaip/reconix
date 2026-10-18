@@ -1,14 +1,19 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import type { CookieInfo, StorageArea, StorageEntry } from '../../../../shared/devtools'
 import type { ApplicationApi } from '../../hooks/useApplication'
 import { useResizable } from '../../hooks/useResizable'
+import {
+  analyzeCookieSecurity,
+  COOKIE_SEVERITY_ORDER,
+  type CookieSecurityFinding
+} from '../../lib/cookieSecurity'
 import ResizeHandle from '../chrome/ResizeHandle'
 
 type ApplicationPanelProps = {
   application: ApplicationApi
 }
 
-type Section = 'cookies' | 'local' | 'session'
+type Section = 'cookies' | 'cookieSecurity' | 'local' | 'session'
 
 function expiresLabel(expires: number): string {
   if (expires < 0) return 'Session'
@@ -60,6 +65,52 @@ function CookiesTable({
                   Delete
                 </button>
               </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function CookieSecurityTable({
+  findings,
+  cookieCount
+}: {
+  findings: CookieSecurityFinding[]
+  cookieCount: number
+}): JSX.Element {
+  if (cookieCount === 0) return <p className="dt-network__detail-empty">No cookies for this page.</p>
+  if (findings.length === 0) {
+    return <p className="dt-network__detail-empty">No cookie security issues detected.</p>
+  }
+
+  const sorted = [...findings].sort(
+    (a, b) => COOKIE_SEVERITY_ORDER[a.severity] - COOKIE_SEVERITY_ORDER[b.severity]
+  )
+
+  return (
+    <div className="dt-table-wrap">
+      <table className="dt-table">
+        <thead>
+          <tr>
+            <th>Severity</th>
+            <th>Cookie</th>
+            <th>Finding</th>
+          </tr>
+        </thead>
+        <tbody>
+          {sorted.map((finding, index) => (
+            <tr key={`${finding.cookie}:${index}`}>
+              <td>
+                <span
+                  className={`finding-card__severity finding-card__severity--${finding.severity}`}
+                >
+                  {finding.severity}
+                </span>
+              </td>
+              <td className="dt-table__mono">{finding.cookie}</td>
+              <td>{finding.message}</td>
             </tr>
           ))}
         </tbody>
@@ -164,6 +215,10 @@ function StorageTable({
 function ApplicationPanel({ application }: ApplicationPanelProps): JSX.Element {
   const listResize = useResizable({ axis: 'x', initial: 220, min: 140, max: 600, storageKey: 'application.list' })
   const [section, setSection] = useState<Section>('cookies')
+  const cookieFindings = useMemo(
+    () => analyzeCookieSecurity(application.cookies),
+    [application.cookies]
+  )
 
   return (
     <div className="dt-application">
@@ -180,6 +235,14 @@ function ApplicationPanel({ application }: ApplicationPanelProps): JSX.Element {
         >
           <span className="dt-sources__row-name">Cookies</span>
           <span className="dt-sources__row-type dt-muted">{application.cookies.length}</span>
+        </button>
+        <button
+          type="button"
+          className={section === 'cookieSecurity' ? 'dt-sources__row dt-sources__row--selected' : 'dt-sources__row'}
+          onClick={() => setSection('cookieSecurity')}
+        >
+          <span className="dt-sources__row-name">Cookie Security</span>
+          <span className="dt-sources__row-type dt-muted">{cookieFindings.length}</span>
         </button>
         <button
           type="button"
@@ -206,6 +269,9 @@ function ApplicationPanel({ application }: ApplicationPanelProps): JSX.Element {
       />
       <div className="dt-application__detail">
         {section === 'cookies' && <CookiesTable cookies={application.cookies} onDelete={application.deleteCookie} />}
+        {section === 'cookieSecurity' && (
+          <CookieSecurityTable findings={cookieFindings} cookieCount={application.cookies.length} />
+        )}
         {section === 'local' && (
           <StorageTable
             area="local"
