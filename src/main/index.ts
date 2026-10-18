@@ -3,7 +3,7 @@ import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { createBodyStore } from './bodies'
 import { createCopilotBridge, type CopilotBridge } from './copilot'
-import { createActiveOriginScopeChecker, loadScopeChecker } from './engagement'
+import { createActiveOriginScopeChecker, loadScopeChecker, loadScopeConfig, toScopeStatus } from './engagement'
 import { attachInspector, combineNetworkSinks } from './inspector'
 import { createInterceptor } from './intercept'
 import { startNetworkCapture, type NetworkCapture } from './network'
@@ -223,6 +223,13 @@ function createWindow(): void {
   // Host-side replay (Repeater) gates every send on the engagement scope; no
   // scope loaded -> deny all (default-deny holds). Same scope.json the proxy uses.
   const configuredScope = process.env.SCOPE_CONFIG_PATH ? loadScopeChecker() : null
+  // Read-only scope view for the URL-bar badge + status-bar summary, derived from
+  // the SAME scope.json the replays enforce so the UI can't disagree with it.
+  const engagementScope = loadScopeConfig()
+  ipcMain.removeHandler('scope:get')
+  ipcMain.handle('scope:get', (event) =>
+    event.sender === mainWindow.webContents ? toScopeStatus(engagementScope) : null
+  )
   // Resolve the URL at authorization time: a WebContents can navigate without
   // changing its tab id, so a URL captured by onActiveChanged would be stale.
   const activeOriginScope = createActiveOriginScopeChecker(() => {

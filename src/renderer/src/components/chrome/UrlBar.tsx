@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import urlLock from '../../assets/icons/url-lock.svg'
-import { scope } from '../../mock/data'
+import { hostInScope } from '../../../../shared/contracts'
+import { useScope } from '../../hooks/useScope'
 
 function splitUrl(url: string): { scheme: string; host: string; rest: string; hostname: string } | null {
   try {
@@ -17,6 +18,7 @@ function splitUrl(url: string): { scheme: string; host: string; rest: string; ho
 }
 
 function UrlBar({ url, disabled }: { url: string; disabled?: boolean }): JSX.Element {
+  const scope = useScope()
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -100,7 +102,7 @@ function UrlBar({ url, disabled }: { url: string; disabled?: boolean }): JSX.Ele
         </span>
       )}
 
-      {!error && parts && scope.hosts.includes(parts.hostname) && <span className="url-bar__scope">In scope</span>}
+      {!error && parts && hostInScope(parts.hostname, scope.hosts) && <span className="url-bar__scope">In scope</span>}
     </div>
   )
 }

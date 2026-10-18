@@ -46,6 +46,7 @@ import type {
   AgentEvent as CopilotAgentEvent,
   ApprovalDecision as CopilotApprovalDecision,
   EngineStatus,
+  ScopeStatus,
   ServerStatus,
   ToolAccess,
   UsageSnapshot
@@ -120,6 +121,11 @@ const api = {
     list: (): Promise<Finding[]> => ipcRenderer.invoke('findings:list'),
     onChanged: (callback: (findings: Finding[]) => void): (() => void) =>
       subscribe('findings:changed', callback)
+  },
+  scope: {
+    // Read-only view of the engagement's authorized scope, for the URL-bar
+    // badge and status-bar summary. Static per run (scope.json is read at boot).
+    get: (): Promise<ScopeStatus> => ipcRenderer.invoke('scope:get')
   },
   crawler: {
     // Deterministic scope-aware spider. Drives the gated replayer; no new egress.

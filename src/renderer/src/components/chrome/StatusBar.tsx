@@ -1,5 +1,6 @@
 import type { TurnUsage, UsageSnapshot } from '../../../../shared/contracts'
-import { proxy, scope } from '../../mock/data'
+import { useScope } from '../../hooks/useScope'
+import { proxy } from '../../mock/data'
 
 type StatusBarProps = {
   requests: number
@@ -55,6 +56,7 @@ function LatencyClock(): JSX.Element {
 }
 
 function StatusBar({ requests, usage, onOpenUsage }: StatusBarProps): JSX.Element {
+  const scope = useScope()
   const active = usage.activeTurns.some((turn) => !isAmbient(turn))
   const turn = latestAgentTurn(usage)
 
