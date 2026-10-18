@@ -30,6 +30,7 @@
     "@electron-toolkit/preload": "^3.0.1",
     "@electron-toolkit/utils": "^3.0.0",
     "@modelcontextprotocol/sdk": "^1.32.1",
+    "node-sqlite3-wasm": "^0.8.61",
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1"
   },

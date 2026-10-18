@@ -67,6 +67,7 @@ import { startMcpHttpServer, type McpHttpServer } from './mcp/server'
 import { WebContentsCdpDriver, type CdpDriver, type CookieRecord } from './mcp/cdp'
 import { ScopeChecker, type ScopeEnforcer } from './mcp/scope'
 import type { FindingSink, HistoryReader, NetworkReader, ToolContext, TraceStore } from './mcp/tool'
+import { loadScopeConfig } from './engagement'
 import { createFindingsStore, type FindingsStore } from './findings'
 
 const HOST = '127.0.0.1'
@@ -497,11 +498,11 @@ class DomSummaryWatcher {
   }
 }
 
-// In-memory stand-ins for traces/history (ARCHITECTURE §6.4) — B's real
-// SQLite-backed store doesn't exist yet, so nothing here survives a restart.
+// In-memory stand-ins for traces/history (ARCHITECTURE §6.4) — the real store
+// only backs findings so far, so traces/history don't survive a restart.
 // Findings are the exception: they live in createFindingsStore, which persists
-// to userData (and stays observable, so the renderer's panel reflects recorded
-// findings live). (Same stopgap pattern as smoke.ts's InMemoryAuditLogger.)
+// to a SQLite DB (and stays observable, so the renderer's panel reflects
+// recorded findings live). (Same stopgap pattern as smoke.ts's InMemoryAuditLogger.)
 function createInMemorySinks(findingsStore: FindingsStore): { traces: TraceStore; findings: FindingSink; history: HistoryReader } {
   let traceSeq = 0
   return {
@@ -599,10 +600,13 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
   const cdp = new ActiveTabCdpDriver((wc) => wc.id === win.webContents.id)
   const scope = new ActiveTabScope(() => cdp.pageContext()?.url ?? null)
   const networkReader = new ActiveTabNetworkReader(getNetwork)
-  // Findings persist to userData so a recorded finding survives a restart;
+  // Findings persist to a SQLite DB under userData so they survive a restart;
   // record_finding also broadcasts to the renderer's panel. Registered here so
   // the store owns its IPC handler + cleanup.
-  const findingsStore = createFindingsStore(win, join(app.getPath('userData'), 'findings.json'))
+  const findingsStore = createFindingsStore(win, {
+    dbPath: join(app.getPath('userData'), 'reconix.db'),
+    engagementId: loadScopeConfig()?.engagementId ?? null
+  })
 
   // Cost/latency meter. Fed by the connector's persist (all sessions, incl.
   // subagents + the ambient DOM parser) and onAgentEvent (orchestrator turn

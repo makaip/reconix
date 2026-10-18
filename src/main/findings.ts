@@ -1,12 +1,14 @@
 // Findings store (ARCHITECTURE §6.4: findings(id, engagement_id, schema_json,
-// evidence_ref, status, ts)). The real SQLite-backed store doesn't exist yet;
-// this is a JSON-file stand-in that keeps the same observable contract — record
-// appends, the renderer's Findings panel updates live over `findings:changed` —
-// plus one thing the in-memory version couldn't do: rows survive a restart.
-// Lives outside copilot.ts so the MCP sink and the IPC surface share one source
-// of truth instead of a closure-private array.
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+// evidence_ref, status, ts)). Backed by a real SQLite database via
+// node-sqlite3-wasm — a WebAssembly build of SQLite, so it persists to a real
+// file without a native module to recompile per platform (this repo deliberately
+// ships with none; see electron-builder.yml). Same observable contract as before:
+// record appends, the renderer's Findings panel updates live over
+// `findings:changed`. Lives outside copilot.ts so the MCP sink and the IPC
+// surface share one source of truth instead of a closure-private array.
+import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
+import { Database } from 'node-sqlite3-wasm'
 import { ipcMain, type BrowserWindow } from 'electron'
 import type { Finding, FindingSeverity } from '../shared/findings'
 import type { FindingSink } from './mcp/tool'
@@ -27,6 +29,13 @@ export interface FindingsStore {
   /** Renderer-facing summary rows. */
   summary(): Finding[]
   close(): void
+}
+
+export interface FindingsStoreOptions {
+  /** SQLite file to persist to. Omit for an in-memory DB (unit tests). */
+  dbPath?: string
+  /** Engagement these findings belong to; null when no scope is loaded. */
+  engagementId?: string | null
 }
 
 const SEVERITIES: readonly FindingSeverity[] = ['critical', 'high', 'medium', 'low', 'info']
@@ -65,69 +74,71 @@ function idSeq(id: string): number {
   return match ? Number(match[1]) : 0
 }
 
-/** Loose structural check — a persisted row is untrusted input (the file can be
- *  hand-edited or truncated), so only rows we can actually render are kept. */
-function isStoredFinding(value: unknown): value is StoredFinding {
-  if (typeof value !== 'object' || value === null) return false
-  const r = value as Record<string, unknown>
-  return typeof r.id === 'string' && typeof r.evidenceRef === 'string' && typeof r.ts === 'number'
-}
-
-/** Best-effort restore. A missing file is the normal first run; a corrupt one is
- *  logged and treated as empty so a bad file never blocks startup (the next
- *  record rewrites it). */
-function readStoredFindings(filePath: string): StoredFinding[] {
-  if (!existsSync(filePath)) return []
+/** schema_json is round-tripped through the agent's opaque schema; a row we
+ *  can't parse degrades to an empty object rather than failing the whole read. */
+function parseSchema(json: unknown): unknown {
   try {
-    const parsed: unknown = JSON.parse(readFileSync(filePath, 'utf8'))
-    return Array.isArray(parsed) ? parsed.filter(isStoredFinding) : []
-  } catch (error) {
-    console.error(`Ignoring unreadable findings file at ${filePath}:`, error)
-    return []
+    return JSON.parse(String(json))
+  } catch {
+    return {}
   }
 }
 
-/**
- * @param filePath Where rows persist. Omit for a purely in-memory store (unit
- *   tests exercise the IPC/broadcast path without touching disk).
- */
-export function createFindingsStore(win: BrowserWindow, filePath?: string): FindingsStore {
-  const rows: StoredFinding[] = []
+function toStored(row: Record<string, unknown>): StoredFinding {
+  return {
+    id: String(row.id),
+    schema: parseSchema(row.schema_json),
+    evidenceRef: typeof row.evidence_ref === 'string' ? row.evidence_ref : '',
+    ts: Number(row.ts) || 0
+  }
+}
+
+const SCHEMA = `
+  CREATE TABLE IF NOT EXISTS findings (
+    id            TEXT PRIMARY KEY,
+    engagement_id TEXT,
+    schema_json   TEXT NOT NULL,
+    evidence_ref  TEXT NOT NULL,
+    status        TEXT NOT NULL DEFAULT 'open',
+    ts            INTEGER NOT NULL
+  )
+`
+
+export function createFindingsStore(
+  win: BrowserWindow,
+  options: FindingsStoreOptions = {}
+): FindingsStore {
+  const { dbPath, engagementId = null } = options
+  if (dbPath) mkdirSync(dirname(dbPath), { recursive: true })
+  // ':memory:' for tests — same code path, no file left behind.
+  const db = new Database(dbPath ?? ':memory:')
+  db.exec(SCHEMA)
+
+  // Restore the id sequence so a restart continues it instead of colliding with
+  // an existing PRIMARY KEY.
   let seq = 0
-
-  // Restore before anything can record, so a restart continues the id sequence
-  // instead of overwriting finding_1.
-  for (const row of filePath ? readStoredFindings(filePath) : []) {
-    rows.push(row)
-    seq = Math.max(seq, idSeq(row.id))
+  for (const row of db.all('SELECT id FROM findings')) {
+    seq = Math.max(seq, idSeq(String((row as Record<string, unknown>).id)))
   }
 
-  // Findings are low-volume and only written when one is recorded, so a sync
-  // atomic swap (temp + rename) is simpler than a write queue and can't leave a
-  // half-written file behind if the app dies mid-write.
-  const persist = (): void => {
-    if (!filePath) return
-    try {
-      mkdirSync(dirname(filePath), { recursive: true })
-      const tmp = `${filePath}.tmp`
-      writeFileSync(tmp, JSON.stringify(rows))
-      renameSync(tmp, filePath)
-    } catch (error) {
-      console.error('Failed to persist findings:', error)
-    }
-  }
+  const readAll = (): StoredFinding[] =>
+    db
+      .all('SELECT id, schema_json, evidence_ref, ts FROM findings ORDER BY rowid')
+      .map((row) => toStored(row as Record<string, unknown>))
 
   const broadcast = (): void => {
     if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
-      win.webContents.send('findings:changed', summarize(rows))
+      win.webContents.send('findings:changed', summarize(readAll()))
     }
   }
 
   const sink: FindingSink = {
     record: async (schema, evidenceRef) => {
       const id = `finding_${++seq}`
-      rows.push({ id, schema, evidenceRef, ts: Date.now() })
-      persist()
+      db.run(
+        'INSERT INTO findings (id, engagement_id, schema_json, evidence_ref, ts) VALUES (?, ?, ?, ?, ?)',
+        [id, engagementId, JSON.stringify(schema ?? null), evidenceRef, Date.now()]
+      )
       broadcast()
       return id
     }
@@ -135,13 +146,16 @@ export function createFindingsStore(win: BrowserWindow, filePath?: string): Find
 
   ipcMain.removeHandler('findings:list')
   ipcMain.handle('findings:list', (event) =>
-    event.sender === win.webContents ? summarize(rows) : []
+    event.sender === win.webContents ? summarize(readAll()) : []
   )
 
+  // Called from stop() and again when the window closes; both paths land here,
+  // so guard the close (node-sqlite3-wasm leaks if a Database is never closed).
   const close = (): void => {
     ipcMain.removeHandler('findings:list')
+    if (db.isOpen) db.close()
   }
   win.on('closed', close)
 
-  return { sink, list: () => [...rows], summary: () => summarize(rows), close }
+  return { sink, list: readAll, summary: () => summarize(readAll()), close }
 }

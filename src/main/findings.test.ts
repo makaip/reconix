@@ -1,7 +1,8 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { Database } from 'node-sqlite3-wasm'
 import type { BrowserWindow } from 'electron'
 
 // ipcMain.handle/removeHandler fire at store construction; capture handlers so
@@ -73,36 +74,47 @@ describe('createFindingsStore', () => {
 })
 
 describe('createFindingsStore persistence', () => {
-  const tempFile = (): string => join(mkdtempSync(join(tmpdir(), 'reconix-findings-')), 'findings.json')
+  const tempFile = (): string => join(mkdtempSync(join(tmpdir(), 'reconix-findings-')), 'reconix.db')
 
   it('restores persisted rows and continues the id sequence across restarts', async () => {
     const file = tempFile()
-    const first = createFindingsStore(makeWin(), file)
+    const first = createFindingsStore(makeWin(), { dbPath: file })
     await first.sink.record({ title: 'Reflected XSS', severity: 'high' }, 'trace_1')
+    first.close()
 
-    const second = createFindingsStore(makeWin(), file)
+    const second = createFindingsStore(makeWin(), { dbPath: file })
     expect(second.summary()).toEqual([
       { id: 'finding_1', title: 'Reflected XSS', severity: 'high' }
     ])
     expect(second.list()).toMatchObject([{ evidenceRef: 'trace_1' }])
 
-    // seq was recovered, so the next id doesn't clobber the restored one
+    // seq was recovered, so the next id doesn't collide with the restored one
     expect(await second.sink.record({ title: 'SSRF', severity: 'medium' }, 'trace_2')).toBe(
       'finding_2'
     )
+    second.close()
   })
 
-  it('starts empty when the persisted file is malformed', () => {
-    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+  it('stamps the engagement id and default status from the §6.4 schema', async () => {
     const file = tempFile()
-    writeFileSync(file, '{ not json')
+    const store = createFindingsStore(makeWin(), { dbPath: file, engagementId: 'eng_42' })
+    await store.sink.record({ title: 'x', severity: 'low' }, 't')
+    store.close()
 
-    expect(createFindingsStore(makeWin(), file).summary()).toEqual([])
+    const db = new Database(file)
+    const row = db.get('SELECT engagement_id, status FROM findings') as {
+      engagement_id: string
+      status: string
+    }
+    expect(row.engagement_id).toBe('eng_42')
+    expect(row.status).toBe('open')
+    db.close()
   })
 
-  it('persists nothing when no path is given', async () => {
+  it('runs in memory (no file) when no dbPath is given', async () => {
     const store = createFindingsStore(makeWin())
     await store.sink.record({ title: 'ephemeral', severity: 'low' }, 't')
-    expect(store.summary()).toHaveLength(1) // present in memory, just never written
+    expect(store.summary()).toHaveLength(1)
+    store.close()
   })
 })
