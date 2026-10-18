@@ -18,7 +18,7 @@
       "models": {
         "orchestrator-model": {
           "name": "Qwen 2.5 14B AWQ (orchestrator)",
-          "limit": { "context": 20480, "output": 4096 }
+          "limit": { "context": 32768, "output": 4096 }
         }
       }
     },
