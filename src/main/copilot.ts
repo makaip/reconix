@@ -46,7 +46,7 @@ import { app, ipcMain } from 'electron'
 import type { AgentEvent, ApprovalDecision, EngineStatus, Policy, ServerStatus } from '../shared/contracts'
 import type { CapturedRequest } from '../shared/tabs'
 import type { NetworkCapture } from './network'
-import { createOpenCodeConnector, type OpenCodeConnector } from './opencode'
+import { createOpenCodeConnector, mergeConfig, type JsonObject, type OpenCodeConnector } from './opencode'
 import { parseModel, type RawEvent } from './opencode/transport'
 import { buildMcpServer } from './mcp'
 import { InMemoryAuditLogger } from './mcp/audit'
@@ -437,13 +437,28 @@ function openCodeGlobalConfigDir(): string {
 /** Copies this repo's opencode.json + .opencode/agents/*.md into OpenCode's
  *  global config dir, so Reconix's agents/mcp entry apply no matter what
  *  directory `opencode serve` is pointed at. Reconix's repo copies stay the
- *  versioned source of truth — this is a one-way sync, never the reverse. */
+ *  versioned source of truth — this is a one-way sync, never the reverse.
+ *
+ *  The global config is MERGED, not overwritten: Reconix's keys win, but keys
+ *  the user set that Reconix doesn't manage (notably `plugins`) are preserved.
+ *  A wholesale overwrite silently disabled the user's personal plugins — e.g.
+ *  dropping oh-my-opencode-slim removed its `orchestrator` agent from the UI
+ *  with no error and nothing pointing at Reconix as the cause. */
 async function syncGlobalOpenCodeConfig(): Promise<void> {
   const repoRoot = app.getAppPath()
   const globalDir = openCodeGlobalConfigDir()
 
-  const opencodeJson = await readFile(join(repoRoot, 'opencode.json'), 'utf8')
-  await writeFile(join(globalDir, 'opencode.json'), opencodeJson)
+  const repoConfig = JSON.parse(await readFile(join(repoRoot, 'opencode.json'), 'utf8')) as JsonObject
+  const globalConfigPath = join(globalDir, 'opencode.json')
+  let existingConfig: JsonObject | undefined
+  try {
+    existingConfig = JSON.parse(await readFile(globalConfigPath, 'utf8')) as JsonObject
+  } catch {
+    // No existing global config (or it isn't valid JSON) — write the repo
+    // config as-is rather than failing startup on a malformed user file.
+    existingConfig = undefined
+  }
+  await writeFile(globalConfigPath, `${JSON.stringify(mergeConfig(repoConfig, existingConfig), null, 2)}\n`)
 
   const agentsDir = join(repoRoot, '.opencode', 'agents')
   const globalAgentsDir = join(globalDir, 'agents')
