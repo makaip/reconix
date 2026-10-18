@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type DragEvent } from 'react'
 import chat from '../../assets/icons/chat.svg'
 import close from '../../assets/icons/close.svg'
+import clock from '../../assets/icons/clock.svg'
+import plus from '../../assets/icons/plus.svg'
+import tools from '../../assets/icons/tools.svg'
 import type { Copilot } from '../../hooks/useCopilot'
 import type { TabInfo } from '../../../../shared/tabs'
 import {
@@ -12,7 +15,6 @@ import {
   type RequestDragItem,
   type ResourceDragItem
 } from '../../lib/dragTypes'
-import { engagement } from '../../mock/data'
 import Composer from './Composer'
 import DropZone from './DropZone'
 import Message from './Message'
@@ -120,35 +122,53 @@ function CopilotPanel({
       <header className="copilot__header">
         <img src={chat} width={16} height={16} alt="" />
         <h2 className="copilot__title">Copilot</h2>
-        <span className="copilot__engagement">{engagement}</span>
         {browserActive && (
           <span className="copilot__browser-state" title={browserAction ?? undefined}>
             <span aria-hidden="true" /> Browser active
           </span>
         )}
+        <span className="copilot__header-spacer" />
         <button
           type="button"
-          className="copilot__header-action"
+          className="icon-button"
+          aria-label="Model functions"
+          title="Model functions"
+          aria-expanded={toolsOpen}
+          onClick={() => {
+            setToolsOpen((open) => !open)
+            setHistoryOpen(false)
+          }}
+        >
+          <img src={tools} width={15} height={15} alt="" />
+        </button>
+        <button
+          type="button"
+          className="icon-button"
           aria-label="Chat history"
+          title="Chat history"
           aria-expanded={historyOpen}
           onClick={() => {
             setHistoryOpen((open) => !open)
             setToolsOpen(false)
           }}
         >
-          History
+          <img src={clock} width={15} height={15} alt="" />
         </button>
         <button
           type="button"
-          className="copilot__header-action"
+          className="icon-button"
+          aria-label="New chat"
+          title="New chat"
           onClick={() => {
             stickToBottom.current = true
             newChat()
+            setHistoryOpen(false)
+            setToolsOpen(false)
           }}
         >
-          New
+          <img src={plus} width={15} height={15} alt="" />
         </button>
-        <button type="button" className="icon-button" aria-label="Close Copilot" onClick={onClose}>
+        <button type="button" className="icon-button" aria-label="Close Copilot" title="Close" onClick={onClose}>
           <img src={close} width={14} height={14} alt="" />
         </button>
       </header>
@@ -157,7 +177,15 @@ function CopilotPanel({
         <section className="chat-history" aria-label="Previous chats">
           <div className="chat-history__heading">
             <span>Previous chats</span>
-            <button type="button" onClick={() => setHistoryOpen(false)}>Done</button>
+            <button
+              type="button"
+              className="icon-button chat-history__close"
+              aria-label="Close history"
+              title="Close"
+              onClick={() => setHistoryOpen(false)}
+            >
+              <img src={close} width={14} height={14} alt="" />
+            </button>
           </div>
           {history.length === 0 ? (
             <p className="chat-history__empty">New chats will be saved here automatically.</p>
@@ -186,15 +214,25 @@ function CopilotPanel({
       {toolsOpen && (
         <section className="function-access" aria-label="Model function access">
           <div className="function-access__heading">
-            <div>
-              <strong>Model functions</strong>
-              <span>Choose which Reconix capabilities the model can call.</span>
+            <strong>Model functions</strong>
+            {toolAccess.length > 0 && (
+              <span className="function-access__count">
+                {toolAccess.filter((tool) => tool.enabled).length}/{toolAccess.length}
+              </span>
+            )}
+            <div className="function-access__heading-actions">
+              <button type="button" onClick={() => setAllToolsEnabled(true)}>All</button>
+              <button type="button" onClick={() => setAllToolsEnabled(false)}>None</button>
+              <button
+                type="button"
+                className="icon-button function-access__close"
+                aria-label="Close model functions"
+                title="Close"
+                onClick={() => setToolsOpen(false)}
+              >
+                <img src={close} width={14} height={14} alt="" />
+              </button>
             </div>
-            <button type="button" onClick={() => setToolsOpen(false)}>Done</button>
-          </div>
-          <div className="function-access__actions">
-            <button type="button" onClick={() => setAllToolsEnabled(true)}>Enable all</button>
-            <button type="button" onClick={() => setAllToolsEnabled(false)}>Disable all</button>
           </div>
           <div className="function-access__list">
             {toolAccess.length === 0 ? (
@@ -228,22 +266,6 @@ function CopilotPanel({
         <div className="chat-history__viewing">
           <span>Viewing: {viewingHistory.title}</span>
           <button type="button" onClick={closeConversation}>Back to current</button>
-        </div>
-      )}
-
-      {!viewingHistory && (
-        <div className={`copilot-target${activeTab ? '' : ' copilot-target--empty'}`} title={activeTab?.url}>
-          <span className="copilot-target__dot" aria-hidden="true" />
-          <span className="copilot-target__copy">
-            <span className="copilot-target__eyebrow">Active target tab</span>
-            <strong>{targetTitle}</strong>
-          </span>
-          {targetHost && <span className="copilot-target__host">{targetHost}</span>}
-          {viewingDifferentTab && (
-            <button type="button" className="copilot-target__retarget" onClick={onUseViewedTab}>
-              Use current tab
-            </button>
-          )}
         </div>
       )}
 
@@ -294,33 +316,19 @@ function CopilotPanel({
       {viewingHistory ? (
         <div className="chat-history__readonly">Saved conversation · read only</div>
       ) : (
-        <>
-          <div className="function-access-trigger">
-            <button
-              type="button"
-              aria-expanded={toolsOpen}
-              onClick={() => {
-                setToolsOpen((open) => !open)
-                setHistoryOpen(false)
-              }}
-            >
-              <span>Model functions</span>
-              <span className={toolAccess.length === 0 ? 'function-access-trigger__unavailable' : ''}>
-                {toolAccess.length === 0
-                  ? 'Unavailable'
-                  : `${toolAccess.filter((tool) => tool.enabled).length} of ${toolAccess.length} enabled`}
-              </span>
-            </button>
-          </div>
-          <Composer
-            attachments={attachments}
-            onDetach={detach}
-            onSend={sendToActiveTab}
-            requestCount={requestCount}
-            busy={busy}
-            onStop={suspend}
-          />
-        </>
+        <Composer
+          attachments={attachments}
+          onDetach={detach}
+          onSend={sendToActiveTab}
+          requestCount={requestCount}
+          busy={busy}
+          onStop={suspend}
+          targetTitle={targetTitle}
+          targetHost={targetHost}
+          targetUrl={activeTab?.url}
+          viewingDifferentTab={viewingDifferentTab}
+          onUseViewedTab={onUseViewedTab}
+        />
       )}
     </aside>
   )
