@@ -28,4 +28,10 @@ describe('Qwen inline thinking', () => {
       { reasoning: true, text: 'child' }, { reasoning: false, text: 'done' }
     ])
   })
+
+  it('keeps a completed answer visible when the deployed variant omits the closing tag', () => {
+    const parser = new ThinkingStream()
+    parser.push('m', '<think>\n\nThe server received the file.', 's')
+    expect(parser.finish('s', true)).toEqual([{ message: 'm', reasoning: false, text: '\n\nThe server received the file.' }])
+  })
 })

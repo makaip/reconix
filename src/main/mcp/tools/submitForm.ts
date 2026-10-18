@@ -21,7 +21,8 @@ export const submitForm = defineTool<SubmitInput, unknown>({
   outputSchema: {
     type: 'object', properties: {
       ok: { type: 'boolean' }, status: { type: 'string', enum: ['submission_requested', 'handled_by_page'] },
-      action: { type: 'string' }, method: { type: 'string' }
+      action: { type: 'string' }, method: { type: 'string' },
+      serverResponseVerified: { type: 'boolean', const: false }
     }
   },
   parse: (raw) => {
@@ -74,7 +75,7 @@ export const submitForm = defineTool<SubmitInput, unknown>({
       try { proto.requestSubmit.call(form,...(button?[button]:[])); }
       finally { window.removeEventListener('submit',observe,{capture:true}); }
       if(!event) return {error:'No submit event was observed. Check form validation and page state before retrying.'};
-      return {ok:true,status:event.defaultPrevented?'handled_by_page':'submission_requested',action:target.action,method:target.method};
+      return {ok:true,status:event.defaultPrevented?'handled_by_page':'submission_requested',action:target.action,method:target.method,serverResponseVerified:false};
     `)
   }
 })

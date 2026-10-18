@@ -1,13 +1,13 @@
 /** Qwen can return inline thinking when the remote server has no reasoning
  * parser. Split it locally without another model call or a server restart. */
 export class ThinkingStream {
-  private states = new Map<string, { session?: string; mode: 'start' | 'reasoning' | 'text'; pending: string }>()
+  private states = new Map<string, { session?: string; mode: 'start' | 'reasoning' | 'text'; pending: string; reasoningText: string }>()
 
   push(message: string, text: string, session?: string): { reasoning: boolean; text: string }[] {
     let state = this.states.get(message)
     if (!state) {
       if (this.states.size >= 64) this.states.delete(this.states.keys().next().value!)
-      state = { session, mode: 'start', pending: '' }
+      state = { session, mode: 'start', pending: '', reasoningText: '' }
       this.states.set(message, state)
     }
     state.pending += text
@@ -31,6 +31,7 @@ export class ThinkingStream {
         while (keep && !'</think>'.startsWith(state.pending.slice(-keep))) keep--
         const ready = state.pending.slice(0, state.pending.length - keep)
         if (ready) parts.push({ reasoning: true, text: ready })
+        state.reasoningText = (state.reasoningText + ready).slice(-8192)
         state.pending = state.pending.slice(state.pending.length - keep)
         return parts
       }
@@ -40,11 +41,16 @@ export class ThinkingStream {
     return parts
   }
 
-  finish(session?: string): { message: string; reasoning: boolean; text: string }[] {
+  finish(session?: string, completed = false): { message: string; reasoning: boolean; text: string }[] {
     const tail: { message: string; reasoning: boolean; text: string }[] = []
     for (const [message, state] of this.states) {
       if (state.session !== session) continue
-      if (state.pending) tail.push({ message, reasoning: state.mode === 'reasoning', text: state.pending })
+      if (completed && state.mode === 'reasoning' && (state.reasoningText || state.pending)) {
+        // The deployed Qwen variant sometimes ends a final answer with an
+        // unmatched opening tag. Preserve its output as visible text rather
+        // than leaving the completed turn with only a collapsed reasoning row.
+        tail.push({ message, reasoning: false, text: state.reasoningText + state.pending })
+      } else if (state.pending) tail.push({ message, reasoning: state.mode === 'reasoning', text: state.pending })
       this.states.delete(message)
     }
     return tail

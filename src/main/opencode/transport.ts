@@ -189,7 +189,7 @@ export class HttpOpenCodeTransport implements OpenCodeTransport {
               continue
             }
             if (raw.type.startsWith('session.execution.')) {
-              for (const part of this.thinking.finish(session)) {
+              for (const part of this.thinking.finish(session, raw.type === 'session.execution.succeeded')) {
                 yield { type: part.reasoning ? 'session.reasoning.delta' : 'session.text.delta', data: { sessionID: session, assistantMessageID: part.message, delta: part.text } }
               }
             }
