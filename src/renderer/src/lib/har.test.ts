@@ -91,6 +91,17 @@ describe('parsedHarToCaptured', () => {
     expect(out.map((r) => r.tabId)).toEqual([3, 3])
   })
 
+  it('offsets ids by startIndex so appended imports stay unique', () => {
+    const parsed = fromHar(toHar([req({ url: 'https://app.test/1' }), req({ url: 'https://app.test/2' })]))
+    const first = parsedHarToCaptured(parsed)
+    const second = parsedHarToCaptured(parsed, undefined, first.length)
+    const ids = [...first, ...second].map((r) => r.id)
+    expect(ids).toEqual(['har-0', 'har-1', 'har-2', 'har-3'])
+    expect(new Set(ids).size).toBe(ids.length)
+    // tabIndex still defaults when startIndex is supplied positionally
+    expect(second.map((r) => r.tabId)).toEqual([-1, -1])
+  })
+
   it('returns [] for no entries and tolerates missing status/duration/headers', () => {
     expect(parsedHarToCaptured([])).toEqual([])
     const out = parsedHarToCaptured([

@@ -97,13 +97,19 @@ export function toHar(requests: CapturedRequest[]): Har {
 
 /**
  * Maps parsed HAR entries back into CapturedRequest-shaped rows for the network
- * panel's local display list. Imported rows get a positional `har-<i>` id,
- * resourceType 'imported', and a tabId of `tabIndex` (default -1 = no live tab).
- * Response headers are re-widened to the string[] form CapturedRequest uses.
+ * panel's local display list. Imported rows get a positional `har-<startIndex + i>`
+ * id (pass the current import count as `startIndex` when appending a second file so
+ * ids stay unique), resourceType 'imported', and a tabId of `tabIndex`
+ * (default -1 = no live tab). Response headers are re-widened to the string[] form
+ * CapturedRequest uses.
  */
-export function parsedHarToCaptured(parsed: ParsedHarEntry[], tabIndex = -1): CapturedRequest[] {
+export function parsedHarToCaptured(
+  parsed: ParsedHarEntry[],
+  tabIndex = -1,
+  startIndex = 0
+): CapturedRequest[] {
   return parsed.map((entry, i) => ({
-    id: `har-${i}`,
+    id: `har-${startIndex + i}`,
     tabId: tabIndex,
     method: entry.method,
     url: entry.url,

@@ -181,7 +181,12 @@ function DevToolsPanel({
         </div>
       )}
       {devtoolsTab === 'network' && (
-        <NetworkPanel requests={networkRequests} onDragStart={onDragStart} onDragEnd={onDragEnd} />
+        <NetworkPanel
+          requests={networkRequests}
+          tabId={activeTabId}
+          onDragStart={onDragStart}
+          onDragEnd={onDragEnd}
+        />
       )}
       {devtoolsTab === 'websocket' && <WebSocketPanel connections={websockets} />}
       {devtoolsTab === 'crawler' && <CrawlerPanel api={crawler} defaultUrl={targetUrl} />}

@@ -42,7 +42,7 @@ import { readFileSync } from 'node:fs'
 import { access, mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import { setQuestionSender } from './questionBridge'
 import { homedir } from 'node:os'
-import { basename, join } from 'node:path'
+import { isAbsolute, join, resolve } from 'node:path'
 import type { BrowserWindow, WebContents } from 'electron'
 import { app, ipcMain } from 'electron'
 import type {
@@ -599,20 +599,75 @@ async function syncGlobalOpenCodeConfig(): Promise<void> {
   // Discover an AGENTS.md at the repo root and hand it to OpenCode's engine as
   // project guidance. The global config lives in ~/.config/opencode, so the
   // entry has to be an absolute path — a bare `AGENTS.md` would resolve against
-  // that global dir and miss the file. Any `instructions` the repo
-  // opencode.json already declares is preserved (merged, deduped). Never fatal:
-  // a missing file just means there is nothing to add.
+  // that global dir and miss the file.
+  //
+  // Two things must survive this injection:
+  //  - the user's own global `instructions` list. mergeConfig() replaces arrays
+  //    wholesale (it does not union them), so if the global config already had
+  //    instructions they'd be silently dropped the moment we set ours. Carry
+  //    them over, ahead of ours, and dedupe.
+  //  - any `instructions` the repo opencode.json already declares.
+  // Dedup is by ABSOLUTE path, never basename: the global config may legitimately
+  // point at its own AGENTS.md (a *different* file), and basename equality would
+  // wrongly discard it. Relative entries resolve against whichever config
+  // declared them (repo entries vs repoRoot, global entries vs globalDir).
+  // Never fatal: a missing file just means there is nothing to add.
   try {
     const agentsMd = join(repoRoot, 'AGENTS.md')
     await access(agentsMd)
-    const declared = Array.isArray(repoConfig.instructions) ? repoConfig.instructions : []
-    const alreadyListed = declared.some(
-      (entry) =>
-        entry === agentsMd ||
-        entry === 'AGENTS.md' ||
-        (typeof entry === 'string' && basename(entry) === 'AGENTS.md')
-    )
-    if (!alreadyListed) repoConfig.instructions = [...declared, agentsMd]
+
+    const pathKey = (entry: string, base: string): string =>
+      resolve(isAbsolute(entry) ? entry : join(base, entry))
+    const agentsMdKey = pathKey(agentsMd, repoRoot)
+
+    const stringsOnly = (value: unknown[], label: string): string[] => {
+      const strings = value.filter((entry): entry is string => typeof entry === 'string')
+      if (strings.length !== value.length) {
+        console.warn(`[opencode] ignoring non-string entries in ${label}`)
+      }
+      return strings
+    }
+
+    let declared: string[]
+    if (Array.isArray(repoConfig.instructions)) {
+      declared = stringsOnly(repoConfig.instructions, 'repo instructions')
+    } else {
+      if (repoConfig.instructions !== undefined) {
+        console.warn(
+          '[opencode] repo opencode.json instructions is not an array; treating as empty:',
+          repoConfig.instructions
+        )
+      }
+      declared = []
+    }
+
+    // The user's global list — the thing mergeConfig would otherwise clobber.
+    const existingInstructions = existingConfig?.instructions
+    let carried: string[] = []
+    if (Array.isArray(existingInstructions)) {
+      carried = stringsOnly(existingInstructions, 'global instructions')
+    } else if (existingInstructions !== undefined) {
+      console.warn(
+        '[opencode] global opencode.json instructions is not an array; leaving it out of the merge:',
+        existingInstructions
+      )
+    }
+
+    // User's global entries first (so nothing of theirs is lost or demoted),
+    // then anything Reconix's repo config declares, then AGENTS.md itself.
+    const mergedInstructions: string[] = []
+    const seen = new Set<string>()
+    const push = (entry: string, base: string): void => {
+      const key = pathKey(entry, base)
+      if (seen.has(key)) return
+      seen.add(key)
+      mergedInstructions.push(entry)
+    }
+    for (const entry of carried) push(entry, globalDir)
+    for (const entry of declared) push(entry, repoRoot)
+    if (!seen.has(agentsMdKey)) mergedInstructions.push(agentsMd)
+
+    repoConfig.instructions = mergedInstructions
   } catch (err) {
     // ENOENT is the normal "no AGENTS.md here" case — only warn on the
     // unexpected (unreadable file, bad permissions).
@@ -649,7 +704,8 @@ async function resolveSandboxDir(): Promise<string> {
  *  connector's own `sessionId` is private (reading it would mean editing the
  *  connector, out of scope here), so read the id the event already carries —
  *  data.sessionID for streaming deltas, durable.aggregateID otherwise, the same
- *  fields usage.ts keys on. Returns null when the event is unlabelled. */
+ *  fields connector.ts:194-199 keys on. Returns null when the event is
+ *  unlabelled. */
 function rawEventSessionId(raw: RawEvent): string | null {
   const data = raw.data as Record<string, unknown> | undefined
   const durable = raw.durable as Record<string, unknown> | undefined
@@ -658,6 +714,12 @@ function rawEventSessionId(raw: RawEvent): string | null {
     typeof durable?.aggregateID === 'string' && durable.aggregateID.length > 0 ? durable.aggregateID : null
   return fromData ?? fromDurable
 }
+
+/** High-volume streaming events that are reconstructable from the durable
+ *  turn/message rows (and from the renderer transcript). They arrive per
+ *  token, so persisting them would turn every model delta into a SQLite write;
+ *  the audit log keeps the durable events and skips these. */
+const TRANSIENT_DELTA_EVENT_TYPES = new Set(['session.text.delta', 'session.reasoning.delta'])
 
 export function createCopilotBridge(win: BrowserWindow, getNetwork: () => NetworkCapture | undefined, getInterceptor?: () => { save(raw: unknown): InterceptRule | null; list(): InterceptRule[]; toggle(id: unknown, enabled: unknown): InterceptRule | null; remove(id: unknown): boolean } | undefined, getCrawler?: () => { start(raw: unknown): unknown; stop(): unknown; getState(): unknown } | undefined, getRepeater?: () => { list(): unknown; save(raw: unknown): unknown; remove(id: unknown): unknown; run(id: unknown): unknown; diff(raw: unknown): unknown } | undefined): CopilotBridge {
   setQuestionSender((payload) => { if (!win.isDestroyed()) win.webContents.send('copilot:question', payload) })
@@ -716,6 +778,20 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
     const match = /^re_(\d+)$/.exec(String((row as Record<string, unknown>).id))
     if (match) rawEventSeq = Math.max(rawEventSeq, Number(match[1]))
   }
+  // getEngagementId() hits engagementStore.currentId() → the DB, and the persist
+  // sink fires many times per turn. Resolve it at most once per turn: undefined
+  // means "not resolved yet", null is a real answer (no engagement loaded). The
+  // cache is dropped on turn end and on every new session, since a run can start
+  // or stop between turns.
+  let cachedEngagementId: string | null | undefined
+  const rawEventEngagementId = (): string | null => {
+    if (cachedEngagementId === undefined) cachedEngagementId = getEngagementId()
+    return cachedEngagementId
+  }
+  // Rate-limits the raw-event write failure warning to one line per burst: the
+  // streaming loop retries on the next event, so a broken store would otherwise
+  // log on every token. Cleared by the next successful write.
+  let rawEventWriteFailing = false
 
   // Cost/latency meter. Fed by the connector's persist (all sessions, incl.
   // subagents + the ambient DOM parser) and onAgentEvent (orchestrator turn
@@ -1110,6 +1186,10 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
                 responseStartedAt = null
               }
             }
+            // A turn boundary is when a run can start or stop, so drop the cached
+            // engagement id here (outside the latency guard: subagent/ambient
+            // turns end without a responseStartedAt window too).
+            if (ev.kind === 'turn.done' || ev.kind === 'error') cachedEngagementId = undefined
             usage.recordAgentEvent(ev)
             emitUsage(ev.kind === 'turn.done' || ev.kind === 'error')
             send('copilot:event', ev)
@@ -1122,6 +1202,10 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
           persist: (raw: RawEvent, _normalized: AgentEvent | null) => {
             usage.recordRaw(raw)
             emitUsage()
+            // Streaming deltas are reconstructable from the durable turn rows and
+            // arrive per token; persisting them would mean one SQLite write per
+            // delta for no audit value. Metering above still sees them.
+            if (TRANSIENT_DELTA_EVENT_TYPES.has(raw.type)) return
             // Write-through to the §6.4 store: append the raw event verbatim so
             // the stream has a durable audit record. Best-effort and non-fatal —
             // a store failure must never re-enter or stall the streaming loop
@@ -1129,10 +1213,14 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
             try {
               db.run(
                 'INSERT INTO raw_events (id, engagement_id, session_id, type, data_json, ts) VALUES (?, ?, ?, ?, ?, ?)',
-                [`re_${++rawEventSeq}`, getEngagementId(), rawEventSessionId(raw), raw.type, JSON.stringify(raw), Date.now()]
+                [`re_${++rawEventSeq}`, rawEventEngagementId(), rawEventSessionId(raw), raw.type, JSON.stringify(raw), Date.now()]
               )
+              rawEventWriteFailing = false // burst over — warn again if it recurs
             } catch (err) {
-              console.warn('[copilot:persist] raw event dropped', err)
+              if (!rawEventWriteFailing) {
+                rawEventWriteFailing = true
+                console.warn('[copilot:persist] raw event dropped (further drops until the next successful write are not logged)', err)
+              }
             }
           },
           onStatus: (status: ServerStatus) => send('copilot:status', status)
@@ -1140,6 +1228,7 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
       )
       const sessionId = await c.start()
       restrictionsInjected = false // fresh session — re-send restrictions on next message
+      cachedEngagementId = undefined // fresh session — re-resolve attribution lazily
       usage.registerSession(sessionId, 'orchestrator')
       connector = c
       return c
@@ -1187,6 +1276,7 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
     const c = await ensureConnector()
     const id = await c.newSession()
     restrictionsInjected = false // new chat is a new session — restrictions re-inject
+    cachedEngagementId = undefined // new session — attribution re-resolved lazily
     usage.registerSession(id, 'orchestrator')
     return id
   })

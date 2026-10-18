@@ -8,6 +8,8 @@ import ResizeHandle from '../chrome/ResizeHandle'
 
 type NetworkPanelProps = {
   requests: CapturedRequest[]
+  /** Active tab; changing it drops HAR-imported rows (they belong to the previous page). */
+  tabId?: number | null
   /** Fired when a request row starts/stops being dragged toward Copilot. */
   onDragStart: () => void
   onDragEnd: () => void
@@ -61,7 +63,7 @@ function flattenResponseHeaders(headers: Record<string, string[]> | undefined): 
 
 const EMPTY_QUERY: RequestQuery = {}
 
-function NetworkPanel({ requests, onDragStart, onDragEnd }: NetworkPanelProps): JSX.Element {
+function NetworkPanel({ requests, tabId, onDragStart, onDragEnd }: NetworkPanelProps): JSX.Element {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const detailResize = useResizable({
     axis: 'x',
@@ -75,6 +77,14 @@ function NetworkPanel({ requests, onDragStart, onDragEnd }: NetworkPanelProps): 
   // HAR-imported rows live only in this panel (never in the capture buffer).
   const [imported, setImported] = useState<CapturedRequest[]>([])
   const fileInputRef = useRef<HTMLInputElement>(null)
+
+  // Imported rows belong to the page they were loaded for: drop them when the tab changes.
+  const lastTabId = useRef(tabId)
+  useEffect(() => {
+    if (lastTabId.current === tabId) return
+    lastTabId.current = tabId
+    setImported([])
+  }, [tabId])
 
   const allRequests = useMemo(
     () => (imported.length === 0 ? requests : [...requests, ...imported]),
@@ -102,8 +112,10 @@ function NetworkPanel({ requests, onDragStart, onDragEnd }: NetworkPanelProps): 
     event.target.value = ''
     if (!file) return
     try {
-      const rows = parsedHarToCaptured(fromHar(JSON.parse(await file.text())))
-      if (rows.length > 0) setImported((prev) => [...prev, ...rows])
+      const entries = fromHar(JSON.parse(await file.text()))
+      if (entries.length === 0) return
+      // Offset ids by the current import count so a second file can't collide with the first.
+      setImported((prev) => [...prev, ...parsedHarToCaptured(entries, undefined, prev.length)])
     } catch {
       // Unreadable file or invalid JSON: nothing to show, leave the list unchanged.
     }
