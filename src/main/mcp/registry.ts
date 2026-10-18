@@ -8,6 +8,9 @@ import { invokeTool, type ToolCallResult } from './pipeline'
 
 export class ToolRegistry {
   private readonly tools = new Map<string, Tool>()
+  private readonly cache = new Map<string, { value: ToolCallResult; ts: number }>()
+  private readonly CACHEABLE = new Set(['get_page_info', 'get_dom_extract', 'get_cookies', 'get_headers'])
+  private readonly CACHE_TTL_MS = 30_000
 
   register(tool: Tool): void {
     if (this.tools.has(tool.name)) {
@@ -50,12 +53,25 @@ export class ToolRegistry {
   ): Promise<ToolCallResult> {
     const tool = this.tools.get(name)
     if (!tool) {
-      // An unknown name is not a passthrough — it is a hard reject.
       return {
         ok: false,
         error: { code: 'UNKNOWN_TOOL', message: `no such tool: ${name}`, retriable: false }
       }
     }
-    return invokeTool(tool, rawParams, ctx, audit)
+    const key = name + ':' + JSON.stringify(rawParams ?? {})
+    if (this.CACHEABLE.has(name)) {
+      const cached = this.cache.get(key)
+      if (cached && Date.now() - cached.ts < this.CACHE_TTL_MS) {
+        return cached.value
+      }
+    } else {
+      // Any state-changing call invalidates the read-only cache.
+      this.cache.clear()
+    }
+    const result = await invokeTool(tool, rawParams, ctx, audit)
+    if (this.CACHEABLE.has(name) && result.ok) {
+      this.cache.set(key, { value: result, ts: Date.now() })
+    }
+    return result
   }
 }
