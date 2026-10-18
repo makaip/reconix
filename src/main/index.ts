@@ -11,6 +11,7 @@ import { createWebSocketCapture } from './websocket'
 import { createCrawler } from './crawler'
 import { createReplay } from './replay'
 import { createRepeater } from './repeater'
+import { proxyStatus } from './runtime'
 import { createSessionManager } from './session'
 import { runSmoke } from './smoke'
 import { createTabManager } from './tabs'
@@ -229,6 +230,17 @@ function createWindow(): void {
   ipcMain.removeHandler('scope:get')
   ipcMain.handle('scope:get', (event) =>
     event.sender === mainWindow.webContents ? toScopeStatus(engagementScope) : null
+  )
+  // Proxy + engagement are the remaining status-bar facts. Neither is faked: the
+  // proxy address comes from config (or is null), and the engagement id is the
+  // one the loaded scope.json authorizes (or null).
+  ipcMain.removeHandler('proxy:get-status')
+  ipcMain.handle('proxy:get-status', (event) =>
+    event.sender === mainWindow.webContents ? proxyStatus() : null
+  )
+  ipcMain.removeHandler('engagement:get')
+  ipcMain.handle('engagement:get', (event) =>
+    event.sender === mainWindow.webContents ? (engagementScope?.engagementId ?? null) : null
   )
   // Resolve the URL at authorization time: a WebContents can navigate without
   // changing its tab id, so a URL captured by onActiveChanged would be stale.

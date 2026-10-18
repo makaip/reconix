@@ -1,6 +1,6 @@
 import type { TurnUsage, UsageSnapshot } from '../../../../shared/contracts'
+import { useRuntimeStatus } from '../../hooks/useRuntimeStatus'
 import { useScope } from '../../hooks/useScope'
-import { proxy } from '../../mock/data'
 
 type StatusBarProps = {
   requests: number
@@ -57,13 +57,14 @@ function LatencyClock(): JSX.Element {
 
 function StatusBar({ requests, usage, onOpenUsage }: StatusBarProps): JSX.Element {
   const scope = useScope()
+  const { proxy, engagement } = useRuntimeStatus()
   const active = usage.activeTurns.some((turn) => !isAmbient(turn))
   const turn = latestAgentTurn(usage)
 
   return (
     <footer className="statusbar">
-      {/* proxy and scope are placeholders until those features exist */}
-      <span className="statusbar__item">Proxy {proxy.address}</span>
+      <span className="statusbar__item">Proxy: {proxy.address ?? 'none'}</span>
+      {engagement && <span className="statusbar__item">Engagement: {engagement}</span>}
       <span className="statusbar__item">Scope: {scope.summary}</span>
       <span className="statusbar__item">Requests: {requests}</span>
       <span className="statusbar__spacer" />

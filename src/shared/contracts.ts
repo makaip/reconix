@@ -1,7 +1,7 @@
 // Shared main-process contracts. Mirrors ARCHITECTURE.md §6 and API.md §1/§3.
 // Changing a type here is a §6 contract change — version it (CONTRACTS_VERSION).
 
-export const CONTRACTS_VERSION = '0.5.0'
+export const CONTRACTS_VERSION = '0.6.0'
 
 // ─── Risk tiers (API.md §3 / ARCHITECTURE §5.C) ───────────────────────────────
 // R read-only (auto) · P page-mutating, sandbox-only (auto)
@@ -52,6 +52,14 @@ export function hostInScope(hostname: string, patterns: readonly string[]): bool
     }
     return hostname === pattern
   })
+}
+
+// ─── Egress proxy status (renderer-facing) ────────────────────────────────────
+// The container egress proxy (5.D) isn't managed by the app, so there is no
+// runtime health surface to report — only the configured address, if any.
+export interface ProxyStatus {
+  /** host:port the agent's egress is routed through; null when unconfigured. */
+  address: string | null
 }
 
 // ─── IDs (Main-issued, correlate IPC ↔ store rows, API.md §4) ─────────────────
