@@ -11,6 +11,9 @@ import { Database } from 'node-sqlite3-wasm'
 // tool_calls carries the intent row (params/target/tier) and the outcome fills
 // the same row once execution settles: ok/result_ref/error/finished_ts. Rows are
 // never deleted, so the log stays a faithful, append-only-by-row record.
+//
+// traces follows §6.4: the row holds a `path` to the bytes on disk, not the bytes
+// themselves, so a multi-MB screenshot never bloats the database.
 const SCHEMA = `
   CREATE TABLE IF NOT EXISTS findings (
     id            TEXT PRIMARY KEY,
@@ -21,10 +24,10 @@ const SCHEMA = `
     ts            INTEGER NOT NULL
   );
   CREATE TABLE IF NOT EXISTS traces (
-    ref           TEXT PRIMARY KEY,
+    id            TEXT PRIMARY KEY,
     engagement_id TEXT,
     kind          TEXT NOT NULL,
-    data          BLOB NOT NULL,
+    path          TEXT NOT NULL,
     ts            INTEGER NOT NULL
   );
   CREATE TABLE IF NOT EXISTS tool_calls (
@@ -42,12 +45,22 @@ const SCHEMA = `
   );
 `
 
+/** Pre-release shape change: `traces` used to hold bytes inline (a `data` BLOB);
+ *  it now points at a file on disk (a `path`). Dev DBs from that window are
+ *  incompatible, and traces are regenerable evidence, so drop and rebuild. */
+function migrate(db: Database): void {
+  const existing = db.get("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'traces'")
+  const sql = String((existing as Record<string, unknown> | null)?.sql ?? '')
+  if (/\bdata\b/.test(sql)) db.exec('DROP TABLE traces')
+}
+
 /**
  * @param dbPath SQLite file to open/create. Omit for an in-memory DB (tests).
  */
 export function openDatabase(dbPath?: string): Database {
   if (dbPath) mkdirSync(dirname(dbPath), { recursive: true })
   const db = new Database(dbPath ?? ':memory:')
+  migrate(db)
   db.exec(SCHEMA)
   return db
 }

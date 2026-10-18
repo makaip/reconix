@@ -592,7 +592,11 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
   const db = openDatabase(join(app.getPath('userData'), 'reconix.db'))
   const engagementId = loadScopeConfig()?.engagementId ?? null
   const findingsStore = createFindingsStore(db, win, { engagementId })
-  const traces = createTraceStore(db, win, { engagementId })
+  // Trace bytes live as files on disk (§6.4); the DB keeps only ref + path.
+  const traces = createTraceStore(db, win, {
+    engagementId,
+    tracesDir: join(app.getPath('userData'), 'traces')
+  })
   const history = createHistoryReader(db, findingsStore)
 
   // Cost/latency meter. Fed by the connector's persist (all sessions, incl.
