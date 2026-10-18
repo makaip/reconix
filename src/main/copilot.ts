@@ -67,6 +67,7 @@ import { startMcpHttpServer, type McpHttpServer } from './mcp/server'
 import { WebContentsCdpDriver, type CdpDriver, type CookieRecord } from './mcp/cdp'
 import { ScopeChecker, type ScopeEnforcer } from './mcp/scope'
 import type { FindingSink, HistoryReader, NetworkReader, ToolContext, TraceStore } from './mcp/tool'
+import { createFindingsStore, type FindingsStore } from './findings'
 
 const HOST = '127.0.0.1'
 const OPENCODE_PORT = 4097
@@ -496,27 +497,20 @@ class DomSummaryWatcher {
   }
 }
 
-// In-memory stand-ins for traces/findings/history (ARCHITECTURE §6.4) — B's
-// real SQLite-backed store doesn't exist yet. Same stopgap pattern as
-// smoke.ts's InMemoryAuditLogger; findings/traces just don't survive a
-// restart yet, which is a real gap but not a new one introduced here.
-function createInMemorySinks(): { traces: TraceStore; findings: FindingSink; history: HistoryReader } {
+// In-memory stand-ins for traces/history (ARCHITECTURE §6.4) — B's real
+// SQLite-backed store doesn't exist yet, so nothing here survives a restart.
+// Findings are the exception: they live in createFindingsStore, which is also
+// in-memory for now but observable, so the renderer's panel reflects recorded
+// findings live. (Same stopgap pattern as smoke.ts's InMemoryAuditLogger.)
+function createInMemorySinks(findingsStore: FindingsStore): { traces: TraceStore; findings: FindingSink; history: HistoryReader } {
   let traceSeq = 0
-  let findingSeq = 0
-  const findings: unknown[] = []
   return {
     traces: {
       save: async () => `trace_${++traceSeq}`
     },
-    findings: {
-      record: async (schema, evidenceRef) => {
-        const id = `finding_${++findingSeq}`
-        findings.push({ id, schema, evidenceRef })
-        return id
-      }
-    },
+    findings: findingsStore.sink,
     history: {
-      query: async () => findings
+      query: async () => findingsStore.list()
     }
   }
 }
@@ -591,6 +585,9 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
   const cdp = new ActiveTabCdpDriver((wc) => wc.id === win.webContents.id)
   const scope = new ActiveTabScope(() => cdp.pageContext()?.url ?? null)
   const networkReader = new ActiveTabNetworkReader(getNetwork)
+  // Findings persist for the window's lifetime; record_finding broadcasts to the
+  // renderer's panel. Registered here so the store owns its IPC handler + cleanup.
+  const findingsStore = createFindingsStore(win)
 
   // Cost/latency meter. Fed by the connector's persist (all sessions, incl.
   // subagents + the ambient DOM parser) and onAgentEvent (orchestrator turn
@@ -722,7 +719,7 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
     if (mcpServer) return mcpServer
     if (mcpStarting) return mcpStarting
     mcpStarting = (async () => {
-      const sinks = createInMemorySinks()
+      const sinks = createInMemorySinks(findingsStore)
       const context: ToolContext = {
         engagementId: 'eng_dev',
         scope,
@@ -982,6 +979,7 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
         usageTimer = null
       }
       domWatcher.setActive(null)
+      findingsStore.close()
       await connector?.stop().catch(() => undefined)
       await mcpServer?.stop().catch(() => undefined)
       const proc = child

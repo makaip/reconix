@@ -107,6 +107,13 @@ const api = {
     onChanged: (callback: (conns: WsConnection[]) => void): (() => void) =>
       subscribe('websocket:changed', callback)
   },
+  findings: {
+    // Agent-recorded findings (record_finding), newest last. `list` is the
+    // mount-time readback; the push fires whenever one is recorded.
+    list: (): Promise<Finding[]> => ipcRenderer.invoke('findings:list'),
+    onChanged: (callback: (findings: Finding[]) => void): (() => void) =>
+      subscribe('findings:changed', callback)
+  },
   crawler: {
     // Deterministic scope-aware spider. Drives the gated replayer; no new egress.
     start: (input: CrawlStartInput): Promise<CrawlState> => ipcRenderer.invoke('crawl:start', input),

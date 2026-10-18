@@ -9,14 +9,6 @@ export type SitemapNode = {
   kind: 'folder' | 'page'
 }
 
-export type Severity = 'medium' | 'low' | 'info'
-
-export type Finding = {
-  id: string
-  severity: Severity
-  title: string
-}
-
 export const sitemap: SitemapNode[] = [
   { id: 'host', label: 'app.example.test', depth: 0, kind: 'folder' },
   { id: 'login', label: '/login', depth: 1, kind: 'page' },
@@ -26,12 +18,6 @@ export const sitemap: SitemapNode[] = [
   { id: 'orders', label: '/orders', depth: 2, kind: 'page' },
   { id: 'static', label: '/static', depth: 1, kind: 'folder' }
 ]
-
-// Seeded findings removed: the panel must not assert vulnerabilities the agent
-// hasn't actually confirmed, or it taints the assessment (and any human/agent
-// reading the panel). Real findings arrive via record_finding through the MCP
-// pipeline. Empty until then.
-export const findings: Finding[] = []
 
 export const engagement = 'Q4 web app'
 

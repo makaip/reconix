@@ -1,6 +1,8 @@
-import type { Finding, Severity } from '../../mock/data'
+import type { Finding, FindingSeverity } from '../../../../shared/findings'
 
-const SEVERITY_LABEL: Record<Severity, string> = {
+const SEVERITY_LABEL: Record<FindingSeverity, string> = {
+  critical: 'Crit',
+  high: 'High',
   medium: 'Medium',
   low: 'Low',
   info: 'Info'

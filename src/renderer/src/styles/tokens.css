@@ -23,6 +23,8 @@
   --color-error: #e0695a;
 
   /* severity */
+  --color-sev-critical: #d64545;
+  --color-sev-high: #e0803a;
   --color-sev-medium: #e0a030;
   --color-sev-low: #5aa0f0;
   --color-sev-info: var(--color-text-muted);
