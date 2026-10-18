@@ -85,6 +85,87 @@ const probe_reflection = defineTool<{ base: HttpRequestSpec; marker?: string }, 
   }
 })
 
+// ── vary helper (shared by vary_parameter and test_idor) ──────────────────────
+type VaryInput = { base: HttpRequestSpec; paramName: string; values: string[]; location?: 'query' | 'body' }
+async function varyAcross(i: VaryInput, ctx: Parameters<Tool['execute']>[1]): Promise<unknown> {
+  const cap = ctx.policy?.maxReplayBatch ?? 20
+  if (i.values.length > cap) {
+    throw new ToolExecError(`vary has ${i.values.length} values; max ${cap} per call (engagement policy).`)
+  }
+  const location = i.location ?? 'query'
+  const buildSpec = (value: string): HttpRequestSpec => {
+    if (location === 'query') {
+      const u = new URL(i.base.url)
+      u.searchParams.set(i.paramName, value)
+      return { ...i.base, url: u.href }
+    }
+    let body = i.base.body ?? ''
+    try {
+      const params = new URLSearchParams(body)
+      if (params.has(i.paramName) || body.includes('=')) {
+        params.set(i.paramName, value)
+        body = params.toString()
+      } else {
+        body = body ? `${body}&${encodeURIComponent(i.paramName)}=${encodeURIComponent(value)}` : `${encodeURIComponent(i.paramName)}=${encodeURIComponent(value)}`
+      }
+    } catch {
+      body = body ? `${body}&${encodeURIComponent(i.paramName)}=${encodeURIComponent(value)}` : `${encodeURIComponent(i.paramName)}=${encodeURIComponent(value)}`
+    }
+    return { ...i.base, body }
+  }
+
+  const specs = i.values.map(buildSpec)
+  const results: Array<Record<string, unknown>> = []
+  const limit = 5
+  const queue = specs.map((spec, index) => ({ spec, index }))
+  const workers = Array.from({ length: Math.min(limit, specs.length) }, async () => {
+    for (;;) {
+      const job = queue.shift()
+      if (!job) return
+      const { spec, index } = job
+      const method = (spec.method || 'GET').toUpperCase()
+      if (!ctx.scope.isInScope(spec.url)) {
+        results[index] = { index, value: i.values[index], url: spec.url, method, error: 'out of scope — not sent' }
+        continue
+      }
+      try {
+        const r = await ctx.cdp.sendRequest(spec)
+        const bodyRef = await ctx.traces.save('reqresp', JSON.stringify({ request: spec, response: r }))
+        results[index] = {
+          index,
+          value: i.values[index],
+          url: spec.url,
+          method,
+          status: r.status,
+          statusText: r.statusText,
+          bodyBytes: r.bodyBytes,
+          durationMs: r.durationMs,
+          bodyPreview: clampString(r.body, 120),
+          bodyRef
+        }
+      } catch (err) {
+        results[index] = { index, value: i.values[index], url: spec.url, method, error: (err as Error)?.message ?? String(err) }
+      }
+    }
+  })
+  await Promise.all(workers)
+
+  const baseline = results.find((r): r is Record<string, unknown> & { status: number } => typeof r?.status === 'number')
+  const statuses: Record<string, number> = {}
+  let errors = 0
+  for (const r of results) {
+    if (typeof r?.status === 'number') {
+      statuses[r.status] = (statuses[r.status] ?? 0) + 1
+      if (baseline && r !== baseline) {
+        r.anomalous = r.status !== baseline.status || r.bodyBytes !== baseline.bodyBytes
+      }
+    } else {
+      errors++
+    }
+  }
+  return { count: results.length, paramName: i.paramName, location, results, summary: { statuses, errors } }
+}
+
 // ── vary_parameter ────────────────────────────────────────────────────────────
 // Differential over one parameter across a value set (IDOR/BAC/fuzz). Each
 // variant is scope-checked before it is sent; anomalies are flagged vs the
@@ -115,85 +196,7 @@ const vary_parameter = defineTool<{ base: HttpRequestSpec; paramName: string; va
     return { base: parseRequestSpec(raw, 'base'), paramName, values, location: (location as 'query' | 'body' | undefined) ?? 'query' }
   },
   target: (i) => i.base.url,
-  execute: async (i, ctx) => {
-    const cap = ctx.policy?.maxReplayBatch ?? 20
-    if (i.values.length > cap) {
-      throw new ToolExecError(`vary has ${i.values.length} values; max ${cap} per call (engagement policy).`)
-    }
-    const buildSpec = (value: string): HttpRequestSpec => {
-      if (i.location === 'query') {
-        const u = new URL(i.base.url)
-        u.searchParams.set(i.paramName, value)
-        return { ...i.base, url: u.href }
-      }
-      // body: form-encoded or JSON; fall back to appending.
-      let body = i.base.body ?? ''
-      try {
-        const params = new URLSearchParams(body)
-        if (params.has(i.paramName) || body.includes('=')) {
-          params.set(i.paramName, value)
-          body = params.toString()
-        } else {
-          body = body ? `${body}&${encodeURIComponent(i.paramName)}=${encodeURIComponent(value)}` : `${encodeURIComponent(i.paramName)}=${encodeURIComponent(value)}`
-        }
-      } catch {
-        body = body ? `${body}&${encodeURIComponent(i.paramName)}=${encodeURIComponent(value)}` : `${encodeURIComponent(i.paramName)}=${encodeURIComponent(value)}`
-      }
-      return { ...i.base, body }
-    }
-
-    const specs = i.values.map(buildSpec)
-    const results: Array<Record<string, unknown>> = []
-    // Bounded concurrency (5) to avoid hammering the target.
-    const limit = 5
-    const queue = specs.map((spec, index) => ({ spec, index }))
-    const workers = Array.from({ length: Math.min(limit, specs.length) }, async () => {
-      for (;;) {
-        const job = queue.shift()
-        if (!job) return
-        const { spec, index } = job
-        const method = (spec.method || 'GET').toUpperCase()
-        if (!ctx.scope.isInScope(spec.url)) {
-          results[index] = { index, value: i.values[index], url: spec.url, method, error: 'out of scope — not sent' }
-          continue
-        }
-        try {
-          const r = await ctx.cdp.sendRequest(spec)
-          const bodyRef = await ctx.traces.save('reqresp', JSON.stringify({ request: spec, response: r }))
-          results[index] = {
-            index,
-            value: i.values[index],
-            url: spec.url,
-            method,
-            status: r.status,
-            statusText: r.statusText,
-            bodyBytes: r.bodyBytes,
-            durationMs: r.durationMs,
-            bodyPreview: clampString(r.body, 120),
-            bodyRef
-          }
-        } catch (err) {
-          results[index] = { index, value: i.values[index], url: spec.url, method, error: (err as Error)?.message ?? String(err) }
-        }
-      }
-    })
-    await Promise.all(workers)
-
-    const baseline = results.find((r): r is Record<string, unknown> & { status: number } => typeof r?.status === 'number')
-    const statuses: Record<string, number> = {}
-    let errors = 0
-    for (const r of results) {
-      if (typeof r?.status === 'number') {
-        statuses[r.status] = (statuses[r.status] ?? 0) + 1
-        if (baseline && r !== baseline) {
-          r.anomalous = r.status !== baseline.status || r.bodyBytes !== baseline.bodyBytes
-        }
-      } else {
-        errors++
-      }
-    }
-    return { count: results.length, paramName: i.paramName, location: i.location, results, summary: { statuses, errors } }
-  }
+  execute: async (i, ctx) => varyAcross(i, ctx)
 })
 
 // ── reproduce ─────────────────────────────────────────────────────────────────
@@ -410,8 +413,9 @@ const test_idor = defineTool<{ base: HttpRequestSpec; paramName: string; values:
   outputSchema: { type: 'object' },
   parse: (raw) => ({ base: parseRequestSpec(raw, 'base'), paramName: str(raw, 'paramName'), values: strArray(raw, 'values') }),
   target: (i) => i.base.url,
-  execute: async (i) => {
-    return { note: 'use vary_parameter with these values', base: i.base, paramName: i.paramName, values: i.values }
+  execute: async (i, ctx) => {
+    const out = await varyAcross({ ...i, location: 'query' }, ctx)
+    return { probe: 'idor', ...(out as Record<string, unknown>) }
   }
 })
 

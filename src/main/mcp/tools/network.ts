@@ -420,11 +420,12 @@ const get_websocket_messages = defineTool<Record<string, never>, unknown>({
   outputSchema: { type: 'object' },
   parse: () => ({}),
   execute: async (_i, ctx) => {
-    const evalFn = (ctx.cdp as unknown as { eval?: (expr: string) => Promise<unknown> }).eval
-    if (typeof evalFn !== 'function') return { urls: [] }
     try {
-      const res = await evalFn('(()=>[...new Set(performance.getEntriesByType("resource").filter(e=>String(e.name).startsWith("ws")).map(e=>e.name))])()')
-      return { urls: Array.isArray(res) ? res : [] }
+      const raw = await ctx.cdp.evaluate(
+        'JSON.stringify([...new Set(performance.getEntriesByType("resource").filter(e=>String(e.name).startsWith("ws")).map(e=>e.name))])'
+      )
+      const urls = JSON.parse(raw)
+      return { urls: Array.isArray(urls) ? urls : [] }
     } catch {
       return { urls: [] }
     }
