@@ -87,6 +87,67 @@ const DOM_ANALYZER_MODEL = 'gemini/gemini-flash-lite-latest'
 // port the running process actually binds to.
 const MCP_PORT = 4102
 
+// ── spawned `opencode serve` lifecycle ───────────────────────────────────────
+// Processes we've spawned and must not leave behind. A module-level set plus a
+// single process 'exit' hook is the last-resort safety net for exits that
+// don't route through the bridge's stop() (a crash, a dev reload, process.exit):
+// we synchronously SIGKILL each server's whole process group.
+const liveServers = new Set<ChildProcessWithoutNullStreams>()
+let exitHookInstalled = false
+
+/**
+ * Signal a spawned server's whole process group. It is spawned detached, so it
+ * leads its own group — a negative pid therefore reaches anything `opencode
+ * serve` itself forked, not just the direct child.
+ */
+function signalGroup(proc: ChildProcessWithoutNullStreams, signal: NodeJS.Signals): void {
+  if (proc.pid === undefined) return
+  try {
+    process.kill(-proc.pid, signal)
+  } catch {
+    try {
+      proc.kill(signal)
+    } catch {
+      // Already gone — nothing to signal.
+    }
+  }
+}
+
+function ensureExitHook(): void {
+  if (exitHookInstalled) return
+  exitHookInstalled = true
+  process.on('exit', () => {
+    for (const proc of liveServers) signalGroup(proc, 'SIGKILL')
+  })
+}
+
+/**
+ * Stop a spawned server: SIGTERM the group, escalate to SIGKILL if it hasn't
+ * exited within `graceMs`, and resolve once it's gone (or a hard deadline
+ * passes) so callers can await a genuinely clean shutdown.
+ */
+function terminateServer(proc: ChildProcessWithoutNullStreams, graceMs = 2_000): Promise<void> {
+  if (proc.pid === undefined || proc.exitCode !== null || proc.signalCode !== null) {
+    liveServers.delete(proc)
+    return Promise.resolve()
+  }
+  return new Promise((resolve) => {
+    let settled = false
+    const finish = (): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(forceTimer)
+      clearTimeout(deadline)
+      liveServers.delete(proc)
+      resolve()
+    }
+    const forceTimer = setTimeout(() => signalGroup(proc, 'SIGKILL'), graceMs)
+    const deadline = setTimeout(finish, graceMs + 2_000)
+    proc.once('exit', finish)
+    signalGroup(proc, 'SIGTERM')
+  })
+}
+
 export interface CopilotBridge {
   /** Keeps the MCP tool server's CDP driver + scope pointed at the tab the
    *  user is actually looking at. Call on every active-tab change. */
@@ -594,9 +655,15 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
         // syncGlobalOpenCodeConfig() above — see the file-header comment.
         cwd: sandboxDir,
         env: { ...process.env, RECONIX_ENV: reconixEnv },
-        stdio: 'pipe'
+        stdio: 'pipe',
+        // Own process group so we can tear down serve AND anything it forks
+        // (see signalGroup); without this a clean quit can leave it dangling.
+        detached: process.platform !== 'win32'
       })
       child = proc
+      liveServers.add(proc)
+      ensureExitHook()
+      proc.on('exit', () => liveServers.delete(proc))
       let url = ''
       let password = ''
       let buf = ''
@@ -875,7 +942,9 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
       domWatcher.setActive(null)
       await connector?.stop().catch(() => undefined)
       await mcpServer?.stop().catch(() => undefined)
-      child?.kill()
+      const proc = child
+      child = null
+      if (proc) await terminateServer(proc)
     }
   }
 }

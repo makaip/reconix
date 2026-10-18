@@ -42,6 +42,20 @@ try {
 // sources it in a shell at `opencode serve` spawn time instead.
 
 let copilotBridge: CopilotBridge | null = null
+let shuttingDown = false
+
+/**
+ * Tear the bridge down exactly once. stop() now waits for the spawned
+ * `opencode serve` process group to actually exit, so awaiting it guarantees
+ * no dangling server before the app terminates.
+ */
+async function shutdown(): Promise<void> {
+  if (shuttingDown) return
+  shuttingDown = true
+  const bridge = copilotBridge
+  copilotBridge = null
+  await bridge?.stop().catch(() => undefined)
+}
 
 function createWindow(): void {
   const mainWindow = new BrowserWindow({
@@ -210,6 +224,18 @@ app.on('window-all-closed', () => {
   }
 })
 
-app.on('before-quit', () => {
-  void copilotBridge?.stop()
+app.on('before-quit', (event) => {
+  // Defer the quit until the spawned `opencode serve` (and its process group)
+  // is gone, so closing Reconix never leaves the server running.
+  if (shuttingDown || !copilotBridge) return
+  event.preventDefault()
+  void shutdown().finally(() => app.quit())
 })
+
+// Dev/interactive exits (Ctrl-C, an external SIGTERM) skip Electron's own
+// quit sequence, so run the same teardown before exiting.
+for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+  process.on(signal, () => {
+    void shutdown().finally(() => process.exit(0))
+  })
+}
