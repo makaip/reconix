@@ -114,7 +114,8 @@ export function createTabManager(win: BrowserWindow, hooks: TabHooks): TabManage
     for (const tab of tabs.values()) tab.view.setBounds(scaled)
   }
 
-  // A blank tab hides its view so the renderer's new-tab splash screen shows through.
+  // A blank tab hides its view so the renderer's new-tab splash screen shows
+  // through. Only the active tab's view is ever visible.
   const syncVisibility = (): void => {
     for (const tab of tabs.values()) {
       const url = tab.view.webContents.getURL()

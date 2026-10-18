@@ -42,6 +42,7 @@ function App(): JSX.Element {
       const mod = window.reconix.platform === 'darwin' ? e.metaKey : e.ctrlKey
       if (mod && e.key === ',') {
         e.preventDefault()
+        setUsageOpen(false)
         setSettingsOpen((open) => !open)
       }
     }
@@ -62,6 +63,11 @@ function App(): JSX.Element {
     onCollapse: () => setSidebarOpen(false)
   })
   const copilotResize = useResizable({ axis: 'x', initial: 360, min: 280, max: 560, invert: true })
+  // Settings and cost/latency dock here instead of as centered modals: the target
+  // page is a native view that paints above the window's HTML, so an overlay would
+  // hide behind it. A docked column shrinks the page slot (the native view follows
+  // the slot's bounds) and never covers it.
+  const dockResize = useResizable({ axis: 'x', initial: 440, min: 320, max: 720, invert: true })
   // DevTools opens at a quarter of the window height.
   const devtoolsResize = useResizable({
     axis: 'y',
@@ -74,6 +80,8 @@ function App(): JSX.Element {
   const activeTab = tabs.tabs.find((tab) => tab.id === tabs.activeId)
   const copilotTargetTab = tabs.tabs.find((tab) => tab.id === copilotTargetId)
   const copilotRequestCount = copilotTargetId === null ? 0 : (network.perTab[copilotTargetId] ?? 0)
+  // The dock borrows the Copilot's slot on the right, so only one right column shows.
+  const dockOpen = usageOpen || settingsOpen
 
   useEffect(() => {
     void window.reconix.copilot.getTargetTab().then(setCopilotTargetId)
@@ -107,7 +115,10 @@ function App(): JSX.Element {
         copilotOpen={copilotOpen}
         onToggleCopilot={() => setCopilotOpen((open) => !open)}
         navDisabled={engineStatus.status === 'starting'}
-        onOpenSettings={() => setSettingsOpen(true)}
+        onOpenSettings={() => {
+          setUsageOpen(false)
+          setSettingsOpen(true)
+        }}
       />
 
       <div className="shell">
@@ -151,7 +162,7 @@ function App(): JSX.Element {
           />
         </main>
 
-        {copilotOpen && (
+        {copilotOpen && !dockOpen && (
           <>
             <ResizeHandle
               orientation="vertical"
@@ -176,12 +187,30 @@ function App(): JSX.Element {
             />
           </>
         )}
+
+        {dockOpen && (
+          <>
+            <ResizeHandle
+              orientation="vertical"
+              dragging={dockResize.dragging}
+              onPointerDown={dockResize.onHandlePointerDown}
+            />
+            <aside className="dock" style={{ flexBasis: dockResize.size }}>
+              {usageOpen && <UsagePanel usage={usage} onClose={() => setUsageOpen(false)} />}
+              {settingsOpen && <SettingsModal settings={settings} onClose={() => setSettingsOpen(false)} />}
+            </aside>
+          </>
+        )}
       </div>
 
-      <StatusBar requests={network.total} usage={usage} onOpenUsage={() => setUsageOpen(true)} />
-
-      {settingsOpen && <SettingsModal settings={settings} onClose={() => setSettingsOpen(false)} />}
-      {usageOpen && <UsagePanel usage={usage} onClose={() => setUsageOpen(false)} />}
+      <StatusBar
+        requests={network.total}
+        usage={usage}
+        onOpenUsage={() => {
+          setSettingsOpen(false)
+          setUsageOpen((open) => !open)
+        }}
+      />
     </div>
   )
 }

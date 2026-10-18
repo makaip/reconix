@@ -38,38 +38,30 @@ function SettingsModal({ settings, onClose }: SettingsModalProps): JSX.Element {
   }, [onClose])
 
   return (
-    <div className="settings__overlay" onClick={onClose}>
-      <div
-        className="settings__dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-label="Settings"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <header className="settings__header">
-          <h2 className="settings__title">Settings</h2>
-          <button type="button" className="settings__close" aria-label="Close settings" onClick={onClose}>
-            ×
-          </button>
-        </header>
+    <div className="dock__panel" role="dialog" aria-label="Settings">
+      <header className="settings__header">
+        <h2 className="settings__title">Settings</h2>
+        <button type="button" className="settings__close" aria-label="Close settings" onClick={onClose}>
+          ×
+        </button>
+      </header>
 
-        <div className="settings__body">
-          <section className="settings__section">
-            <h3 className="settings__section-title">General</h3>
-            <ToggleRow
-              label="Open sitemap on launch"
-              hint="Show the sidebar when the app starts"
-              checked={values.openSidebarOnLaunch}
-              onChange={(v) => set('openSidebarOnLaunch', v)}
-            />
-            <ToggleRow
-              label="Open Copilot on launch"
-              hint="Show the Copilot panel when the app starts"
-              checked={values.openCopilotOnLaunch}
-              onChange={(v) => set('openCopilotOnLaunch', v)}
-            />
-          </section>
-        </div>
+      <div className="settings__body">
+        <section className="settings__section">
+          <h3 className="settings__section-title">General</h3>
+          <ToggleRow
+            label="Open sitemap on launch"
+            hint="Show the sidebar when the app starts"
+            checked={values.openSidebarOnLaunch}
+            onChange={(v) => set('openSidebarOnLaunch', v)}
+          />
+          <ToggleRow
+            label="Open Copilot on launch"
+            hint="Show the Copilot panel when the app starts"
+            checked={values.openCopilotOnLaunch}
+            onChange={(v) => set('openCopilotOnLaunch', v)}
+          />
+        </section>
       </div>
     </div>
   )
