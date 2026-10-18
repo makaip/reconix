@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import type { DiffResponsesOutput } from '../../../../shared/tools'
+import type { DiffResponsesOutput, LineDiffEntry } from '../../../../shared/tools'
 import type { ReplayResult, SavedRequest } from '../../../../shared/tabs'
 import type { RepeaterApi } from '../../hooks/useRepeater'
 import { useResizable } from '../../hooks/useResizable'
@@ -73,14 +73,122 @@ function ResponseView({ result }: { result: ReplayResult | undefined }): JSX.Ele
   )
 }
 
+/** One-line label for a stored response, used in the A/B compare selectors. */
+function responseLabel(result: ReplayResult, index: number): string {
+  const outcome = result.ok ? `${result.status}` : result.reason
+  return `#${index + 1} · ${outcome}${result.ok ? ` · ${result.timingMs} ms` : ''}`
+}
+
+/** Consecutive same-kind run of diff entries — kept together so unchanged runs can collapse. */
+type DiffBlock = { kind: 'change' | 'unchanged'; entries: LineDiffEntry[] }
+
+function toBlocks(entries: LineDiffEntry[]): DiffBlock[] {
+  const blocks: DiffBlock[] = []
+  for (const entry of entries) {
+    const kind: DiffBlock['kind'] = entry.kind === 'unchanged' ? 'unchanged' : 'change'
+    const last = blocks[blocks.length - 1]
+    if (last && last.kind === kind) last.entries.push(entry)
+    else blocks.push({ kind, entries: [entry] })
+  }
+  return blocks
+}
+
+/** A run of unchanged lines: short runs render inline, long runs collapse to a toggle. */
+function UnchangedRun({ entries }: { entries: LineDiffEntry[] }): JSX.Element {
+  const [expanded, setExpanded] = useState(false)
+  const CONTEXT = 3
+  if (entries.length <= CONTEXT * 2) {
+    return (
+      <>
+        {entries.map((e, i) => (
+          <div key={i} className="rep-diff__line rep-diff__line--unchanged">
+            <span className="rep-diff__sign" aria-hidden="true" />
+            <span className="rep-diff__text">{e.line}</span>
+          </div>
+        ))}
+      </>
+    )
+  }
+  const hidden = entries.slice(CONTEXT, entries.length - CONTEXT)
+  return (
+    <>
+      {entries.slice(0, CONTEXT).map((e, i) => (
+        <div key={`h${i}`} className="rep-diff__line rep-diff__line--unchanged">
+          <span className="rep-diff__sign" aria-hidden="true" />
+          <span className="rep-diff__text">{e.line}</span>
+        </div>
+      ))}
+      <button type="button" className="rep-diff__gap" onClick={() => setExpanded((v) => !v)}>
+        {expanded ? 'Hide unchanged lines' : `⋯ ${hidden.length} unchanged line(s)`}
+      </button>
+      {expanded &&
+        hidden.map((e, i) => (
+          <div key={`x${i}`} className="rep-diff__line rep-diff__line--unchanged">
+            <span className="rep-diff__sign" aria-hidden="true" />
+            <span className="rep-diff__text">{e.line}</span>
+          </div>
+        ))}
+      {entries.slice(entries.length - CONTEXT).map((e, i) => (
+        <div key={`t${i}`} className="rep-diff__line rep-diff__line--unchanged">
+          <span className="rep-diff__sign" aria-hidden="true" />
+          <span className="rep-diff__text">{e.line}</span>
+        </div>
+      ))}
+    </>
+  )
+}
+
+const MAX_DIFF_LINES = 1500
+
+/**
+ * Renders the line-level diff. Response bodies are target-controlled, so every
+ * line is emitted as a React text node (never innerHTML) — a crafted body cannot
+ * inject markup here. Rendering is capped so a huge body can't stall the panel.
+ */
+function DiffLines({ entries }: { entries: LineDiffEntry[] }): JSX.Element {
+  const blocks = useMemo(() => toBlocks(entries), [entries])
+  return (
+    <div className="rep-diff__lines">
+      {blocks.map((block, i) =>
+        block.kind === 'unchanged' ? (
+          <UnchangedRun key={i} entries={block.entries} />
+        ) : (
+          <div key={i}>
+            {block.entries.map((e, j) => (
+              <div key={j} className={`rep-diff__line rep-diff__line--${e.kind}`}>
+                <span className="rep-diff__sign" aria-hidden="true">
+                  {e.kind === 'added' ? '+' : '−'}
+                </span>
+                <span className="rep-diff__text">{e.line}</span>
+              </div>
+            ))}
+          </div>
+        )
+      )}
+    </div>
+  )
+}
+
 function DiffView({ diff }: { diff: DiffResponsesOutput | null }): JSX.Element | null {
   if (!diff) return null
+  const shown = diff.lineDiff.slice(0, MAX_DIFF_LINES)
   return (
     <div className="rep-diff">
-      <span>{diff.bodyIdentical ? 'Bodies identical' : `${diff.changedLineCount} line(s) changed`}</span>
-      <span className="dt-muted">
-        status {diff.statusA}→{diff.statusB} · len {diff.lengthDelta >= 0 ? '+' : ''}{diff.lengthDelta}
-      </span>
+      <div className="rep-diff__summary">
+        <span>{diff.bodyIdentical ? 'Bodies identical' : `${diff.changedLineCount} line(s) changed`}</span>
+        <span className="dt-muted">
+          status {diff.statusA}→{diff.statusB} · len {diff.lengthDelta >= 0 ? '+' : ''}
+          {diff.lengthDelta}
+          {diff.timingDeltaMs !== null &&
+            ` · ${diff.timingDeltaMs >= 0 ? '+' : ''}${diff.timingDeltaMs} ms`}
+        </span>
+      </div>
+      {!diff.bodyIdentical && <DiffLines entries={shown} />}
+      {diff.lineDiff.length > MAX_DIFF_LINES && (
+        <p className="dt-muted">
+          Showing first {MAX_DIFF_LINES} of {diff.lineDiff.length} diff lines.
+        </p>
+      )}
     </div>
   )
 }
@@ -93,16 +201,45 @@ function RepeaterPanel({ api }: RepeaterPanelProps): JSX.Element {
   const [draft, setDraft] = useState<Draft>(EMPTY)
   const listResize = useResizable({ axis: 'x', initial: 220, min: 140, max: 600, storageKey: 'repeater.list' })
   const [diffResult, setDiffResult] = useState<DiffResponsesOutput | null>(null)
+  const [aIndex, setAIndex] = useState<number | null>(null)
+  const [bIndex, setBIndex] = useState<number | null>(null)
   const [busy, setBusy] = useState(false)
 
   const selected = useMemo(() => saved.find((s) => s.id === selectedId) ?? null, [saved, selectedId])
-  const latest = selected?.responses[selected.responses.length - 1]
+  const responses = selected?.responses ?? []
+  const responseCount = responses.length
+  const latest = responses[responseCount - 1]
+  // Indices into `responses`; null means "let main default to the two most recent".
+  const effectiveA = aIndex ?? Math.max(0, responseCount - 2)
+  const effectiveB = bIndex ?? Math.max(0, responseCount - 1)
 
   // Keep the editor in step when selecting a different saved request.
   useEffect(() => {
     if (selected) setDraft(draftFrom(selected))
     setDiffResult(null)
+    setAIndex(null)
+    setBIndex(null)
   }, [selectedId]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Recompute the diff whenever the chosen pair (or the response history) changes.
+  // Pure compute over already-captured bodies: no send, no egress.
+  useEffect(() => {
+    if (!selected || responseCount < 2) {
+      setDiffResult(null)
+      return
+    }
+    let live = true
+    void diff({
+      id: selected.id,
+      aIndex: aIndex ?? undefined,
+      bIndex: bIndex ?? undefined
+    }).then((d) => {
+      if (live) setDiffResult(d)
+    })
+    return () => {
+      live = false
+    }
+  }, [selected?.id, responseCount, aIndex, bIndex]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Drop a dangling selection if the request was deleted elsewhere.
   useEffect(() => {
@@ -130,11 +267,6 @@ function RepeaterPanel({ api }: RepeaterPanelProps): JSX.Element {
     } finally {
       setBusy(false)
     }
-  }
-
-  const onDiff = async (): Promise<void> => {
-    if (!selected) return
-    setDiffResult(await diff({ id: selected.id }))
   }
 
   const newRequest = (): void => {
@@ -225,11 +357,6 @@ function RepeaterPanel({ api }: RepeaterPanelProps): JSX.Element {
           <button type="button" className="dt-text-button rep__send" onClick={onSend} disabled={busy || !draft.url}>
             {busy ? 'Sending…' : 'Send'}
           </button>
-          {selected && selected.responses.length >= 2 && (
-            <button type="button" className="dt-text-button" onClick={onDiff}>
-              Diff last two
-            </button>
-          )}
           {selected && (
             <button
               type="button"
@@ -240,10 +367,47 @@ function RepeaterPanel({ api }: RepeaterPanelProps): JSX.Element {
             </button>
           )}
         </div>
-        <DiffView diff={diffResult} />
         <section className="rep__response-section">
           <h3>Response</h3>
           <ResponseView result={latest} />
+          {selected && responseCount >= 2 && (
+            <div className="rep__compare">
+              <div className="rep__compare-controls">
+                <label className="rep__compare-label">
+                  Base
+                  <select
+                    className="rep__compare-select"
+                    value={effectiveA}
+                    onChange={(e) => setAIndex(Number(e.target.value))}
+                  >
+                    {responses.map((r, i) => (
+                      <option key={i} value={i}>
+                        {responseLabel(r, i)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <span className="dt-muted" aria-hidden="true">
+                  →
+                </span>
+                <label className="rep__compare-label">
+                  Compare
+                  <select
+                    className="rep__compare-select"
+                    value={effectiveB}
+                    onChange={(e) => setBIndex(Number(e.target.value))}
+                  >
+                    {responses.map((r, i) => (
+                      <option key={i} value={i}>
+                        {responseLabel(r, i)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <DiffView diff={diffResult} />
+            </div>
+          )}
         </section>
       </div>
     </div>

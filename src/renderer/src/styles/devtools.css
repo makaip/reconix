@@ -906,11 +906,94 @@
 }
 .rep-diff {
   display: flex;
-  gap: 10px;
-  font-size: var(--text-xs);
+  flex-direction: column;
+  gap: 4px;
   padding: 4px 6px;
   background: var(--color-bg-inset);
   border-radius: var(--radius-sm);
+}
+.rep-diff__summary {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: var(--text-xs);
+}
+.rep-diff__lines {
+  max-height: 320px;
+  overflow: auto;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-inset);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+}
+.rep-diff__line {
+  display: flex;
+  gap: 6px;
+  padding: 0 6px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.rep-diff__line--added {
+  color: var(--color-success);
+  border-left: 2px solid var(--color-success);
+}
+.rep-diff__line--removed {
+  color: var(--color-error);
+  border-left: 2px solid var(--color-error);
+}
+.rep-diff__line--unchanged {
+  color: var(--color-text-muted);
+  border-left: 2px solid transparent;
+}
+.rep-diff__sign {
+  flex: none;
+  width: 1ch;
+  opacity: 0.8;
+}
+.rep-diff__text {
+  flex: 1;
+  min-width: 0;
+}
+.rep-diff__gap {
+  display: block;
+  width: 100%;
+  padding: 2px 0;
+  background: none;
+  border: none;
+  border-top: 1px dashed var(--color-border-subtle);
+  border-bottom: 1px dashed var(--color-border-subtle);
+  color: var(--color-accent);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  text-align: center;
+  cursor: pointer;
+}
+.rep__compare {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+.rep__compare-controls {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  font-size: var(--text-xs);
+}
+.rep__compare-label {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+.rep__compare-select {
+  background: var(--color-bg-inset);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+  padding: 2px 4px;
 }
 
 /* Intercept / match-replace rules (ARCHITECTURE.MD §11.1) */
