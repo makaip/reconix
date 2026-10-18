@@ -4,6 +4,7 @@ import DevToolsPanel from './components/devtools/DevToolsPanel'
 import SettingsModal from './components/SettingsModal'
 import Sidebar from './components/sidebar/Sidebar'
 import Splash from './components/Splash'
+import TracesPanel from './components/TracesPanel'
 import UsagePanel from './components/UsagePanel'
 import ViewSlot from './components/ViewSlot'
 import EngineStatusBanner from './components/chrome/EngineStatusBanner'
@@ -32,6 +33,7 @@ function App(): JSX.Element {
   const [copilotTargetId, setCopilotTargetId] = useState<number | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [usageOpen, setUsageOpen] = useState(false)
+  const [tracesOpen, setTracesOpen] = useState(false)
   // Launch-time panel visibility comes from settings; the user can still toggle at runtime.
   const [copilotOpen, setCopilotOpen] = useState(settings.settings.openCopilotOnLaunch)
   const [sidebarOpen, setSidebarOpen] = useState(settings.settings.openSidebarOnLaunch)
@@ -43,6 +45,7 @@ function App(): JSX.Element {
       if (mod && e.key === ',') {
         e.preventDefault()
         setUsageOpen(false)
+        setTracesOpen(false)
         setSettingsOpen((open) => !open)
       }
     }
@@ -54,6 +57,7 @@ function App(): JSX.Element {
   useEffect(() => {
     return window.reconix.menu.onOpenSettings(() => {
       setUsageOpen(false)
+      setTracesOpen(false)
       setSettingsOpen(true)
     })
   }, [])
@@ -89,8 +93,8 @@ function App(): JSX.Element {
   const copilotTargetTab = tabs.tabs.find((tab) => tab.id === copilotTargetId)
   const copilotRequestCount = copilotTargetId === null ? 0 : (network.perTab[copilotTargetId] ?? 0)
   // The dock borrows the Copilot's slot on the right, so only one right column shows.
-  // Settings is a centered modal, not a dock column, so only usage docks here.
-  const dockOpen = usageOpen
+  // Settings is a centered modal, not a dock column, so only usage/traces dock here.
+  const dockOpen = usageOpen || tracesOpen
 
   // Hide the native target views while the settings modal is up: the page view is a
   // native layer that would otherwise paint over the HTML modal.
@@ -208,6 +212,7 @@ function App(): JSX.Element {
             />
             <aside className="dock" style={{ flexBasis: dockResize.size }}>
               {usageOpen && <UsagePanel usage={usage} onClose={() => setUsageOpen(false)} />}
+              {tracesOpen && <TracesPanel onClose={() => setTracesOpen(false)} />}
             </aside>
           </>
         )}
@@ -218,7 +223,13 @@ function App(): JSX.Element {
         usage={usage}
         onOpenUsage={() => {
           setSettingsOpen(false)
+          setTracesOpen(false)
           setUsageOpen((open) => !open)
+        }}
+        onOpenTraces={() => {
+          setSettingsOpen(false)
+          setUsageOpen(false)
+          setTracesOpen((open) => !open)
         }}
       />
 

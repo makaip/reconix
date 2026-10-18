@@ -1,0 +1,102 @@
+/* Traces panel — docks in the same slot as Cost & latency / Settings. A master
+   list of captured evidence with a preview pane (screenshot inline, text as-is). */
+.traces__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px 16px;
+  overflow: hidden;
+}
+
+.traces__empty {
+  margin: 0;
+  font-size: var(--text-2xs);
+  color: var(--color-text-muted);
+}
+
+.traces__list {
+  flex: 0 0 auto;
+  max-height: 40%;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow: auto;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+}
+
+.traces__row {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-areas: 'kind ref' 'kind meta';
+  gap: 0 8px;
+  width: 100%;
+  padding: 6px 8px;
+  text-align: left;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--color-border-subtle);
+  color: var(--color-text);
+  cursor: pointer;
+}
+
+.traces__row:hover {
+  background: var(--color-hover);
+}
+
+.traces__row--active {
+  background: var(--color-selection);
+}
+
+.traces__kind {
+  grid-area: kind;
+  align-self: center;
+  font-size: var(--text-2xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-text-muted);
+}
+
+.traces__ref {
+  grid-area: ref;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.traces__meta {
+  grid-area: meta;
+  font-size: var(--text-2xs);
+  color: var(--color-text-faint);
+}
+
+.traces__preview {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 8px;
+  overflow: auto;
+  background: var(--color-bg-deep);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+}
+
+.traces__image {
+  max-width: 100%;
+  height: auto;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+
+.traces__text {
+  width: 100%;
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--color-text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}

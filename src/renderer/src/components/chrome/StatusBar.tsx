@@ -6,6 +6,7 @@ type StatusBarProps = {
   requests: number
   usage: UsageSnapshot
   onOpenUsage: () => void
+  onOpenTraces: () => void
 }
 
 /** A background call (DOM-parser refresh) — no session, so no TTFT/agent model. */
@@ -55,7 +56,29 @@ function LatencyClock(): JSX.Element {
   )
 }
 
-function StatusBar({ requests, usage, onOpenUsage }: StatusBarProps): JSX.Element {
+/** Picture-frame glyph — cues that this readout is captured evidence. */
+function TraceGlyph(): JSX.Element {
+  return (
+    <svg
+      className="statusbar__icon"
+      width="11"
+      height="11"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <circle cx="9" cy="10" r="1.6" />
+      <path d="M4 17l4.5-4 3 2.5 3.5-3.5L20 16" />
+    </svg>
+  )
+}
+
+function StatusBar({ requests, usage, onOpenUsage, onOpenTraces }: StatusBarProps): JSX.Element {
   const scope = useScope()
   const { proxy, engagement } = useRuntimeStatus()
   const active = usage.activeTurns.some((turn) => !isAmbient(turn))
@@ -68,6 +91,15 @@ function StatusBar({ requests, usage, onOpenUsage }: StatusBarProps): JSX.Elemen
       <span className="statusbar__item">Scope: {scope.summary}</span>
       <span className="statusbar__item">Requests: {requests}</span>
       <span className="statusbar__spacer" />
+      <button
+        type="button"
+        className="statusbar__button"
+        onClick={onOpenTraces}
+        title="Browse captured evidence traces"
+      >
+        <TraceGlyph />
+        Traces
+      </button>
       <button
         type="button"
         className="statusbar__button"

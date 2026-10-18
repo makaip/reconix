@@ -592,7 +592,7 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
   const db = openDatabase(join(app.getPath('userData'), 'reconix.db'))
   const engagementId = loadScopeConfig()?.engagementId ?? null
   const findingsStore = createFindingsStore(db, win, { engagementId })
-  const traces = createTraceStore(db, { engagementId })
+  const traces = createTraceStore(db, win, { engagementId })
   const history = createHistoryReader(db, findingsStore)
 
   // Cost/latency meter. Fed by the connector's persist (all sessions, incl.
@@ -731,7 +731,7 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
         policy: POLICY,
         cdp,
         network: networkReader,
-        traces,
+        traces: traces.store,
         findings: findingsStore.sink,
         history
       }
@@ -1017,9 +1017,10 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
       }
       domWatcher.setActive(null)
       findingsStore.close()
+      traces.close()
       await connector?.stop().catch(() => undefined)
       await mcpServer?.stop().catch(() => undefined)
-      // Findings.store close only detaches IPC; the shared DB is ours to close.
+      // The stores' close() only detach IPC; the shared DB is ours to close.
       if (db.isOpen) db.close()
       const proc = child
       child = null

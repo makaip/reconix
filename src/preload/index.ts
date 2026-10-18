@@ -53,6 +53,7 @@ import type {
   UsageSnapshot
 } from '../shared/contracts'
 import type { CrawlStartInput, CrawlState } from '../shared/crawler'
+import type { TraceDetail, TraceSummary } from '../shared/traces'
 
 // typed surface is exposed to renderer but renderer never accesses ipcRenderer directly
 export type Bounds = { x: number; y: number; width: number; height: number }
@@ -122,6 +123,15 @@ const api = {
     list: (): Promise<Finding[]> => ipcRenderer.invoke('findings:list'),
     onChanged: (callback: (findings: Finding[]) => void): (() => void) =>
       subscribe('findings:changed', callback)
+  },
+  traces: {
+    // Agent-captured evidence blobs (screenshot / reqresp / trace). `list` is the
+    // metadata readback; `get` inflates one (binary as base64). The push fires
+    // whenever the agent stores a new trace.
+    list: (): Promise<TraceSummary[]> => ipcRenderer.invoke('traces:list'),
+    get: (ref: string): Promise<TraceDetail | null> => ipcRenderer.invoke('traces:get', ref),
+    onChanged: (callback: (traces: TraceSummary[]) => void): (() => void) =>
+      subscribe('traces:changed', callback)
   },
   scope: {
     // Read-only view of the engagement's authorized scope, for the URL-bar

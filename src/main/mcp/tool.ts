@@ -3,13 +3,14 @@
 
 import type { EngagementId, Policy, RiskTier, TraceRef } from '../../shared/contracts'
 import type { CapturedRequest } from '../../shared/tabs'
+import type { TraceKind } from '../../shared/traces'
 import type { CdpDriver } from './cdp'
 import type { JsonSchema } from './validate'
 import type { ScopeEnforcer } from './scope'
 
 // Sinks the handlers need, beyond the driver. Audit is NOT here — the pipeline
 // owns audit so a handler can never skip it.
-export type TraceKind = 'screenshot' | 'reqresp' | 'trace'
+export type { TraceKind }
 /** A stored trace, read back for the agent via get_trace. `data` is the raw
  *  bytes (text traces decode as UTF-8, screenshots as PNG, etc.). */
 export interface TraceRecord {
