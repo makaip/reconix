@@ -2,7 +2,7 @@
 // one of these; a capability that is not a Tool cannot be expressed.
 
 import type { EngagementId, Policy, RiskTier, TraceRef } from '../../shared/contracts'
-import type { CapturedRequest } from '../../shared/tabs'
+import type { CapturedRequest, InterceptRule } from '../../shared/tabs'
 import type { TraceKind } from '../../shared/traces'
 import type { CdpDriver } from './cdp'
 import type { JsonSchema } from './validate'
@@ -50,6 +50,14 @@ export interface ToolContext {
   findings: FindingSink
   history: HistoryReader
   network: NetworkReader
+  /** Live match/replace interceptor (§11.1). Optional — only present when the
+   *  inspector/interceptor is wired (always in the real app). */
+  interceptor?: {
+    save(raw: unknown): InterceptRule | null
+    list(): InterceptRule[]
+    toggle(id: unknown, enabled: unknown): InterceptRule | null
+    remove(id: unknown): boolean
+  }
 }
 
 export interface Tool<I = unknown, O = unknown> {

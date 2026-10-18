@@ -10,7 +10,14 @@ type RequestPausedParams = {
   request: { url: string; method: string; headers: Record<string, string> }
 }
 
-export type Interceptor = { sink: InterceptSink; close: () => void }
+export type Interceptor = {
+  sink: InterceptSink
+  close: () => void
+  save: (raw: unknown) => InterceptRule | null
+  list: () => InterceptRule[]
+  toggle: (id: unknown, enabled: unknown) => InterceptRule | null
+  remove: (id: unknown) => boolean
+}
 
 let seq = 1
 const newId = (): string => `rule-${Date.now().toString(36)}-${seq++}`
@@ -209,5 +216,5 @@ export function createInterceptor(win: BrowserWindow): Interceptor {
     for (const c of channels) ipcMain.removeHandler(c)
   }
   win.on('closed', close)
-  return { sink, close }
+  return { sink, close, save, list, toggle, remove }
 }

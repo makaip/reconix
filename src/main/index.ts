@@ -15,6 +15,7 @@ import { proxyStatus } from './runtime'
 import { createSessionManager } from './session'
 import { runSmoke } from './smoke'
 import { createTabManager } from './tabs'
+import type { Interceptor } from './intercept'
 
 // keep in sync with --tabbar-height and --color-bg-deep in tokens.css
 const TAB_BAR_HEIGHT = 40
@@ -179,16 +180,17 @@ function createWindow(): void {
   // so copilotBridge gets a getter instead of the instance — see
   // ActiveTabNetworkReader's comment in copilot.ts for why.
   let network: NetworkCapture | undefined
+  let interceptor: Interceptor | undefined
   let copilotTargetTabId: number | null = null
-  copilotBridge = createCopilotBridge(mainWindow, () => network)
+  copilotBridge = createCopilotBridge(mainWindow, () => network, () => interceptor)
 
   const bodies = createBodyStore(mainWindow)
   const websockets = createWebSocketCapture(mainWindow)
-  const interceptor = createInterceptor(mainWindow)
+  interceptor = createInterceptor(mainWindow) as typeof interceptor
   const inspector = attachInspector(
     mainWindow,
     combineNetworkSinks(bodies, websockets),
-    interceptor.sink
+    interceptor!.sink
   )
   const tabs = createTabManager(mainWindow, {
     onActiveChanged: (target, tabId) => {

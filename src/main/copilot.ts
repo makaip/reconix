@@ -52,7 +52,7 @@ import type {
   ServerStatus,
   UsageSnapshot
 } from '../shared/contracts'
-import type { CapturedRequest } from '../shared/tabs'
+import type { CapturedRequest, InterceptRule } from '../shared/tabs'
 import type { NetworkCapture } from './network'
 import {
   createOpenCodeConnector,
@@ -619,7 +619,7 @@ async function resolveSandboxDir(): Promise<string> {
   return dir
 }
 
-export function createCopilotBridge(win: BrowserWindow, getNetwork: () => NetworkCapture | undefined): CopilotBridge {
+export function createCopilotBridge(win: BrowserWindow, getNetwork: () => NetworkCapture | undefined, getInterceptor?: () => { save(raw: unknown): InterceptRule | null; list(): InterceptRule[]; toggle(id: unknown, enabled: unknown): InterceptRule | null; remove(id: unknown): boolean } | undefined): CopilotBridge {
   let child: ChildProcessWithoutNullStreams | null = null
   let connector: OpenCodeConnector | null = null
   let starting: Promise<OpenCodeConnector> | null = null
@@ -814,7 +814,8 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
         network: networkReader,
         traces: traces.store,
         findings: findingsStore.sink,
-        history
+        history,
+        interceptor: getInterceptor?.()
       }
       const registry = buildMcpServer({ audit, context, surface: 'all' })
       try {
