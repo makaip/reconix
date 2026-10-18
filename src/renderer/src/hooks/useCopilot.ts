@@ -16,7 +16,6 @@ export type ResourceRef = {
   // Eagerly captured at drag/drop time so the agent gets the bytes, not just a URL.
   content?: string
   contentTruncated?: boolean
-  contentType?: string
   capturedAt?: number
 }
 
@@ -443,19 +442,29 @@ export function useCopilot(): Copilot {
   const attachResources = useCallback(async (resources: ResourceRef[]) => {
     for (const resource of resources) {
       // Eagerly capture body content so the agent gets the bytes, not just a URL.
+      // Resolve frameId if missing (e.g. sitemap drags) by matching against the
+      // live DevTools resource tree.
+      let frameId = resource.frameId
+      if (!frameId) {
+        try {
+          const resources = await window.reconix.devtools.getResources()
+          const match = resources?.find((r) => r.url === resource.url)
+          if (match) frameId = match.frameId
+        } catch {
+          // leave unresolved
+        }
+      }
       let content: string | undefined
       let contentTruncated = false
-      let contentType: string | undefined
-      if (resource.frameId) {
+      if (frameId) {
         try {
           const result = await window.reconix.devtools.getResourceContent({
-            frameId: resource.frameId,
+            frameId,
             url: resource.url
           })
           if (result && !result.binary && result.content) {
             content = result.content
             contentTruncated = result.truncated
-            contentType = undefined
           }
         } catch {
           // Degrade to label-only on failure.
@@ -471,7 +480,6 @@ export function useCopilot(): Copilot {
             ...resource,
             content,
             contentTruncated,
-            contentType,
             capturedAt: Date.now()
           }
         ]
