@@ -452,7 +452,15 @@ function CopilotPanel({
                 </button>
               ))}
             </div>
-          ) : null}
+          ) : (
+            <input
+              type="text"
+              placeholder="Type your answer…"
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') respondQuestion(pendingQuestion.questionId, (e.target as HTMLInputElement).value)
+              }}
+            />
+          )}
           <button type="button" onClick={() => respondQuestion(pendingQuestion.questionId, '')}>Cancel</button>
         </div>
       )}
