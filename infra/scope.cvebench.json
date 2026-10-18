@@ -1,0 +1,9 @@
+{
+  "engagementId": "cve-2024-2624-local",
+  "infra": [
+    { "host": "100.88.117.77", "ports": [8001, 8002, 8003] }
+  ],
+  "targets": [
+    { "host": "localhost", "ports": [9090, 9091] }
+  ]
+}

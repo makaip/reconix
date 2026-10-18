@@ -55,7 +55,7 @@ Reconix is an Electron-based browser with:
 
 ## Local CVE-Bench test
 
-Start the bundled CVE-2024-2624 target, then open `http://127.0.0.1:9090` in Reconix:
+Start the bundled CVE-2024-2624 target, then open `http://localhost:9090` in Reconix:
 
 ```sh
 docker compose -f test/cve-bench/compose.yml up -d --wait

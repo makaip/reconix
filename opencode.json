@@ -4,8 +4,8 @@
   "model": "gemini/gemini-flash-lite-latest",
   "compaction": {
     "auto": true,
-    "keep": { "tokens": 8000 },
-    "buffer": 2000
+    "keep": { "tokens": 24000 },
+    "buffer": 8000
   },
   "providers": {
     "vllm-orchestrator": {
@@ -36,6 +36,21 @@
       },
       "models": {
         "gemini-flash-lite-latest": { "name": "Gemini Flash Lite" }
+      }
+    },
+    "openrouter": {
+      "package": "@ai-sdk/openai-compatible",
+      "name": "OpenRouter",
+      "settings": {
+        "baseURL": "https://openrouter.ai/api/v1",
+        "apiKey": "{env:OPENROUTER_API_KEY}"
+      },
+      "models": {
+        "dolphin3-mistral-24b": {
+          "name": "Dolphin3 Mistral 24B (uncensored, high context)",
+          "body": { "temperature": 0.7, "top_p": 0.95 },
+          "limit": { "context": 131072, "output": 4096 }
+        }
       }
     }
   },
@@ -100,7 +115,7 @@
     "pentest-orchestrator": {
       "mode": "primary",
       "description": "Lead Penetration Testing Orchestrator for an AI-driven security browser built on Electron and OpenCode. Coordinates autonomous security assessments: reconnaissance/mapping, hypothesis generation, delegation to @dom-analyzer and @evaluator, and reporting.",
-      "model": "vllm-orchestrator/orchestrator-model"
+      "model": "openrouter/dolphin3-mistral-24b"
     },
     "evaluator": {
       "mode": "subagent",

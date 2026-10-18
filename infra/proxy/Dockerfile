@@ -7,7 +7,7 @@
 #
 # Base image is pinned by tag AND digest in VERSIONS.lock. Replace the digest
 # below with the verified one before production.
-FROM node:22.11.0-alpine3.20@sha256:REPLACE_WITH_VERIFIED_NODE_DIGEST AS runtime
+FROM node:22.11.0-alpine3.20@sha256:b64ced2e7cd0a4816699fe308ce6e8a08ccba463c757c00c14cd372e3d2c763e AS runtime
 
 WORKDIR /app
 
