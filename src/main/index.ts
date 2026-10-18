@@ -8,9 +8,9 @@ import { attachInspector, combineNetworkSinks } from './inspector'
 import { createInterceptor } from './intercept'
 import { startNetworkCapture, type NetworkCapture } from './network'
 import { createWebSocketCapture } from './websocket'
-import { createCrawler } from './crawler'
+import { createCrawler, createCrawlCore, type CrawlCore } from './crawler'
 import { createReplay } from './replay'
-import { createRepeater } from './repeater'
+import { createRepeater, createRepeaterCore, type RepeaterCore } from './repeater'
 import { proxyStatus } from './runtime'
 import { createSessionManager } from './session'
 import { runSmoke } from './smoke'
@@ -181,8 +181,10 @@ function createWindow(): void {
   // ActiveTabNetworkReader's comment in copilot.ts for why.
   let network: NetworkCapture | undefined
   let interceptor: Interceptor | undefined
+  let crawlCore: CrawlCore | undefined
+  let repeaterCore: RepeaterCore | undefined
   let copilotTargetTabId: number | null = null
-  copilotBridge = createCopilotBridge(mainWindow, () => network, () => interceptor)
+  copilotBridge = createCopilotBridge(mainWindow, () => network, () => interceptor, () => crawlCore, () => repeaterCore)
 
   const bodies = createBodyStore(mainWindow)
   const websockets = createWebSocketCapture(mainWindow)
@@ -251,10 +253,14 @@ function createWindow(): void {
   })
   const { replayer } = createReplay(mainWindow, configuredScope ?? activeOriginScope)
   // Repeater reuses the one gated replayer so its sends are scope-/rate-checked too.
-  createRepeater(mainWindow, replayer)
+  // The core is shared with the copilot's MCP tools so the agent can drive it.
+  repeaterCore = createRepeaterCore(replayer)
+  createRepeater(mainWindow, replayer, repeaterCore)
   // The crawler drives the SAME gated replayer, so its spidering never egresses
-  // outside authorized scope or past the per-host rate limit.
-  createCrawler(mainWindow, replayer)
+  // outside authorized scope or past the per-host rate limit. The core is shared
+  // with the copilot's MCP tools so the agent can drive the same crawl.
+  crawlCore = createCrawlCore(replayer)
+  createCrawler(mainWindow, replayer, crawlCore)
   createSessionManager(mainWindow)
 
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {

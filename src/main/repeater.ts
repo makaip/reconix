@@ -50,16 +50,25 @@ function normalizeSave(raw: unknown): SaveRequestInput | null {
  * so every send is scope- and rate-checked identically. Holds recent response history
  * per request for the diff view. In-memory, per session (no persistence yet).
  */
-export function createRepeater(win: BrowserWindow, replayer: Replayer): Repeater {
+/** Reusable, window-independent repeater store + send core. */
+export interface RepeaterCore {
+  list(): SavedRequest[]
+  save(raw: unknown): SavedRequest | null
+  remove(id: unknown): boolean
+  run(id: unknown): Promise<SavedRequest | null>
+  diff(raw: unknown): unknown
+  onUpdate(cb: (items: SavedRequest[]) => void): void
+}
+
+export function createRepeaterCore(replayer: Replayer): RepeaterCore {
   // Insertion-ordered; oldest evicted once over MAX_SAVED.
   const saved = new Map<string, SavedRequest>()
 
   const list = (): SavedRequest[] => [...saved.values()]
 
+  let listener: ((items: SavedRequest[]) => void) | undefined
   const broadcast = (): void => {
-    if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
-      win.webContents.send('repeater:changed', list())
-    }
+    listener?.(list())
   }
 
   const save = (raw: unknown): SavedRequest | null => {
@@ -129,17 +138,38 @@ export function createRepeater(win: BrowserWindow, replayer: Replayer): Repeater
     return invokeTool(diffResponsesTool, { a, b })
   }
 
+  return {
+    list,
+    save,
+    remove,
+    run,
+    diff,
+    onUpdate: (cb) => {
+      listener = cb
+    }
+  }
+}
+
+/** Window/IPC wrapper around the reusable repeater core. */
+export function createRepeater(win: BrowserWindow, replayer: Replayer, existingCore?: RepeaterCore): Repeater {
+  const core = existingCore ?? createRepeaterCore(replayer)
+
   const handle = (channel: string, fn: (...args: unknown[]) => unknown): void => {
     ipcMain.removeHandler(channel)
     ipcMain.handle(channel, (event, ...args) =>
       event.sender === win.webContents ? fn(...args) : null
     )
   }
-  handle('repeater:list', () => list())
-  handle('repeater:save', (payload) => save(payload))
-  handle('repeater:delete', (id) => remove(id))
-  handle('repeater:send', (id) => run(id))
-  handle('repeater:diff', (payload) => diff(payload))
+  handle('repeater:list', () => core.list())
+  handle('repeater:save', (payload) => core.save(payload))
+  handle('repeater:delete', (id) => core.remove(id))
+  handle('repeater:send', (id) => core.run(id))
+  handle('repeater:diff', (payload) => core.diff(payload))
+  core.onUpdate((items) => {
+    if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
+      win.webContents.send('repeater:changed', items)
+    }
+  })
 
   const channels = ['repeater:list', 'repeater:save', 'repeater:delete', 'repeater:send', 'repeater:diff']
   const close = (): void => {

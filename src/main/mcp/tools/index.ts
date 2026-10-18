@@ -8,6 +8,8 @@ import { findingTools } from './findings'
 import { evidenceTools } from './evidence'
 import { customTools } from './custom'
 import { capabilityTools } from './capabilities'
+import { crawlerTools } from './crawler'
+import { repeaterTools } from './repeater'
 
 // Full catalog (API.md §3). Dev 1's customTools (§3.8) sit in the same list and
 // go through the same pipeline as Dev 3's own tools.
@@ -21,7 +23,9 @@ export const allTools: Tool[] = [
   ...findingTools,
   ...evidenceTools,
   ...customTools,
-  ...capabilityTools
+  ...capabilityTools,
+  ...crawlerTools,
+  ...repeaterTools
 ]
 
 // The MVP subset the doc's Appendix names — what the spine turns on first.

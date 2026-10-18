@@ -619,7 +619,7 @@ async function resolveSandboxDir(): Promise<string> {
   return dir
 }
 
-export function createCopilotBridge(win: BrowserWindow, getNetwork: () => NetworkCapture | undefined, getInterceptor?: () => { save(raw: unknown): InterceptRule | null; list(): InterceptRule[]; toggle(id: unknown, enabled: unknown): InterceptRule | null; remove(id: unknown): boolean } | undefined): CopilotBridge {
+export function createCopilotBridge(win: BrowserWindow, getNetwork: () => NetworkCapture | undefined, getInterceptor?: () => { save(raw: unknown): InterceptRule | null; list(): InterceptRule[]; toggle(id: unknown, enabled: unknown): InterceptRule | null; remove(id: unknown): boolean } | undefined, getCrawler?: () => { start(raw: unknown): unknown; stop(): unknown; getState(): unknown } | undefined, getRepeater?: () => { list(): unknown; save(raw: unknown): unknown; remove(id: unknown): unknown; run(id: unknown): unknown; diff(raw: unknown): unknown } | undefined): CopilotBridge {
   let child: ChildProcessWithoutNullStreams | null = null
   let connector: OpenCodeConnector | null = null
   let starting: Promise<OpenCodeConnector> | null = null
@@ -815,7 +815,9 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
         traces: traces.store,
         findings: findingsStore.sink,
         history,
-        interceptor: getInterceptor?.()
+        interceptor: getInterceptor?.(),
+        crawler: getCrawler?.(),
+        repeater: getRepeater?.()
       }
       const registry = buildMcpServer({ audit, context, surface: 'all' })
       try {

@@ -64,22 +64,22 @@ const isHtml = (result: Extract<ReplayResult, { ok: true }>): boolean => {
 
 export type Crawler = { close: () => void }
 
-/**
- * Deterministic scope-aware spider (ARCHITECTURE.MD §11.4). It drives the one gated
- * `replayer` to GET pages, extracts same-origin links with the pure `extractLinks`,
- * and walks breadth-first under hard depth/page caps. It opens NO socket of its own —
- * every fetch is scope-checked and rate-limited by the replayer, so the crawler adds
- * no new egress surface, only an ordering over already-authorized GETs.
- */
-export function createCrawler(win: BrowserWindow, replayer: Replayer): Crawler {
+/** Reusable, window-independent crawl engine (ARCHITECTURE.MD §11.4). */
+export interface CrawlCore {
+  start(raw: unknown): CrawlState
+  stop(): CrawlState
+  getState(): CrawlState
+  onUpdate(cb: (state: CrawlState) => void): void
+}
+
+export function createCrawlCore(replayer: Replayer): CrawlCore {
   let state: CrawlState = { running: false, startUrl: null, visited: 0, queued: 0, pages: [] }
   // Incremented on every start/stop; an in-flight loop checks it to bail when superseded.
   let runToken = 0
+  let listener: ((state: CrawlState) => void) | undefined
 
   const broadcast = (): void => {
-    if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
-      win.webContents.send('crawl:state', state)
-    }
+    listener?.(state)
   }
 
   const finish = (reason: CrawlStopReason): void => {
@@ -178,18 +178,38 @@ export function createCrawler(win: BrowserWindow, replayer: Replayer): Crawler {
     return state
   }
 
+  return {
+    start,
+    stop,
+    getState: () => state,
+    onUpdate: (cb) => {
+      listener = cb
+    }
+  }
+}
+
+/**
+ * Window/IPC wrapper around the reusable crawl core.
+ */
+export function createCrawler(win: BrowserWindow, replayer: Replayer, existingCore?: CrawlCore): Crawler {
+  const core = existingCore ?? createCrawlCore(replayer)
+
   const handle = (channel: string, fn: (...args: unknown[]) => unknown): void => {
     ipcMain.removeHandler(channel)
     ipcMain.handle(channel, (event, ...args) =>
       event.sender === win.webContents ? fn(...args) : null
     )
   }
-  handle('crawl:start', (input) => start(input))
-  handle('crawl:stop', () => stop())
-  handle('crawl:get-state', () => state)
+  handle('crawl:start', (input) => core.start(input))
+  handle('crawl:stop', () => core.stop())
+  handle('crawl:get-state', () => core.getState())
+  core.onUpdate((state) => {
+    if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
+      win.webContents.send('crawl:state', state)
+    }
+  })
 
   const close = (): void => {
-    runToken++
     for (const c of ['crawl:start', 'crawl:stop', 'crawl:get-state']) ipcMain.removeHandler(c)
   }
   win.on('closed', close)

@@ -58,6 +58,20 @@ export interface ToolContext {
     toggle(id: unknown, enabled: unknown): InterceptRule | null
     remove(id: unknown): boolean
   }
+  /** Scope-aware spider core (§11.4). Optional — present in the real app. */
+  crawler?: {
+    start(raw: unknown): unknown
+    stop(): unknown
+    getState(): unknown
+  }
+  /** Saved-request store + send core (§11.1). Optional — present in the real app. */
+  repeater?: {
+    list(): unknown
+    save(raw: unknown): unknown
+    remove(id: unknown): unknown
+    run(id: unknown): unknown
+    diff(raw: unknown): unknown
+  }
 }
 
 export interface Tool<I = unknown, O = unknown> {
