@@ -69,6 +69,10 @@ function CopilotPanel({
   const [historyOpen, setHistoryOpen] = useState(false)
   const [toolsOpen, setToolsOpen] = useState(false)
   const listRef = useRef<HTMLDivElement>(null)
+  // Whether the transcript should keep following new output. Stays true while
+  // the user is at the bottom; flipping to false once they scroll up so a
+  // streaming response can't yank the view back down mid-read.
+  const stickToBottom = useRef(true)
 
   useEffect(() => {
     if (!dragActive) setOver(false)
@@ -76,8 +80,17 @@ function CopilotPanel({
 
   useEffect(() => {
     const list = listRef.current
-    if (list) list.scrollTop = list.scrollHeight
+    if (list && stickToBottom.current) list.scrollTop = list.scrollHeight
   }, [messages, thinking])
+
+  // Re-pin when the user returns to (or near) the bottom, unpin as soon as they
+  // scroll away. The programmatic scroll above lands here as "at bottom".
+  const handleScroll = (): void => {
+    const list = listRef.current
+    if (!list) return
+    const distanceFromBottom = list.scrollHeight - list.scrollTop - list.clientHeight
+    stickToBottom.current = distanceFromBottom < 24
+  }
 
   const acceptsDrag = (event: DragEvent): boolean =>
     event.dataTransfer.types.includes(NODE_DRAG_TYPE) ||
@@ -93,7 +106,13 @@ function CopilotPanel({
   })()
   const targetTitle = activeTab?.title || targetHost || 'New Tab'
   const targetLabel = activeTab ? `Target tab: ${targetTitle}${targetHost && targetHost !== targetTitle ? ` — ${targetHost}` : ''}` : undefined
-  const sendToActiveTab = useCallback((text: string): void => send(text, targetLabel), [send, targetLabel])
+  const sendToActiveTab = useCallback(
+    (text: string): void => {
+      stickToBottom.current = true // a fresh send should always land in view
+      send(text, targetLabel)
+    },
+    [send, targetLabel]
+  )
   const viewingDifferentTab = Boolean(viewedTab && activeTab && viewedTab.id !== activeTab.id)
 
   return (
@@ -119,7 +138,16 @@ function CopilotPanel({
         >
           History
         </button>
-        <button type="button" className="copilot__header-action" onClick={newChat}>New</button>
+        <button
+          type="button"
+          className="copilot__header-action"
+          onClick={() => {
+            stickToBottom.current = true
+            newChat()
+          }}
+        >
+          New
+        </button>
         <button type="button" className="icon-button" aria-label="Close Copilot" onClick={onClose}>
           <img src={close} width={14} height={14} alt="" />
         </button>
@@ -141,6 +169,7 @@ function CopilotPanel({
                   className="chat-history__item"
                   key={conversation.id}
                   onClick={() => {
+                    stickToBottom.current = true
                     showConversation(conversation.id)
                     setHistoryOpen(false)
                   }}
@@ -221,6 +250,7 @@ function CopilotPanel({
       <div
         ref={listRef}
         className="copilot__messages"
+        onScroll={handleScroll}
         onDragOver={(event) => {
           if (!acceptsDrag(event)) return
           event.preventDefault()
