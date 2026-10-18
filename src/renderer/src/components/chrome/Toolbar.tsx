@@ -2,6 +2,7 @@ import navLeft from '../../assets/icons/nav-left.svg'
 import navReload from '../../assets/icons/nav-reload.svg'
 import navRight from '../../assets/icons/nav-right.svg'
 import toolbarChat from '../../assets/icons/toolbar-chat.svg'
+import toolbarSettings from '../../assets/icons/toolbar-settings.svg'
 import toolbarSidebar from '../../assets/icons/toolbar-sidebar.svg'
 import UrlBar from './UrlBar'
 
@@ -13,6 +14,7 @@ type ToolbarProps = {
   onToggleSidebar: () => void
   copilotOpen: boolean
   onToggleCopilot: () => void
+  onOpenSettings: () => void
 }
 
 type NavButtonProps = {
@@ -38,8 +40,10 @@ function Toolbar({
   sidebarOpen,
   onToggleSidebar,
   copilotOpen,
-  onToggleCopilot
+  onToggleCopilot,
+  onOpenSettings
 }: ToolbarProps): JSX.Element {
+  const settingsHint = window.reconix.platform === 'darwin' ? '⌘,' : 'Ctrl+,'
   const { target } = window.reconix
 
   return (
@@ -81,6 +85,15 @@ function Toolbar({
         Recorder
       </button>
       <span className="toolbar__divider" />
+      <button
+        type="button"
+        className="toolbar-button"
+        aria-label="Settings"
+        title={`Settings (${settingsHint})`}
+        onClick={onOpenSettings}
+      >
+        <img src={toolbarSettings} width={14} height={14} alt="" />
+      </button>
       <button
         type="button"
         className="toolbar-button"

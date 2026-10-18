@@ -1,6 +1,7 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import CopilotPanel from './components/copilot/CopilotPanel'
 import DevToolsPanel from './components/devtools/DevToolsPanel'
+import SettingsModal from './components/SettingsModal'
 import Sidebar from './components/sidebar/Sidebar'
 import Splash from './components/Splash'
 import ViewSlot from './components/ViewSlot'
@@ -11,6 +12,7 @@ import Toolbar from './components/chrome/Toolbar'
 import { useCopilot } from './hooks/useCopilot'
 import { useNetworkStats } from './hooks/useNetworkStats'
 import { useResizable } from './hooks/useResizable'
+import { useSettings } from './hooks/useSettings'
 import { useTabs } from './hooks/useTabs'
 
 const setTargetBounds = window.reconix.target.setBounds
@@ -19,9 +21,25 @@ function App(): JSX.Element {
   const copilot = useCopilot()
   const tabs = useTabs()
   const network = useNetworkStats()
+  const settings = useSettings()
   const [dragActive, setDragActive] = useState(false)
-  const [copilotOpen, setCopilotOpen] = useState(true)
-  const [sidebarOpen, setSidebarOpen] = useState(true)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  // Launch-time panel visibility comes from settings; the user can still toggle at runtime.
+  const [copilotOpen, setCopilotOpen] = useState(settings.settings.openCopilotOnLaunch)
+  const [sidebarOpen, setSidebarOpen] = useState(settings.settings.openSidebarOnLaunch)
+
+  // Cmd+, on macOS, Ctrl+, elsewhere — the OS-standard "open preferences" shortcut.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      const mod = window.reconix.platform === 'darwin' ? e.metaKey : e.ctrlKey
+      if (mod && e.key === ',') {
+        e.preventDefault()
+        setSettingsOpen((open) => !open)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
   // Set when a sitemap file is double-clicked, so DevTools opens it in Sources. The counter
   // forces a re-open even when the same file is double-clicked twice in a row.
   const [openSource, setOpenSource] = useState<{ target: string; nonce: number } | null>(null)
@@ -66,6 +84,7 @@ function App(): JSX.Element {
         onToggleSidebar={() => setSidebarOpen((open) => !open)}
         copilotOpen={copilotOpen}
         onToggleCopilot={() => setCopilotOpen((open) => !open)}
+        onOpenSettings={() => setSettingsOpen(true)}
       />
 
       <div className="shell">
@@ -125,6 +144,8 @@ function App(): JSX.Element {
       </div>
 
       <StatusBar requests={network.total} />
+
+      {settingsOpen && <SettingsModal settings={settings} onClose={() => setSettingsOpen(false)} />}
     </div>
   )
 }
