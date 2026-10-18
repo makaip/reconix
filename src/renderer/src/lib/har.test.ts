@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { CapturedRequest } from '../../../shared/tabs'
-import { fromHar, toHar } from './har'
+import { fromHar, parsedHarToCaptured, toHar } from './har'
 
 const req = (over: Partial<CapturedRequest>): CapturedRequest => ({
   id: '1',
@@ -54,5 +54,54 @@ describe('fromHar', () => {
     expect(fromHar({})).toEqual([])
     expect(fromHar({ log: { entries: 'nope' } })).toEqual([])
     expect(fromHar({ log: { entries: [{ request: { method: 'GET' } }, 42] } })).toEqual([])
+  })
+})
+
+describe('parsedHarToCaptured', () => {
+  it('maps parsed entries to CapturedRequest-shaped rows', () => {
+    const har = toHar([
+      req({
+        method: 'POST',
+        statusCode: 201,
+        durationMs: 42,
+        requestHeaders: { 'X-Test': '1' },
+        responseHeaders: { 'Content-Type': ['application/json'] }
+      })
+    ])
+    const out = parsedHarToCaptured(fromHar(har))
+    expect(out).toHaveLength(1)
+    expect(out[0]).toEqual({
+      id: 'har-0',
+      tabId: -1,
+      method: 'POST',
+      url: 'https://app.test/a?x=1',
+      resourceType: 'imported',
+      startedAt: 1_700_000_000_000,
+      statusCode: 201,
+      durationMs: 42,
+      requestHeaders: { 'X-Test': '1' },
+      responseHeaders: { 'Content-Type': ['application/json'] }
+    })
+  })
+
+  it('uses the given tab index and derives positional ids', () => {
+    const parsed = fromHar(toHar([req({ url: 'https://app.test/1' }), req({ url: 'https://app.test/2' })]))
+    const out = parsedHarToCaptured(parsed, 3)
+    expect(out.map((r) => r.id)).toEqual(['har-0', 'har-1'])
+    expect(out.map((r) => r.tabId)).toEqual([3, 3])
+  })
+
+  it('returns [] for no entries and tolerates missing status/duration/headers', () => {
+    expect(parsedHarToCaptured([])).toEqual([])
+    const out = parsedHarToCaptured([
+      { method: 'GET', url: 'https://app.test/z', requestHeaders: {}, responseHeaders: {}, startedAt: 0 }
+    ])
+    expect(out[0]).toMatchObject({
+      id: 'har-0',
+      statusCode: undefined,
+      durationMs: undefined,
+      responseHeaders: {},
+      requestHeaders: {}
+    })
   })
 })

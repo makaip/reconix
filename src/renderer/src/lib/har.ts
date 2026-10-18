@@ -95,6 +95,29 @@ export function toHar(requests: CapturedRequest[]): Har {
   return { log: { version: '1.2', creator: { name: 'Reconix', version: '1' }, entries } }
 }
 
+/**
+ * Maps parsed HAR entries back into CapturedRequest-shaped rows for the network
+ * panel's local display list. Imported rows get a positional `har-<i>` id,
+ * resourceType 'imported', and a tabId of `tabIndex` (default -1 = no live tab).
+ * Response headers are re-widened to the string[] form CapturedRequest uses.
+ */
+export function parsedHarToCaptured(parsed: ParsedHarEntry[], tabIndex = -1): CapturedRequest[] {
+  return parsed.map((entry, i) => ({
+    id: `har-${i}`,
+    tabId: tabIndex,
+    method: entry.method,
+    url: entry.url,
+    resourceType: 'imported',
+    startedAt: entry.startedAt,
+    statusCode: entry.status,
+    durationMs: entry.durationMs,
+    requestHeaders: entry.requestHeaders,
+    responseHeaders: Object.fromEntries(
+      Object.entries(entry.responseHeaders).map(([name, value]) => [name, [value]])
+    )
+  }))
+}
+
 const pairsToRecord = (pairs: unknown): Record<string, string> => {
   const out: Record<string, string> = {}
   if (!Array.isArray(pairs)) return out

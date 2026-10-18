@@ -347,6 +347,22 @@
   text-align: right;
 }
 
+/* File input is driven by the "Import HAR" button, so it is never shown itself. */
+.dt-network__file {
+  display: none;
+}
+
+/* Marks rows that came from an imported HAR rather than live capture. */
+.dt-network__badge {
+  margin-left: 6px;
+  padding: 0 4px;
+  border: 1px solid var(--color-border);
+  border-radius: 3px;
+  color: var(--color-text-faint);
+  font-family: var(--font-sans);
+  font-size: var(--text-2xs);
+}
+
 .dt-network__status--ok {
   color: var(--color-success);
 }

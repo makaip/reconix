@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from 'react'
+import { type ChangeEvent, useEffect, useMemo, useRef, useState } from 'react'
 import type { CapturedRequest } from '../../../../shared/tabs'
 import { queryRequests, type RequestQuery } from '../../lib/requestQuery'
-import { toHar } from '../../lib/har'
+import { fromHar, parsedHarToCaptured, toHar } from '../../lib/har'
 import { REQUEST_DRAG_TYPE, type RequestDragItem } from '../../lib/dragTypes'
 import { useResizable } from '../../hooks/useResizable'
 import ResizeHandle from '../chrome/ResizeHandle'
@@ -72,9 +72,17 @@ function NetworkPanel({ requests, onDragStart, onDragEnd }: NetworkPanelProps): 
     storageKey: 'network.detail'
   })
   const [query, setQuery] = useState<RequestQuery>(EMPTY_QUERY)
-  const selected = requests.find((request) => request.id === selectedId) ?? null
+  // HAR-imported rows live only in this panel (never in the capture buffer).
+  const [imported, setImported] = useState<CapturedRequest[]>([])
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
-  const filtered = useMemo(() => queryRequests(requests, query), [requests, query])
+  const allRequests = useMemo(
+    () => (imported.length === 0 ? requests : [...requests, ...imported]),
+    [requests, imported]
+  )
+  const selected = allRequests.find((request) => request.id === selectedId) ?? null
+
+  const filtered = useMemo(() => queryRequests(allRequests, query), [allRequests, query])
 
   // Downloads the currently-shown requests as a HAR 1.2 file (no server round-trip).
   const exportHar = (): void => {
@@ -85,6 +93,20 @@ function NetworkPanel({ requests, onDragStart, onDragEnd }: NetworkPanelProps): 
     a.download = `reconix-${new Date().toISOString().slice(0, 19).replace(/:/g, '')}.har`
     a.click()
     URL.revokeObjectURL(url)
+  }
+
+  // Reads a .har file chosen by the user and appends its entries to the local display list.
+  const onHarFile = async (event: ChangeEvent<HTMLInputElement>): Promise<void> => {
+    const file = event.target.files?.[0]
+    // Reset so re-selecting the same file fires change again.
+    event.target.value = ''
+    if (!file) return
+    try {
+      const rows = parsedHarToCaptured(fromHar(JSON.parse(await file.text())))
+      if (rows.length > 0) setImported((prev) => [...prev, ...rows])
+    } catch {
+      // Unreadable file or invalid JSON: nothing to show, leave the list unchanged.
+    }
   }
 
   const set = (patch: Partial<RequestQuery>): void =>
@@ -100,10 +122,10 @@ function NetworkPanel({ requests, onDragStart, onDragEnd }: NetworkPanelProps): 
 
   // dropped requests (tab closed, capture buffer trimmed) shouldn't leave a dangling selection
   useEffect(() => {
-    if (selectedId !== null && !requests.some((request) => request.id === selectedId)) {
+    if (selectedId !== null && !allRequests.some((request) => request.id === selectedId)) {
       setSelectedId(null)
     }
-  }, [requests, selectedId])
+  }, [allRequests, selectedId])
 
   return (
     <div className="dt-network">
@@ -118,12 +140,23 @@ function NetworkPanel({ requests, onDragStart, onDragEnd }: NetworkPanelProps): 
         <button type="button" className="dt-text-button" onClick={exportHar} disabled={filtered.length === 0}>
           Export HAR
         </button>
+        <button type="button" className="dt-text-button" onClick={() => fileInputRef.current?.click()}>
+          Import HAR
+        </button>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".har,application/json"
+          aria-label="Import HAR file"
+          className="dt-network__file"
+          onChange={onHarFile}
+        />
       </div>
       <div className="dt-network__body">
       <div className="dt-network__list" role="table" aria-label="Network requests">
         {filtered.length === 0 ? (
           <p className="dt-empty">
-            {requests.length === 0 ? 'No requests captured yet.' : 'No requests match the filter.'}
+            {allRequests.length === 0 ? 'No requests captured yet.' : 'No requests match the filter.'}
           </p>
         ) : (
           <div className="dt-network__rows">
@@ -163,7 +196,10 @@ function NetworkPanel({ requests, onDragStart, onDragEnd }: NetworkPanelProps): 
                   {statusLabel(request)}
                 </span>
                 <span className="dt-network__cell dt-network__cell--method">{request.method}</span>
-                <span className="dt-network__cell dt-network__cell--name">{requestName(request.url)}</span>
+                <span className="dt-network__cell dt-network__cell--name">
+                  {requestName(request.url)}
+                  {request.resourceType === 'imported' && <span className="dt-network__badge">imported</span>}
+                </span>
                 <span className="dt-network__cell dt-network__cell--type dt-muted">
                   {request.resourceType}
                 </span>
