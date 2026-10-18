@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties, type DragEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent } from 'react'
 import chat from '../../assets/icons/chat.svg'
 import close from '../../assets/icons/close.svg'
 import clock from '../../assets/icons/clock.svg'
@@ -16,7 +16,8 @@ import {
   type RequestDragItem,
   type ResourceDragItem
 } from '../../lib/dragTypes'
-import Composer from './Composer'
+import Composer, { type SubmitResult } from './Composer'
+import { interpret, type CommandContext, type CommandPanel } from './commands'
 import DropZone from './DropZone'
 import Message from './Message'
 
@@ -127,6 +128,48 @@ function CopilotPanel({
     [send, targetLabel]
   )
   const viewingDifferentTab = Boolean(viewedTab && activeTab && viewedTab.id !== activeTab.id)
+
+  const openPanel = useCallback((panel: CommandPanel | null): void => {
+    setHistoryOpen(panel === 'history')
+    setToolsOpen(panel === 'tools')
+    setRestrictionsOpen(panel === 'restrictions')
+  }, [])
+
+  const commandContext = useMemo<CommandContext>(
+    () => ({
+      send: sendToActiveTab,
+      newChat: () => {
+        stickToBottom.current = true
+        newChat()
+        openPanel(null)
+      },
+      suspend,
+      openPanel,
+      setAllToolsEnabled
+    }),
+    [sendToActiveTab, newChat, suspend, openPanel, setAllToolsEnabled]
+  )
+
+  // Route a submitted string: slash commands run locally or expand into a
+  // prompt; everything else goes to the agent. The return value is the input's
+  // next value — "/help" reopens the full list, an unknown command shows it too.
+  const handleSubmit = useCallback(
+    (value: string): SubmitResult => {
+      const parsed = interpret(value)
+      switch (parsed.kind) {
+        case 'message':
+          sendToActiveTab(parsed.text)
+          return { text: null }
+        case 'command':
+          parsed.command.run(commandContext, parsed.args)
+          return { text: null }
+        case 'help':
+        case 'unknown':
+          return { text: '/' }
+      }
+    },
+    [sendToActiveTab, commandContext]
+  )
 
   return (
     <aside className="copilot" aria-label="Copilot" style={style}>
@@ -383,7 +426,7 @@ function CopilotPanel({
         <Composer
           attachments={attachments}
           onDetach={detach}
-          onSend={sendToActiveTab}
+          onSubmit={handleSubmit}
           requestCount={requestCount}
           busy={busy}
           onStop={suspend}
