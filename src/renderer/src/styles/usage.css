@@ -2,46 +2,67 @@
   flex: 1 1 auto;
   min-height: 0;
   padding: 12px 14px 16px;
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .usage__note {
   margin: 0 0 12px;
   font-size: var(--text-2xs);
-  color: var(--color-text-muted);
+  color: var(--color-text-faint);
 }
 
-.usage__tiles {
+/* Totals as a compact label/value list: fits any dock width without the orphan
+   tile a wrapping grid leaves behind. */
+.usage__summary {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
-  gap: 8px;
-  margin-bottom: 16px;
-}
-
-.usage__tile {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 8px 10px;
+  grid-template-columns: 1fr 1fr;
+  margin: 0;
   background: var(--color-bg-deep);
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-sm);
+  overflow: hidden;
 }
 
-.usage__tile-value {
-  font-size: var(--text-md);
-  font-weight: 600;
-  color: var(--color-text);
+.usage__stat {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px 10px;
+  border-top: 1px solid var(--color-border-subtle);
 }
 
-.usage__tile-label {
+.usage__stat:nth-child(-n + 2) {
+  border-top: 0;
+}
+
+.usage__stat:nth-child(odd) {
+  border-right: 1px solid var(--color-border-subtle);
+}
+
+.usage__stat--span {
+  grid-column: 1 / -1;
+  border-right: 0;
+}
+
+.usage__stat-label {
   font-size: var(--text-2xs);
   color: var(--color-text-muted);
 }
 
-.usage__empty {
-  margin: 4px 0 0;
+.usage__stat-value {
+  margin: 0;
   font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.usage__empty {
+  margin: 12px 0 0;
+  font-size: var(--text-xs);
   color: var(--color-text-muted);
 }
 
@@ -51,19 +72,23 @@
 
 .usage__section-title {
   margin: 0 0 6px;
-  font-size: var(--text-sm);
+  font-size: var(--text-2xs);
   font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-text-faint);
 }
 
 .usage__live {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 12px;
+  gap: 6px 12px;
   padding: 8px 10px;
-  background: rgba(74, 158, 255, 0.07);
-  border: 1px solid rgba(74, 158, 255, 0.24);
+  background: color-mix(in srgb, var(--color-accent) 7%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-accent) 24%, transparent);
   border-radius: var(--radius-sm);
-  font-size: var(--text-sm);
+  font-size: var(--text-xs);
 }
 
 .usage__live-dot {
@@ -94,6 +119,14 @@
   white-space: nowrap;
 }
 
+/* Tables can be wider than a narrow dock, so scroll them on their own rather
+   than letting the whole panel scroll sideways. */
+.usage__scroll {
+  overflow-x: auto;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+}
+
 .usage__table {
   width: 100%;
   border-collapse: collapse;
@@ -103,16 +136,29 @@
 .usage__table th {
   text-align: left;
   font-weight: 600;
-  color: var(--color-text-muted);
-  padding: 4px 8px;
+  color: var(--color-text-faint);
+  padding: 5px 8px;
+  background: var(--color-bg-deep);
   border-bottom: 1px solid var(--color-border-subtle);
   white-space: nowrap;
 }
 
 .usage__table td {
-  padding: 4px 8px;
+  padding: 5px 8px;
   border-bottom: 1px solid var(--color-border-subtle);
   white-space: nowrap;
+}
+
+.usage__table tr:last-child td {
+  border-bottom: 0;
+}
+
+/* Model and tool identifiers get long; keep them on one line and clip so the
+   numeric columns stay aligned. */
+.usage__name {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .usage__num {
@@ -125,9 +171,9 @@
 }
 
 .usage__bad {
-  color: #ff6b6b;
+  color: var(--color-error);
 }
 
 .usage__row--error td {
-  color: #ffb0b0;
+  color: color-mix(in srgb, var(--color-error) 70%, var(--color-text));
 }

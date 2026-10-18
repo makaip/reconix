@@ -84,34 +84,30 @@ function UsagePanel({ usage, onClose }: UsagePanelProps): JSX.Element {
       </header>
 
       <div className="usage__body">
-        <p className="usage__note">
-          Counts and timing only — prompts and target data are never captured here.
-        </p>
-
-        <div className="usage__tiles">
-          <div className="usage__tile">
-            <span className="usage__tile-value">{totals.turns}</span>
-            <span className="usage__tile-label">Turns</span>
+        <dl className="usage__summary">
+          <div className="usage__stat">
+            <dt className="usage__stat-label">Turns</dt>
+            <dd className="usage__stat-value">{totals.turns}</dd>
           </div>
-          <div className="usage__tile">
-            <span className="usage__tile-value">{totals.parserRefreshes}</span>
-            <span className="usage__tile-label">DOM refreshes</span>
+          <div className="usage__stat">
+            <dt className="usage__stat-label">DOM refreshes</dt>
+            <dd className="usage__stat-value">{totals.parserRefreshes}</dd>
           </div>
-          <div className="usage__tile">
-            <span className="usage__tile-value">{formatTokens(totals.inputTokens)}</span>
-            <span className="usage__tile-label">Input tokens</span>
+          <div className="usage__stat">
+            <dt className="usage__stat-label">Input tokens</dt>
+            <dd className="usage__stat-value">{formatTokens(totals.inputTokens)}</dd>
           </div>
-          <div className="usage__tile">
-            <span className="usage__tile-value">{formatTokens(totals.outputTokens)}</span>
-            <span className="usage__tile-label">Output tokens</span>
+          <div className="usage__stat">
+            <dt className="usage__stat-label">Output tokens</dt>
+            <dd className="usage__stat-value">{formatTokens(totals.outputTokens)}</dd>
           </div>
-          <div className="usage__tile">
-            <span className="usage__tile-value">
+          <div className="usage__stat usage__stat--span">
+            <dt className="usage__stat-label">Est. cost</dt>
+            <dd className="usage__stat-value">
               {formatCost(totals.costUsd, totals.inputTokens + totals.outputTokens)}
-            </span>
-            <span className="usage__tile-label">Est. cost</span>
+            </dd>
           </div>
-        </div>
+        </dl>
 
         {empty && (
           <p className="usage__empty">
@@ -140,6 +136,7 @@ function UsagePanel({ usage, onClose }: UsagePanelProps): JSX.Element {
         {recentTurns.length > 0 && (
           <section className="usage__section">
             <h3 className="usage__section-title">Recent turns</h3>
+            <div className="usage__scroll">
             <table className="usage__table">
               <thead>
                 <tr>
@@ -156,7 +153,9 @@ function UsagePanel({ usage, onClose }: UsagePanelProps): JSX.Element {
                 {recentTurns.map((turn) => (
                   <tr key={turn.id} className={turn.error ? 'usage__row--error' : undefined}>
                     <td>{ROLE_LABEL[turn.role]}</td>
-                    <td className="usage__muted">{turn.model}</td>
+                    <td className="usage__muted usage__name" title={turn.model}>
+                      {turn.model}
+                    </td>
                     <td className="usage__num">{formatMs(ttftMs(turn))}</td>
                     <td className="usage__num">{formatMs(durationMs(turn, now))}</td>
                     <td className="usage__num">
@@ -177,12 +176,14 @@ function UsagePanel({ usage, onClose }: UsagePanelProps): JSX.Element {
                 ))}
               </tbody>
             </table>
+            </div>
           </section>
         )}
 
         {rollups.byModel.length > 0 && (
           <section className="usage__section">
             <h3 className="usage__section-title">By model</h3>
+            <div className="usage__scroll">
             <table className="usage__table">
               <thead>
                 <tr>
@@ -197,7 +198,9 @@ function UsagePanel({ usage, onClose }: UsagePanelProps): JSX.Element {
               <tbody>
                 {rollups.byModel.map((row) => (
                   <tr key={row.model}>
-                    <td className="usage__muted">{row.model}</td>
+                    <td className="usage__muted usage__name" title={row.model}>
+                      {row.model}
+                    </td>
                     <td className="usage__num">{row.calls}</td>
                     <td className="usage__num">{formatMs(row.p50Ms)}</td>
                     <td className="usage__num">{formatMs(row.p95Ms)}</td>
@@ -211,12 +214,14 @@ function UsagePanel({ usage, onClose }: UsagePanelProps): JSX.Element {
                 ))}
               </tbody>
             </table>
+            </div>
           </section>
         )}
 
         {rollups.byTool.length > 0 && (
           <section className="usage__section">
             <h3 className="usage__section-title">By tool</h3>
+            <div className="usage__scroll">
             <table className="usage__table">
               <thead>
                 <tr>
@@ -230,7 +235,9 @@ function UsagePanel({ usage, onClose }: UsagePanelProps): JSX.Element {
               <tbody>
                 {rollups.byTool.map((row) => (
                   <tr key={row.tool}>
-                    <td>{row.tool}</td>
+                    <td className="usage__name" title={row.tool}>
+                      {row.tool}
+                    </td>
                     <td className="usage__num">{row.calls}</td>
                     <td className="usage__num">
                       {row.errors > 0 ? <span className="usage__bad">{row.errors}</span> : 0}
@@ -241,6 +248,7 @@ function UsagePanel({ usage, onClose }: UsagePanelProps): JSX.Element {
                 ))}
               </tbody>
             </table>
+            </div>
           </section>
         )}
       </div>
