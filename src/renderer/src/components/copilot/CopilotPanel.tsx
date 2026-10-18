@@ -437,31 +437,35 @@ function CopilotPanel({
       </div>
 
       {pendingQuestion && (
-        <div className="copilot__question" role="dialog">
-          <div className="copilot__question-header">{pendingQuestion.header}</div>
-          <div className="copilot__question-text">{pendingQuestion.question}</div>
+        <div className="question-card" role="dialog" aria-label={pendingQuestion.header}>
+          <p className="question-card__eyebrow">{pendingQuestion.header}</p>
+          <p className="question-card__prompt">{pendingQuestion.question}</p>
           {pendingQuestion.options && pendingQuestion.options.length > 0 ? (
-            <div className="copilot__question-options">
+            <div className="question-card__options">
               {pendingQuestion.options.map((opt) => (
                 <button
                   key={opt}
                   type="button"
+                  className="question-card__option"
                   onClick={() => respondQuestion(pendingQuestion.questionId, pendingQuestion.multiple ? [opt] : opt)}
                 >
-                  {opt}
+                  <span className="question-card__label">{opt}</span>
                 </button>
               ))}
             </div>
           ) : (
             <input
               type="text"
+              className="question-card__option"
               placeholder="Type your answer…"
               onKeyDown={(e) => {
                 if (e.key === 'Enter') respondQuestion(pendingQuestion.questionId, (e.target as HTMLInputElement).value)
               }}
             />
           )}
-          <button type="button" onClick={() => respondQuestion(pendingQuestion.questionId, '')}>Cancel</button>
+          <button type="button" className="question-card__option" onClick={() => respondQuestion(pendingQuestion.questionId, '')}>
+            <span className="question-card__label">Cancel</span>
+          </button>
         </div>
       )}
       {viewingHistory ? (
