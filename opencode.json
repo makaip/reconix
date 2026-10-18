@@ -2,6 +2,11 @@
   "$schema": "https://opencode.ai/config.json",
   "default_agent": "pentest-orchestrator",
   "model": "gemini/gemini-flash-lite-latest",
+  "compaction": {
+    "auto": true,
+    "keep": { "tokens": 8000 },
+    "buffer": 2000
+  },
   "providers": {
     "vllm-orchestrator": {
       "package": "@ai-sdk/openai-compatible",
@@ -85,7 +90,7 @@
     "evaluator": {
       "mode": "subagent",
       "description": "Evidence Analysis and False-Positive Filtering subagent. Reviews execution logs, console output, DOM changes, and network responses from @pentest-orchestrator; validates hypotheses with strict evidence-based reasoning; responds only with the structured JSON evaluation format (vulnerable, confidence, reason). Does not execute actions, modify code, or run terminal commands.",
-      "model": "gemini/gemini-flash-lite-latest",
+      "model": "opencode/grok-code",
       "permissions": [
         {
           "action": "edit",
@@ -102,7 +107,7 @@
     "dom-analyzer": {
       "mode": "subagent",
       "description": "Fast DOM Analyzer subagent. Inspects raw HTML snapshots, DOM trees, or accessibility trees; extracts elements, forms, inputs, attributes, and event handlers for @pentest-orchestrator; acts as a cheap filter to condense DOM noise into concise findings. Does not execute actions, modify code, or run terminal commands.",
-      "model": "gemini/gemini-flash-lite-latest",
+      "model": "opencode/grok-code",
       "permissions": [
         {
           "action": "edit",

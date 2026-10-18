@@ -388,6 +388,10 @@
   color: var(--color-danger, #e5484d);
 }
 
+.engine-banner--offline {
+  color: var(--color-warning, #e0a53f);
+}
+
 .engine-banner__dots {
   display: flex;
   align-items: center;

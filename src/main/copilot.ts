@@ -38,6 +38,7 @@
 // every app start — cwd becomes the sandbox.
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -63,7 +64,12 @@ import {
 import { parseModel, type RawEvent } from './opencode/transport'
 import { buildMcpServer } from './mcp'
 import { startMcpHttpServer, type McpHttpServer } from './mcp/server'
-import { WebContentsCdpDriver, type CdpDriver, type CookieRecord } from './mcp/cdp'
+import {
+  WebContentsCdpDriver,
+  type CdpDriver,
+  type CookieRecord,
+  type EmulationOptions
+} from './mcp/cdp'
 import { ScopeChecker, type ScopeEnforcer } from './mcp/scope'
 import type { NetworkReader, ToolContext } from './mcp/tool'
 import { openDatabase } from './db'
@@ -80,17 +86,24 @@ const OPENCODE_PORT = 4097
 // its own hosted gateway, which 403s for provider-authed models (see
 // transport.ts's OpenCodeConfig.model). Keep in sync with opencode.json /
 // .opencode/agents/*.md. The orchestrator runs on the remote vLLM server
-// (reconix.env's ORCHESTRATOR_BASE_URL); the DOM parser runs on the user's
-// Gemini key (the vLLM dom server is a separate, often-offline box).
+// (reconix.env's ORCHESTRATOR_BASE_URL); the DOM parser (and the evaluator
+// subagent) run on OpenCode Zen's free Grok Code model.
 const ORCHESTRATOR_MODEL = 'vllm-orchestrator/orchestrator-model'
-// Custom direct-Google provider (opencode.json's `gemini`), NOT the built-in
-// `google` one — the built-in routes through OpenCode's gateway (403), the
-// custom one hits Google's OpenAI-compatible endpoint with GOOGLE_GENERATIVE_AI_API_KEY.
-const DOM_ANALYZER_MODEL = 'gemini/gemini-flash-lite-latest'
+// OpenCode Zen's built-in `opencode` provider (grok-code-fast-1, free). Unlike
+// the provider-authed models above, this one IS served by OpenCode's own
+// gateway, so pinning the model id here routes to the gateway as intended
+// rather than 403ing. Auth comes from `opencode auth login` (the OpenCode Zen
+// key), not a provider block in opencode.json.
+const DOM_ANALYZER_MODEL = 'opencode/grok-code'
 // Must match opencode.json's mcp.servers.reconix.url — not read back from
 // there, since opencode.json is static config and this needs to be a fixed
 // port the running process actually binds to.
 const MCP_PORT = 4102
+// Once the local engine has booted, how often to re-check that the orchestrator
+// MODEL backend (the remote vLLM server in reconix.env) is still reachable.
+// `opencode serve` being up says nothing about the model being up, so without
+// this the indicator would sit on "ready" against a dead backend.
+const PROVIDER_PROBE_INTERVAL_MS = 15_000
 
 // ── spawned `opencode serve` lifecycle ───────────────────────────────────────
 // Processes we've spawned and must not leave behind. A module-level set plus a
@@ -151,6 +164,32 @@ function terminateServer(proc: ChildProcessWithoutNullStreams, graceMs = 2_000):
     proc.once('exit', finish)
     signalGroup(proc, 'SIGTERM')
   })
+}
+
+// Reads ORCHESTRATOR_BASE_URL / ORCHESTRATOR_API_KEY out of reconix.env for the
+// provider health probe below. We parse it ourselves — resolving ${VAR} and
+// $VAR — rather than Node's loadEnvFile, which SIGTRAPs (uncatchable) on this
+// file's `export` + shell interpolation syntax; see index.ts's header comment.
+// Best-effort: missing file or keys yield nulls and the probe becomes a no-op.
+function readOrchestratorEndpoint(): { baseUrl: string | null; apiKey: string | null } {
+  try {
+    const text = readFileSync(join(app.getAppPath(), 'reconix.env'), 'utf8')
+    const vars: Record<string, string> = {}
+    for (const raw of text.split('\n')) {
+      const line = raw.trim()
+      if (!line || line.startsWith('#')) continue
+      const match = line.replace(/^export\s+/, '').match(/^([A-Za-z0-9_]+)=(.*)$/)
+      if (!match) continue
+      const value = match[2]
+        .trim()
+        .replace(/^["']|["']$/g, '')
+        .replace(/\$\{([A-Za-z0-9_]+)\}|\$([A-Za-z0-9_]+)/g, (_, braced, bare) => vars[braced || bare] ?? '')
+      vars[match[1]] = value
+    }
+    return { baseUrl: vars.ORCHESTRATOR_BASE_URL || null, apiKey: vars.ORCHESTRATOR_API_KEY || null }
+  } catch {
+    return { baseUrl: null, apiKey: null }
+  }
 }
 
 export interface CopilotBridge {
@@ -242,6 +281,9 @@ class ActiveTabCdpDriver implements CdpDriver {
   }
   dispatchInput(events: unknown[]): Promise<void> {
     return this.require().dispatchInput(events)
+  }
+  setEmulation(opts: EmulationOptions): Promise<void> {
+    return this.require().setEmulation(opts)
   }
 }
 
@@ -503,6 +545,11 @@ class DomSummaryWatcher {
 
 const POLICY: Policy = { autoApprove: ['R', 'P'], redactCookies: true, maxToolCallsPerTurn: 100 }
 
+// Ceiling on the per-page DOM summary injected into every orchestrator message.
+// ~4k chars ≈ ~1k tokens — enough to be useful on the 20480-token window
+// without crowding out the conversation. Detail is on demand via get_dom_extract.
+const DOM_SUMMARY_MAX_CHARS = 4000
+
 // macOS/Linux XDG path, confirmed live via `opencode debug paths`. OpenCode
 // doesn't expose a way to point it at an arbitrary config dir, so this is
 // where the sync below has to land. (Windows uses a different base — not a
@@ -640,7 +687,14 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
         `[Current browser state — url: ${info.url} | origin: ${origin} | ` +
         `title: ${JSON.stringify(info.title)} | ` +
         `${recent} network request(s) captured for this tab (get_network_log for detail)]`
-      const domSummary = domWatcher.summaryFor(info.url)
+      // Cap the injected summary: it rides on EVERY message to the small-window
+      // orchestrator, so an over-long parser summary would crowd out the
+      // conversation and push the turn toward a context-overflow failure.
+      const rawSummary = domWatcher.summaryFor(info.url)
+      const domSummary =
+        rawSummary && rawSummary.length > DOM_SUMMARY_MAX_CHARS
+          ? `${rawSummary.slice(0, DOM_SUMMARY_MAX_CHARS)}\n…[summary truncated to fit context; use get_dom_extract / eval_in_page for specifics]`
+          : rawSummary
       const domBlock = domSummary
         ? `\n\n[DOM summary from @parser, auto-refreshed on navigation — not written by the user:]\n${domSummary}`
         : '\n\n[@parser hasn\'t produced a DOM summary for this page yet — call eval_in_page yourself if you need structure right now.]'
@@ -821,8 +875,62 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
   // for the case where it did subscribe in time.
   let engineStatus: EngineStatus = { status: 'starting' }
   const setEngineStatus = (next: EngineStatus): void => {
+    // Dedupe: the periodic provider probe below calls this on every tick, and
+    // re-pushing an unchanged status would churn IPC + renderer state for no
+    // reason. Compare status AND error so a changed error message still pushes.
+    const prevError = 'error' in engineStatus ? engineStatus.error : undefined
+    const nextError = 'error' in next ? next.error : undefined
+    if (next.status === engineStatus.status && nextError === prevError) return
     engineStatus = next
     send('copilot:engine-status', next)
+  }
+
+  // ─── Model-backend liveness ────────────────────────────────────────────────
+  // engineReady (below) only tells us the LOCAL engine booted. The orchestrator
+  // model runs on a remote vLLM server (reconix.env) that can die independently;
+  // when it does, turns fail but the engine was still advertising "ready". We
+  // probe that provider directly and reflect it in the same EngineStatus, so the
+  // UI flips ready <-> offline honestly instead of latching on "ready" forever.
+  const orchestrator = readOrchestratorEndpoint()
+  let probing = false
+  let providerProbeTimer: ReturnType<typeof setInterval> | null = null
+
+  // true = reachable, false = down, null = not configured (nothing to probe).
+  async function probeProvider(): Promise<boolean | null> {
+    if (!orchestrator.baseUrl) return null
+    const url = orchestrator.baseUrl.replace(/\/+$/, '') + '/models'
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 4000)
+    try {
+      // Any HTTP reply (even 401/404) proves the server is listening; only a
+      // network error or timeout counts as down.
+      await fetch(url, {
+        signal: controller.signal,
+        headers: orchestrator.apiKey ? { Authorization: `Bearer ${orchestrator.apiKey}` } : {}
+      })
+      return true
+    } catch {
+      return false
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
+  // Reflects the probe into EngineStatus, governing ONLY the ready <-> offline
+  // pair — it never overrides the one-time boot states ('starting' / boot
+  // 'error'), and bails if the endpoint isn't configured.
+  async function refreshProviderHealth(): Promise<void> {
+    if (probing) return
+    if (engineStatus.status === 'starting' || engineStatus.status === 'error') return
+    probing = true
+    try {
+      const ok = await probeProvider()
+      if (ok === null) return
+      if (engineStatus.status === 'starting' || engineStatus.status === 'error') return
+      setEngineStatus(ok ? { status: 'ready' } : { status: 'offline', error: 'Model backend unreachable' })
+    } finally {
+      probing = false
+    }
   }
 
   setEngineStatus({ status: 'starting' })
@@ -834,6 +942,13 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
         console.error('[copilot] session warm-up failed:', err)
       })
       setEngineStatus({ status: 'ready' })
+      // Now that the local engine is up, start watching the model backend:
+      // one immediate check (so a backend that's already down shows 'offline'
+      // right away) plus a steady poll that keeps the indicator honest.
+      void refreshProviderHealth()
+      if (!providerProbeTimer) {
+        providerProbeTimer = setInterval(() => void refreshProviderHealth(), PROVIDER_PROBE_INTERVAL_MS)
+      }
       return { ok: true }
     },
     (err: unknown) => {
@@ -906,6 +1021,11 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
             usage.recordAgentEvent(ev)
             emitUsage(ev.kind === 'turn.done' || ev.kind === 'error')
             send('copilot:event', ev)
+            // Fail-flip: a turn erroring out is the first sign the model backend
+            // may have dropped. Probe immediately rather than waiting for the
+            // next poll — the probe is the arbiter, so a non-connectivity error
+            // (e.g. a tool failure) simply confirms 'ready' and nothing changes.
+            if (ev.kind === 'error') void refreshProviderHealth()
           },
           persist: (raw: RawEvent, _normalized: AgentEvent | null) => {
             usage.recordRaw(raw)
@@ -1033,6 +1153,10 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
       if (usageTimer) {
         clearTimeout(usageTimer)
         usageTimer = null
+      }
+      if (providerProbeTimer) {
+        clearInterval(providerProbeTimer)
+        providerProbeTimer = null
       }
       domWatcher.setActive(null)
       findingsStore.close()

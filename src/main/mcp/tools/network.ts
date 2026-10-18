@@ -5,6 +5,8 @@
 import { defineTool, type Tool } from '../tool'
 import { optStr, str } from '../validate'
 import { ToolExecError } from '../errors'
+import { MAX_LIST_ITEMS, clampString } from '../limits'
+import type { CapturedRequest } from '../../../shared/tabs'
 
 interface RequestSpec {
   url: string
@@ -53,23 +55,64 @@ function pending(name: string, description: string, tier: 'R' | 'M'): Tool {
   }) as Tool
 }
 
+// A compact log row. The full header maps are deliberately NOT here — on a real
+// page they are the bulk of the payload and would overflow the orchestrator's
+// context in one call. The agent pulls headers/detail for a specific row via
+// get_request(id). Keeps get_network_log cheap enough to call repeatedly.
+interface NetworkLogRow {
+  id: string
+  method: string
+  url: string
+  resourceType: string
+  statusCode?: number
+  durationMs?: number
+  fromCache?: boolean
+  error?: string
+}
+
+function toRow(r: CapturedRequest): NetworkLogRow {
+  return {
+    id: r.id,
+    method: r.method,
+    url: clampString(r.url),
+    resourceType: r.resourceType,
+    statusCode: r.statusCode,
+    durationMs: r.durationMs,
+    fromCache: r.fromCache,
+    error: r.error
+  }
+}
+
 const get_network_log = defineTool<{ sinceId?: string }, unknown>({
   name: 'get_network_log',
   description:
-    'Network entries observed on the target since a cursor (the last entry\'s id from a prior call) — ' +
-    'method, url, status, timing, headers. Scoped to whatever tab is currently active, not the whole app.',
+    'Compact network log for the active tab since a cursor (the last entry\'s id from a prior call): ' +
+    'id, method, url, status, timing. Headers/bodies are omitted to stay within context — ' +
+    'call get_request(id) for one entry\'s full detail. Paginate with the returned nextCursor.',
   riskTier: 'R',
   inputSchema: {
     type: 'object',
     properties: { sinceId: { type: 'string' } },
     additionalProperties: false
   },
-  outputSchema: { type: 'array' },
+  outputSchema: { type: 'object' },
   parse: (raw) => {
     const r = raw as { sinceId?: unknown }
     return typeof r?.sinceId === 'string' ? { sinceId: r.sinceId } : {}
   },
-  execute: async (i, ctx) => ctx.network.list(i.sinceId)
+  execute: async (i, ctx) => {
+    // list() returns oldest→newest for the active tab. Keep the most recent
+    // page — those are what the agent just caused — and report how many older
+    // entries were dropped so it knows to paginate rather than assume it saw all.
+    const all = ctx.network.list(i.sinceId)
+    const entries = all.slice(-MAX_LIST_ITEMS).map(toRow)
+    return {
+      entries,
+      total: all.length,
+      omitted: Math.max(0, all.length - entries.length),
+      nextCursor: entries.length > 0 ? entries[entries.length - 1].id : (i.sinceId ?? null)
+    }
+  }
 })
 
 const get_request = defineTool<{ id: string }, unknown>({
@@ -87,7 +130,21 @@ const get_request = defineTool<{ id: string }, unknown>({
   execute: async (i, ctx) => {
     const req = ctx.network.get(i.id)
     if (!req) throw new ToolExecError(`no request with id "${i.id}" (it may have aged out)`)
-    return req
+    // Clamp long header values (cookies, tokens) so one row stays within budget
+    // and serializes as valid JSON rather than being cut mid-object upstream.
+    const trimValues = <V>(h: Record<string, V> | undefined): Record<string, V> | undefined =>
+      h &&
+      Object.fromEntries(
+        Object.entries(h).map(([k, v]) => [
+          k,
+          (Array.isArray(v) ? v.map((x) => clampString(String(x))) : clampString(String(v))) as V
+        ])
+      )
+    return {
+      ...req,
+      requestHeaders: trimValues(req.requestHeaders),
+      responseHeaders: trimValues(req.responseHeaders)
+    }
   }
 })
 

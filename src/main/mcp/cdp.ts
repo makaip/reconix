@@ -4,6 +4,7 @@
 // the UI's webContents, which would be a path out of the sandbox.
 
 import type { WebContents } from 'electron'
+import { ToolExecError } from './errors'
 
 export interface CookieRecord {
   name: string
@@ -11,6 +12,17 @@ export interface CookieRecord {
   domain: string
   httpOnly: boolean
   secure: boolean
+}
+
+/** Emulation overrides applied to the target view (CSS/device/media). All
+ *  fields optional; `reset: true` clears the device-metrics override. */
+export interface EmulationOptions {
+  viewport?: { width: number; height: number; mobile?: boolean; deviceScaleFactor?: number }
+  /** CSS media to emulate, e.g. 'print' | 'screen'. */
+  media?: string
+  /** Emulated media features, e.g. [{ name: 'prefers-color-scheme', value: 'dark' }]. */
+  features?: { name: string; value: string }[]
+  reset?: boolean
 }
 
 // The surface the tool handlers are allowed to use. Anything not here cannot be
@@ -23,6 +35,7 @@ export interface CdpDriver {
   screenshot(): Promise<Buffer>
   cookies(): Promise<CookieRecord[]>
   dispatchInput(events: unknown[]): Promise<void>
+  setEmulation(opts: EmulationOptions): Promise<void>
 }
 
 export class WebContentsCdpDriver implements CdpDriver {
@@ -43,14 +56,29 @@ export class WebContentsCdpDriver implements CdpDriver {
   }
 
   private ensureAttached(): void {
-    if (this.attached) return
-    if (!this.wc.debugger.isAttached()) this.wc.debugger.attach('1.3')
-    this.attached = true
+    if (this.attached && this.wc.debugger.isAttached()) return
+    try {
+      if (!this.wc.debugger.isAttached()) this.wc.debugger.attach('1.3')
+      this.attached = true
+    } catch (err) {
+      // A sibling debugger (e.g. DevTools) can hold the session. Surface it as
+      // a retriable exec error rather than a bare CDP string — the agent can
+      // retry once the other client detaches. (§5.C)
+      this.attached = false
+      throw new ToolExecError(`CDP attach failed: ${(err as Error)?.message ?? String(err)}`, true)
+    }
   }
 
   private async send(method: string, params?: object): Promise<unknown> {
     this.ensureAttached()
-    return this.wc.debugger.sendCommand(method, params)
+    try {
+      return await this.wc.debugger.sendCommand(method, params)
+    } catch (err) {
+      // If the view navigated/closed the debugger drops; mark detached so the
+      // next call re-attaches, and let the caller retry.
+      if (!this.wc.debugger.isAttached()) this.attached = false
+      throw new ToolExecError(`CDP ${method} failed: ${(err as Error)?.message ?? String(err)}`, true)
+    }
   }
 
   async navigate(url: string): Promise<{ status: number; finalUrl: string }> {
@@ -69,7 +97,19 @@ export class WebContentsCdpDriver implements CdpDriver {
       expression,
       returnByValue: true,
       awaitPromise: true
-    })) as { result?: { value?: unknown } }
+    })) as {
+      result?: { value?: unknown }
+      exceptionDetails?: { exception?: { description?: string }; text?: string }
+    }
+    // A thrown page expression used to silently return "null", which looked
+    // like a successful empty result. Surface it instead so the agent (and the
+    // UI) see the real failure. (better error handling)
+    if (res.exceptionDetails) {
+      const d = res.exceptionDetails
+      throw new ToolExecError(
+        `page evaluation threw: ${d.exception?.description ?? d.text ?? 'unknown error'}`
+      )
+    }
     return JSON.stringify(res.result?.value ?? null)
   }
 
@@ -91,5 +131,25 @@ export class WebContentsCdpDriver implements CdpDriver {
 
   async dispatchInput(events: unknown[]): Promise<void> {
     for (const ev of events) await this.send('Input.dispatchKeyEvent', ev as object)
+  }
+
+  async setEmulation(opts: EmulationOptions): Promise<void> {
+    if (opts.reset) {
+      await this.send('Emulation.clearDeviceMetricsOverride')
+    } else if (opts.viewport) {
+      const v = opts.viewport
+      await this.send('Emulation.setDeviceMetricsOverride', {
+        width: v.width,
+        height: v.height,
+        deviceScaleFactor: v.deviceScaleFactor ?? 0,
+        mobile: v.mobile ?? false
+      })
+    }
+    if (opts.media !== undefined || opts.features) {
+      await this.send('Emulation.setEmulatedMedia', {
+        media: opts.media ?? '',
+        features: opts.features ?? []
+      })
+    }
   }
 }
