@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import CopilotPanel from './components/copilot/CopilotPanel'
 import DevToolsPanel from './components/devtools/DevToolsPanel'
 import Sidebar from './components/sidebar/Sidebar'
@@ -23,6 +23,7 @@ function App(): JSX.Element {
   const network = useNetworkStats()
   const [dragActive, setDragActive] = useState(false)
   const [copilotOpen, setCopilotOpen] = useState(true)
+  const [copilotTargetId, setCopilotTargetId] = useState<number | null>(null)
   // Set when a sitemap file is double-clicked, so DevTools opens it in Sources. The counter
   // forces a re-open even when the same file is double-clicked twice in a row.
   const [openSource, setOpenSource] = useState<{ target: string; nonce: number } | null>(null)
@@ -33,7 +34,19 @@ function App(): JSX.Element {
   const devtoolsResize = useResizable({ axis: 'y', initial: 380, min: 160, max: 640, invert: true })
 
   const activeTab = tabs.tabs.find((tab) => tab.id === tabs.activeId)
-  const requestCount = tabs.activeId === null ? 0 : (network.perTab[tabs.activeId] ?? 0)
+  const copilotTargetTab = tabs.tabs.find((tab) => tab.id === copilotTargetId)
+  const copilotRequestCount = copilotTargetId === null ? 0 : (network.perTab[copilotTargetId] ?? 0)
+
+  useEffect(() => {
+    void window.reconix.copilot.getTargetTab().then(setCopilotTargetId)
+  }, [])
+
+  useEffect(() => {
+    if (tabs.activeId === null || copilotTargetTab) return
+    void window.reconix.copilot.setTargetTab(tabs.activeId).then((ok) => {
+      if (ok) setCopilotTargetId(tabs.activeId)
+    })
+  }, [copilotTargetTab, tabs.activeId])
 
   return (
     <div className="app">
@@ -44,6 +57,7 @@ function App(): JSX.Element {
         onClose={(id) => void window.reconix.tabs.close(id)}
         onNew={() => void window.reconix.tabs.create()}
         onMove={(id, toIndex) => void window.reconix.tabs.move(id, toIndex)}
+        agentActiveId={copilot.browserActive ? copilotTargetId : null}
       />
       <EngineStatusBanner status={engineStatus} />
       <Toolbar
@@ -70,7 +84,11 @@ function App(): JSX.Element {
 
         <main className="center">
           <section className="viewport" aria-label="Target page">
-            <ViewSlot className="viewport__slot" onBoundsChange={setTargetBounds} />
+            <ViewSlot
+              className="viewport__slot"
+              onBoundsChange={setTargetBounds}
+              agentActive={copilot.browserActive && tabs.activeId === copilotTargetId}
+            />
           </section>
           <ResizeHandle
             orientation="horizontal"
@@ -99,7 +117,15 @@ function App(): JSX.Element {
               dragActive={dragActive}
               onDrop={() => setDragActive(false)}
               onClose={() => setCopilotOpen(false)}
-              requestCount={requestCount}
+              requestCount={copilotRequestCount}
+              activeTab={copilotTargetTab}
+              viewedTab={activeTab}
+              onUseViewedTab={() => {
+                if (!activeTab) return
+                void window.reconix.copilot.setTargetTab(activeTab.id).then((ok) => {
+                  if (ok) setCopilotTargetId(activeTab.id)
+                })
+              }}
               style={{ flexBasis: copilotResize.size }}
             />
           </>

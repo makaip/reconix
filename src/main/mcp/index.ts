@@ -4,6 +4,7 @@
 // the agent's ONLY path to act.
 
 import type { AuditLogger } from './audit'
+import type { ToolAccess } from '../../shared/contracts'
 import type { ToolContext, ToolDescriptor } from './tool'
 import { ToolRegistry } from './registry'
 import { allTools, mvpTools } from './tools'
@@ -13,6 +14,8 @@ export interface McpServer {
   listTools(): ToolDescriptor[]
   tierMap(): Record<string, ToolDescriptor['riskTier']>
   callTool(name: string, params: unknown): Promise<ToolCallResult>
+  getToolAccess(): ToolAccess[]
+  setEnabledTools(names: readonly string[]): ToolAccess[]
 }
 
 export interface BuildMcpOptions {
@@ -25,11 +28,38 @@ export interface BuildMcpOptions {
 export function buildMcpServer(opts: BuildMcpOptions): McpServer {
   const registry = new ToolRegistry()
   registry.registerAll(opts.surface === 'all' ? allTools : mvpTools)
+  const descriptors = registry.descriptors()
+  const knownNames = new Set(descriptors.map((tool) => tool.name))
+  let enabledNames = new Set(knownNames)
+
+  const getToolAccess = (): ToolAccess[] =>
+    descriptors.map(({ name, description, riskTier }) => ({
+      name,
+      description,
+      riskTier,
+      enabled: enabledNames.has(name)
+    }))
 
   return {
-    listTools: () => registry.descriptors(),
-    tierMap: () => registry.tierMap(),
-    callTool: (name, params) => registry.call(name, params, opts.context, opts.audit)
+    listTools: () => descriptors.filter((tool) => enabledNames.has(tool.name)),
+    tierMap: () =>
+      Object.fromEntries(
+        Object.entries(registry.tierMap()).filter(([name]) => enabledNames.has(name))
+      ),
+    callTool: (name, params) => {
+      if (!enabledNames.has(name)) {
+        return Promise.resolve({
+          ok: false,
+          error: { code: 'TOOL_DISABLED', message: `Function disabled by user: ${name}`, retriable: false }
+        })
+      }
+      return registry.call(name, params, opts.context, opts.audit)
+    },
+    getToolAccess,
+    setEnabledTools: (names) => {
+      enabledNames = new Set(names.filter((name) => knownNames.has(name)))
+      return getToolAccess()
+    }
   }
 }
 

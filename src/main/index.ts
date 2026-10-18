@@ -113,6 +113,7 @@ function createWindow(): void {
   // so copilotBridge gets a getter instead of the instance — see
   // ActiveTabNetworkReader's comment in copilot.ts for why.
   let network: NetworkCapture | undefined
+  let copilotTargetTabId: number | null = null
   copilotBridge = createCopilotBridge(mainWindow, () => network)
 
   const bodies = createBodyStore(mainWindow)
@@ -126,11 +127,33 @@ function createWindow(): void {
   const tabs = createTabManager(mainWindow, {
     onActiveChanged: (target, tabId) => {
       inspector.setTarget(target)
-      copilotBridge?.setActiveTarget(target, tabId)
+      if (copilotTargetTabId === null) {
+        copilotTargetTabId = tabId
+        copilotBridge?.setActiveTarget(target, tabId)
+      }
     },
-    onTabClosed: (tabId) => network?.forgetTab(tabId),
+    onTabClosed: (tabId) => {
+      network?.forgetTab(tabId)
+      if (copilotTargetTabId === tabId) {
+        copilotTargetTabId = null
+        copilotBridge?.setActiveTarget(null, null)
+      }
+    },
     beforeNavigate: () => copilotBridge?.waitUntilReady() ?? Promise.resolve()
   })
+  ipcMain.removeHandler('copilot:set-target-tab')
+  ipcMain.handle('copilot:set-target-tab', (event, tabId: unknown) => {
+    if (event.sender !== mainWindow.webContents || typeof tabId !== 'number') return false
+    const target = tabs.targetFor(tabId)
+    if (!target) return false
+    copilotTargetTabId = tabId
+    copilotBridge?.setActiveTarget(target, tabId)
+    return true
+  })
+  ipcMain.removeHandler('copilot:get-target-tab')
+  ipcMain.handle('copilot:get-target-tab', (event) =>
+    event.sender === mainWindow.webContents ? copilotTargetTabId : null
+  )
   network = startNetworkCapture(mainWindow, tabs)
   // Host-side replay (Repeater) gates every send on the engagement scope; no
   // scope loaded -> deny all (default-deny holds). Same scope.json the proxy uses.

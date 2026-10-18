@@ -13,6 +13,7 @@ type TabBarProps = {
   onNew: () => void
   /** Moves a tab so it ends up at `toIndex`. */
   onMove: (id: number, toIndex: number) => void
+  agentActiveId?: number | null
 }
 
 // where a dragged tab would land: before or after the hovered tab
@@ -27,7 +28,7 @@ function tabTitle(tab: TabInfo): string {
   }
 }
 
-function TabBar({ tabs, activeId, onActivate, onClose, onNew, onMove }: TabBarProps): JSX.Element {
+function TabBar({ tabs, activeId, onActivate, onClose, onNew, onMove, agentActiveId }: TabBarProps): JSX.Element {
   const [draggingId, setDraggingId] = useState<number | null>(null)
   const [dropTarget, setDropTarget] = useState<DropTarget | null>(null)
 
@@ -72,6 +73,7 @@ function TabBar({ tabs, activeId, onActivate, onClose, onNew, onMove }: TabBarPr
         const className = [
           'tab',
           active && 'tab--active',
+          tab.id === agentActiveId && 'tab--agent-active',
           tab.id === draggingId && 'tab--dragging',
           dropTarget?.id === tab.id && tab.id !== draggingId && (dropTarget.after ? 'tab--drop-after' : 'tab--drop-before')
         ]

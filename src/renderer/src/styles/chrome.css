@@ -45,6 +45,24 @@
   color: var(--color-text);
 }
 
+.tab--agent-active,
+.tab--agent-active:hover {
+  box-shadow:
+    inset 0 0 0 1px var(--color-accent),
+    0 0 10px rgba(74, 158, 255, 0.35);
+}
+
+.tab--agent-active::before {
+  flex: none;
+  width: 5px;
+  height: 5px;
+  margin-right: -4px;
+  content: '';
+  background: var(--color-accent);
+  border-radius: 50%;
+  animation: browser-state-pulse 1.2s ease-in-out infinite;
+}
+
 .tab img {
   flex: none;
 }

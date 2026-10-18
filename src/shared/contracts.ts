@@ -8,6 +8,14 @@ export const CONTRACTS_VERSION = '0.1.0'
 // M mutating (approval) · D destructive (approval + rate-limit)
 export type RiskTier = 'R' | 'P' | 'M' | 'D'
 
+/** A model-facing Reconix function and whether the current user allows it. */
+export interface ToolAccess {
+  name: string
+  description: string
+  riskTier: RiskTier
+  enabled: boolean
+}
+
 export const AUTO_TIERS: ReadonlySet<RiskTier> = new Set<RiskTier>(['R', 'P'])
 export const GATED_TIERS: ReadonlySet<RiskTier> = new Set<RiskTier>(['M', 'D'])
 

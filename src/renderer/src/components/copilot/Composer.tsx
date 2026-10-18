@@ -9,9 +9,11 @@ type ComposerProps = {
   onSend: (text: string) => void
   /** Requests captured for the current tab. */
   requestCount: number
+  busy: boolean
+  onStop: () => void
 }
 
-function Composer({ attachments, onDetach, onSend, requestCount }: ComposerProps): JSX.Element {
+function Composer({ attachments, onDetach, onSend, requestCount, busy, onStop }: ComposerProps): JSX.Element {
   const [text, setText] = useState('')
 
   return (
@@ -40,14 +42,20 @@ function Composer({ attachments, onDetach, onSend, requestCount }: ComposerProps
         <input
           className="composer__input"
           type="text"
-          placeholder="Ask about this target, or type / for commands"
+          placeholder={busy ? 'Type a follow-up to queue it' : 'Ask about this target, or type / for commands'}
           aria-label="Message Copilot"
           value={text}
           onChange={(event) => setText(event.target.value)}
         />
-        <button type="submit" className="composer__send" aria-label="Send">
-          <img src={send} width={14} height={14} alt="" />
-        </button>
+        {busy ? (
+          <button type="button" className="composer__send composer__stop" aria-label="Stop" onClick={onStop}>
+            <span className="composer__stop-icon" aria-hidden="true" />
+          </button>
+        ) : (
+          <button type="submit" className="composer__send" aria-label="Send">
+            <img src={send} width={14} height={14} alt="" />
+          </button>
+        )}
       </div>
     </form>
   )

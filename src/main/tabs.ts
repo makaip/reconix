@@ -25,6 +25,7 @@ export type TabHooks = {
 
 export type TabManager = {
   tabIdFor: (webContentsId: number) => number | undefined
+  targetFor: (tabId: number) => WebContents | undefined
 }
 
 function isBounds(value: unknown): value is Bounds {
@@ -296,6 +297,7 @@ export function createTabManager(win: BrowserWindow, hooks: TabHooks): TabManage
 
   return {
     tabIdFor: (webContentsId) =>
-      [...tabs.values()].find((tab) => tab.view.webContents.id === webContentsId)?.id
+      [...tabs.values()].find((tab) => tab.view.webContents.id === webContentsId)?.id,
+    targetFor: (tabId) => tabs.get(tabId)?.view.webContents
   }
 }

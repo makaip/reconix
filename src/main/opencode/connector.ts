@@ -48,6 +48,17 @@ export class OpenCodeConnector {
     return this.transport.sendMessage(this.sessionId, text)
   }
 
+  /** Starts a clean conversation while keeping the shared server/event stream
+   * alive. Events from the previous session are immediately excluded by the
+   * session filter in handle(). */
+  async newSession(): Promise<string> {
+    if (this.sessionId) await this.transport.abort(this.sessionId).catch(() => undefined)
+    const { id } = await this.transport.createSession()
+    this.sessionId = id
+    this.pendingApprovals.clear()
+    return id
+  }
+
   async respondApproval(approvalId: string, decision: ApprovalDecision): Promise<void> {
     if (!this.sessionId) throw new Error('no active session')
     const permissionId = this.pendingApprovals.get(approvalId) ?? approvalId
@@ -105,6 +116,17 @@ export class OpenCodeConnector {
     // (2) persist first so the audit record exists even if the UI push throws.
     this.sinks.persist(raw, ev)
     if (!ev) return
+
+    // /api/event is process-global: it includes the orchestrator session, its
+    // child/subagent sessions, ambient DOM-analysis sessions, and unrelated
+    // sessions opened against the same server. Durable OpenCode events identify
+    // their owner with aggregateID. Only the long-lived Copilot session belongs
+    // in the user-visible transcript; child output remains available to the
+    // orchestrator and audit sink without leaking into the UI.
+    const durable = raw.durable as Record<string, unknown> | undefined
+    const eventSessionId = typeof durable?.aggregateID === 'string' ? durable.aggregateID : undefined
+    if (eventSessionId && eventSessionId !== this.sessionId) return
+
     if (ev.kind === 'approval.request') this.pendingApprovals.set(ev.approvalId, ev.approvalId)
     // (1) fan out to the renderer.
     this.sinks.onAgentEvent(ev)

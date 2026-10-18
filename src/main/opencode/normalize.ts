@@ -42,7 +42,7 @@ export function normalize(raw: RawEvent): AgentEvent | null {
 
     case 'session.tool.called': {
       const callId = s(d.id)
-      const tool = pendingToolNames.get(callId) ?? 'unknown'
+      const tool = s(d.name, pendingToolNames.get(callId) ?? 'unknown')
       return {
         kind: 'tool.call',
         callId,
@@ -71,7 +71,8 @@ export function normalize(raw: RawEvent): AgentEvent | null {
     // probing), but every other resource in this API follows a
     // success/error pair, so this is the predicted counterpart to
     // session.tool.success rather than a blind guess.
-    case 'session.tool.error': {
+    case 'session.tool.error':
+    case 'session.tool.failed': {
       const callId = s(d.id)
       pendingToolNames.delete(callId)
       return { kind: 'tool.result', callId, ok: false, error: s(d.error ?? d.message, 'tool error') }
@@ -111,6 +112,9 @@ export function normalize(raw: RawEvent): AgentEvent | null {
     // key turn.done off the session id; one session is one conversation
     // thread in our model, so the renderer can still resolve which turn ended.
     case 'session.execution.succeeded':
+      return { kind: 'turn.done', messageId: s(d.sessionID) }
+
+    case 'session.execution.interrupted':
       return { kind: 'turn.done', messageId: s(d.sessionID) }
 
     // Shape inferred (mirrors .succeeded's sessionID-only payload); not

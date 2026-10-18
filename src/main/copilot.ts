@@ -11,8 +11,8 @@
 //    (ORCHESTRATOR_BASE_URL / ORCHESTRATOR_API_KEY, read by opencode.json's
 //    vllm-orchestrator provider). index.ts loads reconix.env into the env the
 //    spawned `opencode serve` inherits.
-//  - The DOM parser (and the @evaluator subagent) run on the user's Gemini key
-//    (via `opencode auth login google` and/or GOOGLE_GENERATIVE_AI_API_KEY).
+//  - The DOM parser (and the @evaluator subagent) run through the custom
+//    `gemini` provider using GOOGLE_GENERATIVE_AI_API_KEY directly.
 //    gemini-flash-lite-latest is used because the full gemini-*-flash models cap
 //    at 20 requests/day on the free tier, which the background parser alone blows
 //    through; flash-lite has a much higher free daily limit.
@@ -65,11 +65,14 @@ const OPENCODE_PORT = 4097
 // (reconix.env's ORCHESTRATOR_BASE_URL); the DOM parser runs on the user's
 // Gemini key (the vLLM dom server is a separate, often-offline box).
 const ORCHESTRATOR_MODEL = 'vllm-orchestrator/orchestrator-model'
-const DOM_ANALYZER_MODEL = 'google/gemini-flash-lite-latest'
+// Custom direct-Google provider (opencode.json's `gemini`), NOT the built-in
+// `google` one — the built-in routes through OpenCode's gateway (403), the
+// custom one hits Google's OpenAI-compatible endpoint with GOOGLE_GENERATIVE_AI_API_KEY.
+const DOM_ANALYZER_MODEL = 'gemini/gemini-flash-lite-latest'
 // Must match opencode.json's mcp.servers.reconix.url — not read back from
 // there, since opencode.json is static config and this needs to be a fixed
 // port the running process actually binds to.
-const MCP_PORT = 4101
+const MCP_PORT = 4102
 
 export interface CopilotBridge {
   /** Keeps the MCP tool server's CDP driver + scope pointed at the tab the
@@ -169,8 +172,15 @@ class ActiveTabScope implements ScopeEnforcer {
   }
 
   private checker(): ScopeChecker {
+    // A local target can be addressed through either loopback spelling. The
+    // browser may display `localhost` while captured requests use
+    // `127.0.0.1` (or vice versa); both names refer to the same authorized
+    // CVE-Bench site and must share the active-tab scope.
+    const hosts = this.host
+      ? [this.host, `*.${this.host}`, ...(this.host === 'localhost' ? ['127.0.0.1'] : []), ...(this.host === '127.0.0.1' ? ['localhost'] : [])]
+      : []
     return new ScopeChecker({
-      allowed_hosts: this.host ? [this.host, `*.${this.host}`] : [],
+      allowed_hosts: hosts,
       allowed_cidrs: [],
       denied: [],
       rate_limits: {}
@@ -188,7 +198,7 @@ class ActiveTabScope implements ScopeEnforcer {
   }
 }
 
-// Fires a single prompt at a named agent (parser) and returns its final text,
+// Fires a single prompt at a named agent (dom-analyzer) and returns its final text,
 // independent of the long-lived orchestrator session/connector — this is a
 // background, fire-and-forget job, not part of the user-visible transcript.
 // Deliberately raw fetch rather than OpenCodeTransport: that abstraction is
@@ -463,6 +473,8 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
   let starting: Promise<OpenCodeConnector> | null = null
   let mcpServer: McpHttpServer | null = null
   let mcpStarting: Promise<McpHttpServer> | null = null
+  let capabilityServer: ReturnType<typeof buildMcpServer> | null = null
+  const toolAccessPath = join(app.getPath('userData'), 'copilot-tool-access.json')
 
   const cdp = new ActiveTabCdpDriver((wc) => wc.id === win.webContents.id)
   const scope = new ActiveTabScope()
@@ -565,7 +577,31 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
       }
       const audit = new InMemoryAuditLogger()
       const registry = buildMcpServer({ audit, context, surface: 'all' })
-      const s = await startMcpHttpServer(registry, { port: MCP_PORT })
+      try {
+        const saved = JSON.parse(await readFile(toolAccessPath, 'utf8'))
+        if (Array.isArray(saved) && saved.every((name) => typeof name === 'string')) {
+          registry.setEnabledTools(saved)
+        }
+      } catch {
+        // First launch or an invalid preference file: preserve the existing
+        // behavior by enabling the full catalog.
+      }
+      capabilityServer = registry
+      let s: McpHttpServer
+      try {
+        s = await startMcpHttpServer(registry, { port: MCP_PORT })
+      } catch (err) {
+        // During Electron restarts the previous bridge can briefly retain the
+        // listener even though this bridge is the one that owns the process.
+        // OpenCode can continue using that already-live MCP endpoint; do not
+        // fail the entire Copilot engine just because the bind is idempotent.
+        if ((err as NodeJS.ErrnoException)?.code !== 'EADDRINUSE') throw err
+        s = {
+          port: MCP_PORT,
+          url: `http://127.0.0.1:${MCP_PORT}/mcp`,
+          async stop() {}
+        }
+      }
       mcpServer = s
       return s
     })()
@@ -630,7 +666,25 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
     }
   )
 
+  // Main can be recreated during development reloads. Replace our own handlers
+  // explicitly so a stale registration can neither win nor prevent startup.
+  ipcMain.removeHandler('copilot:get-engine-status')
   ipcMain.handle('copilot:get-engine-status', () => engineStatus)
+  ipcMain.removeHandler('copilot:get-tool-access')
+  ipcMain.handle('copilot:get-tool-access', async () => {
+    await ensureMcpServer()
+    return capabilityServer?.getToolAccess() ?? []
+  })
+  ipcMain.removeHandler('copilot:set-enabled-tools')
+  ipcMain.handle('copilot:set-enabled-tools', async (_event, names: unknown) => {
+    await ensureMcpServer()
+    if (!Array.isArray(names) || !names.every((name) => typeof name === 'string')) {
+      throw new Error('Enabled function names must be an array of strings')
+    }
+    const access = capabilityServer?.setEnabledTools(names) ?? []
+    await writeFile(toolAccessPath, JSON.stringify(access.filter((tool) => tool.enabled).map((tool) => tool.name)))
+    return access
+  })
 
   const domWatcher = new DomSummaryWatcher(
     () => cdp,
@@ -669,17 +723,26 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
     }
   }
 
+  ipcMain.removeHandler('copilot:send')
   ipcMain.handle('copilot:send', async (_event, text: string) => {
     const c = await ensureConnector()
     const prefix = await buildContextPrefix()
     return c.sendMessage(prefix + String(text))
   })
 
+  ipcMain.removeHandler('copilot:new-chat')
+  ipcMain.handle('copilot:new-chat', async () => {
+    const c = await ensureConnector()
+    return c.newSession()
+  })
+
+  ipcMain.removeHandler('copilot:respond-approval')
   ipcMain.handle('copilot:respond-approval', async (_event, approvalId: string, decision: ApprovalDecision) => {
     const c = await ensureConnector()
     return c.respondApproval(String(approvalId), decision)
   })
 
+  ipcMain.removeHandler('copilot:interrupt')
   ipcMain.handle('copilot:interrupt', async () => {
     const c = await ensureConnector()
     return c.interrupt()
@@ -701,9 +764,12 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
     },
     async stop() {
       ipcMain.removeHandler('copilot:send')
+      ipcMain.removeHandler('copilot:new-chat')
       ipcMain.removeHandler('copilot:respond-approval')
       ipcMain.removeHandler('copilot:interrupt')
       ipcMain.removeHandler('copilot:get-engine-status')
+      ipcMain.removeHandler('copilot:get-tool-access')
+      ipcMain.removeHandler('copilot:set-enabled-tools')
       domWatcher.setActive(null)
       await connector?.stop().catch(() => undefined)
       await mcpServer?.stop().catch(() => undefined)

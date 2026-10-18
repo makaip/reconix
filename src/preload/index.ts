@@ -46,7 +46,8 @@ import type {
   AgentEvent as CopilotAgentEvent,
   ApprovalDecision as CopilotApprovalDecision,
   EngineStatus,
-  ServerStatus
+  ServerStatus,
+  ToolAccess
 } from '../shared/contracts'
 import type { CrawlStartInput, CrawlState } from '../shared/crawler'
 
@@ -211,6 +212,12 @@ const api = {
     // Resolves once OpenCode has durably admitted the message; the reply
     // itself streams in separately through onEvent.
     send: (text: string): Promise<{ messageId: string }> => ipcRenderer.invoke('copilot:send', text),
+    newChat: (): Promise<string> => ipcRenderer.invoke('copilot:new-chat'),
+    setTargetTab: (tabId: number): Promise<boolean> => ipcRenderer.invoke('copilot:set-target-tab', tabId),
+    getTargetTab: (): Promise<number | null> => ipcRenderer.invoke('copilot:get-target-tab'),
+    getToolAccess: (): Promise<ToolAccess[]> => ipcRenderer.invoke('copilot:get-tool-access'),
+    setEnabledTools: (names: string[]): Promise<ToolAccess[]> =>
+      ipcRenderer.invoke('copilot:set-enabled-tools', names),
     respondApproval: (approvalId: string, decision: CopilotApprovalDecision): Promise<void> =>
       ipcRenderer.invoke('copilot:respond-approval', approvalId, decision),
     interrupt: (): Promise<void> => ipcRenderer.invoke('copilot:interrupt'),
