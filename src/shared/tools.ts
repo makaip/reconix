@@ -12,6 +12,7 @@
 // 'processing' tier (P) per §5.E ("pure-compute (tier R or P)").
 
 import type { RiskTier } from './agent'
+import type { JsonSchema } from '../tools/schema'
 
 /** The tier vocabulary §5.E allows for pure-compute tools: R (read-only) or P (processing). */
 export type ToolTier = RiskTier | 'processing'
@@ -40,6 +41,20 @@ export type CapabilityTool<TInput, TOutput> = {
   name: string
   description: string
   riskTier: ToolTier
+  /**
+   * Declarative input shape (JSON Schema), matching §6.2's `inputSchema`. This
+   * drives the OpenCode-facing tool schema and lives next to `validateInput` so
+   * the two never drift. It is descriptive only — `validateInput` remains the
+   * runtime gate.
+   */
+  inputSchema: JsonSchema
+  /**
+   * Optional declarative output shape (JSON Schema), matching §6.2's
+   * `outputSchema`. When present, the OpenCode adapter declares it to the host,
+   * which validates the handler's return value against it. Omit it for tools
+   * whose output is dynamic or externally defined.
+   */
+  outputSchema?: JsonSchema
   /** Validates raw untrusted input before `handler` ever sees typed data. */
   validateInput: InputValidator<TInput>
   /** Pure compute: no network, filesystem, or process I/O of any kind. */

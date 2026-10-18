@@ -17,6 +17,7 @@
 // this tool only analyzes the trace it is handed.
 
 import type { CapabilityTool, ValidationResult } from '../shared/tools'
+import { anyValue, arrOf, bool, enumOf, num, obj, objOf, str } from './schema'
 import {
   deobfuscateStaticTool,
   type DeobfuscateStaticOutput
@@ -477,6 +478,39 @@ export const deobfuscateDynamicTool: CapabilityTool<
   description:
     'Analyze a captured runtime hook trace (eval/Function/document.write/timers/decoders) from an obfuscated page, deobfuscating each code-bearing payload with the static engine and extracting indicators. Pure string analysis; never executes trace content.',
   riskTier: 'processing',
+  inputSchema: obj({
+    trace: objOf(
+      'A normalized DynamicTrace (schemaVersion: 1, records: [...]). Provide this OR `dump`.'
+    ),
+    dump: anyValue(
+      'Raw harness dump (object or JSON string): {status,entries}. Provide this OR `trace`.'
+    ),
+    recurse: bool('Run the static engine over code-bearing payloads (default true).'),
+    maxRecords: num('Cap on distinct findings analyzed (default 200).'),
+    maxOutputBytes: num('Cumulative cap on deobfuscated output in bytes (default 262144).'),
+    kinds: arrOf(enumOf(DYNAMIC_HOOK_KINDS, 'A runtime hook kind.'), 'Only analyze these hook kinds (default: all).'),
+    classes: arrOf(enumOf(DYNAMIC_RECORD_CLASSES, 'A record class.'), 'Only analyze these record classes (default: all).'),
+    minLength: num('Skip payloads shorter than this many chars (default 1).'),
+    maxDepth: num('Static passes chained per payload until it stabilizes (default 2, max 5).')
+  }),
+  outputSchema: obj(
+    {
+      status: enumOf(['ok', 'partial', 'error'], 'Overall analysis status.'),
+      recordCount: num('Number of records in the trace.'),
+      byKind: objOf('Hook kind → record count.', { additionalProperties: { type: 'number' } }),
+      findings: arrOf(objOf('A deobfuscated finding for one record.'), 'Per-record findings.'),
+      indicators: obj(
+        {
+          urls: arrOf(str('A URL extracted from the trace.'), 'URLs extracted from the trace.'),
+          domains: arrOf(str('A domain extracted from the trace.'), 'Domains extracted from the trace.'),
+          stringLiterals: arrOf(str('A string literal extracted from the trace.'), 'String literals extracted from the trace.')
+        },
+        ['urls', 'domains', 'stringLiterals']
+      ),
+      notes: arrOf(str('A non-fatal observation.'), 'Non-fatal observations.')
+    },
+    ['status', 'recordCount', 'byKind', 'findings', 'indicators', 'notes']
+  ),
   validateInput: validate,
   handler: deobfuscate
 }

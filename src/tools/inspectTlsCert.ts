@@ -6,6 +6,7 @@
 // Node's `tls.TLSSocket#getPeerCertificate()` / what Dev 3 would hand over.
 
 import type { CapabilityTool, ValidationResult } from '../shared/tools'
+import { arrOf, bool, enumOf, nullable, num, obj, objOf, str } from './schema'
 
 // --- Inline input/output types (not exported to src/shared/tools.ts) ---------
 
@@ -276,6 +277,52 @@ export const inspectTlsCertTool: CapabilityTool<InspectTlsCertInput, InspectTlsC
   description:
     'Analyzes a pre-fetched TLS certificate object for expiry, hostname mismatch, weak signature/key, self-signing, and over-long validity. Pure compute; opens no connection.',
   riskTier: 'read-only',
+  inputSchema: obj(
+    {
+      cert: obj(
+        {
+          subject: objOf('Certificate subject as a string map (e.g. CN).', {
+            additionalProperties: { type: 'string' }
+          }),
+          issuer: objOf('Certificate issuer as a string map.', {
+            additionalProperties: { type: 'string' }
+          }),
+          subjectAltNames: arrOf(str('A subject alternative name.'), 'Subject alternative names.'),
+          validFrom: str('Certificate not-before date (parseable string).'),
+          validTo: str('Certificate not-after date (parseable string).'),
+          serialNumber: str('Certificate serial number.'),
+          signatureAlgorithm: str('Signature algorithm (e.g. SHA256-RSA).'),
+          keyType: str('Public key type (e.g. RSA).'),
+          keyBits: num('Public key size in bits.'),
+          selfSigned: bool('Whether the certificate is self-signed.')
+        },
+        ['validFrom', 'validTo']
+      ),
+      hostname: str('Hostname to check the certificate names against.'),
+      nowMs: num('Override "now" for deterministic expiry checks (epoch ms).')
+    },
+    ['cert']
+  ),
+  outputSchema: obj(
+    {
+      findings: arrOf(
+        obj(
+          {
+            severity: enumOf(['info', 'low', 'medium', 'high', 'critical'], 'Finding severity.'),
+            message: str('Human-readable finding.')
+          },
+          ['severity', 'message']
+        ),
+        'Certificate findings.'
+      ),
+      expired: bool('Whether the certificate is expired at the evaluated time.'),
+      daysUntilExpiry: num('Days until expiry (negative when already expired).'),
+      hostnameMatches: nullable(
+        bool('Whether the hostname matched; null when no hostname was supplied.')
+      )
+    },
+    ['findings', 'expired', 'daysUntilExpiry', 'hostnameMatches']
+  ),
   validateInput: validate,
   handler: inspect
 }

@@ -9,6 +9,7 @@
 
 import { createHmac } from 'node:crypto'
 import type { CapabilityTool, ValidationResult } from '../shared/tools'
+import { arrOf, enumOf, obj, objOf, str } from './schema'
 
 // --- Input/Output types (declared inline, per task constraints) ------------
 
@@ -226,6 +227,30 @@ export const decodeJwtTool: CapabilityTool<DecodeJwtInput, DecodeJwtOutput> = {
   description:
     'Base64url-decodes a JWT into header + payload JSON, optionally shallow-merges edits, and optionally re-signs (HS256/384/512 via HMAC, or alg:none for downgrade probing). Surfaces validation notes (exp in past, alg mismatch). Pure compute — no network or filesystem.',
   riskTier: 'processing',
+  inputSchema: obj(
+    {
+      token: str('The JWT (three dot-separated base64url segments).'),
+      edit: obj({
+        header: objOf('Shallow-merge edits into the decoded header.'),
+        payload: objOf('Shallow-merge edits into the decoded payload.')
+      }),
+      resign: obj({
+        alg: enumOf(RESIGN_ALGS, 'Signing algorithm to re-sign with.'),
+        secret: str('HMAC secret (required for HS256/384/512).')
+      })
+    },
+    ['token']
+  ),
+  outputSchema: obj(
+    {
+      header: objOf('Decoded (and possibly edited) JWT header.'),
+      payload: objOf('Decoded (and possibly edited) JWT payload.'),
+      signature: str('Raw base64url signature segment.'),
+      notes: arrOf(str('A validation note.'), 'Validation notes.'),
+      resignedToken: str('Re-signed token, present only when resign was requested and succeeded.')
+    },
+    ['header', 'payload', 'signature', 'notes']
+  ),
   validateInput: validate,
   handler: decode
 }
