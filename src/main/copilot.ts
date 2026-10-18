@@ -822,9 +822,21 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
       const registry = buildMcpServer({ audit, context, surface: 'all' })
       try {
         const saved = JSON.parse(await readFile(toolAccessPath, 'utf8'))
+        const knownNow = registry.getToolAccess().map((t) => t.name)
+        let enabled: string[] | null = null
         if (Array.isArray(saved) && saved.every((name) => typeof name === 'string')) {
-          registry.setEnabledTools(saved)
+          // Legacy format: a bare list of enabled names with no record of what
+          // existed when it was written, so we can't distinguish a deliberate
+          // disable from a newly added tool. Err toward availability and enable
+          // the full catalog once; the next save writes the richer format below.
+          enabled = knownNow
+        } else if (saved && Array.isArray(saved.enabled) && Array.isArray(saved.known)) {
+          const knownSet = new Set<string>(knownNow)
+          const previouslyKnown = new Set<string>(saved.known.filter((n: unknown) => typeof n === 'string'))
+          const savedEnabled = new Set<string>(saved.enabled.filter((n: unknown) => typeof n === 'string'))
+          enabled = [...knownSet].filter((name) => savedEnabled.has(name) || !previouslyKnown.has(name))
         }
+        if (enabled) registry.setEnabledTools(enabled)
       } catch {
         // First launch or an invalid preference file: preserve the existing
         // behavior by enabling the full catalog.
@@ -997,7 +1009,15 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
       throw new Error('Enabled function names must be an array of strings')
     }
     const access = capabilityServer?.setEnabledTools(names) ?? []
-    await writeFile(toolAccessPath, JSON.stringify(access.filter((tool) => tool.enabled).map((tool) => tool.name)))
+    // Persist enabled names AND the full known set, so a later launch can tell
+    // a deliberate disable apart from a tool that didn't exist yet.
+    await writeFile(
+      toolAccessPath,
+      JSON.stringify({
+        enabled: access.filter((tool) => tool.enabled).map((tool) => tool.name),
+        known: access.map((tool) => tool.name)
+      })
+    )
     return access
   })
 
