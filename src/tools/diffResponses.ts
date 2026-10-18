@@ -12,6 +12,17 @@ import type {
   ResponseLike,
   ValidationResult
 } from '../shared/tools'
+import { arrOf, bool, enumOf, nullable, num, obj, objOf, str } from './schema'
+
+const RESPONSE_LIKE_SCHEMA = objOf('A response-like object the agent already fetched.', {
+  properties: {
+    status: num('HTTP status code.'),
+    body: str('Response body text.'),
+    timingMs: num('Observed response time in milliseconds.'),
+    headers: objOf('Response headers as a string map.', { additionalProperties: { type: 'string' } })
+  },
+  required: ['status', 'body']
+})
 
 const MAX_BODY_LENGTH = 5_000_000 // 5MB of text is already generous for a diff
 
@@ -130,6 +141,48 @@ export const diffResponsesTool: CapabilityTool<DiffResponsesInput, DiffResponses
   description:
     'Diffs two already-fetched response-like objects: status/length/timing deltas plus a line-level body diff summary. Pure compute.',
   riskTier: 'read-only',
+  inputSchema: obj(
+    {
+      a: RESPONSE_LIKE_SCHEMA,
+      b: RESPONSE_LIKE_SCHEMA
+    },
+    ['a', 'b']
+  ),
+  outputSchema: obj(
+    {
+      statusChanged: bool('Whether the two status codes differ.'),
+      statusA: num('Status of response A.'),
+      statusB: num('Status of response B.'),
+      lengthA: num('Body byte length of A.'),
+      lengthB: num('Body byte length of B.'),
+      lengthDelta: num('Body length delta (B - A).'),
+      timingDeltaMs: nullable(num('Timing delta in ms (null when either timing is absent).')),
+      bodyIdentical: bool('Whether the two bodies are byte-identical.'),
+      lineDiff: arrOf(
+        obj(
+          {
+            kind: enumOf(['added', 'removed', 'unchanged'], 'Change kind for this line.'),
+            line: str('The line text.')
+          },
+          ['kind', 'line']
+        ),
+        'Line-level diff entries.'
+      ),
+      changedLineCount: num('Number of added/removed lines.')
+    },
+    [
+      'statusChanged',
+      'statusA',
+      'statusB',
+      'lengthA',
+      'lengthB',
+      'lengthDelta',
+      'timingDeltaMs',
+      'bodyIdentical',
+      'lineDiff',
+      'changedLineCount'
+    ]
+  ),
   validateInput: validate,
   handler: diff
 }

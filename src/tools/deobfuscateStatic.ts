@@ -24,6 +24,7 @@ import { parse } from 'acorn'
 import { generate } from 'astring'
 
 import type { CapabilityTool, ValidationResult } from '../shared/tools'
+import { arrOf, bool, enumOf, num, obj, objOf, str } from './schema'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -1605,6 +1606,53 @@ export const deobfuscateStaticTool: CapabilityTool<DeobfuscateStaticInput, Deobf
   description:
     'Static JavaScript deobfuscator. Parses untrusted JS (never executes it) and rewrites constant folding, decoder chains, obfuscator.io string arrays and Dean Edwards packer output into readable source, with a structural report and extracted indicators. Pure string analysis.',
   riskTier: 'processing',
+  inputSchema: obj(
+    {
+      source: str('The JavaScript source to deobfuscate.'),
+      techniques: arrOf(
+        enumOf(DEOBFUSCATE_TECHNIQUES, 'A deobfuscation pass.'),
+        'Optional subset of passes to run (default: all).'
+      ),
+      maxOutputBytes: num('Cap on the returned transformed source in bytes (default 262144).')
+    },
+    ['source']
+  ),
+  outputSchema: obj(
+    {
+      status: enumOf(['ok', 'partial', 'error'], 'Overall deobfuscation status.'),
+      family: obj(
+        {
+          name: str('Detected obfuscation family name.'),
+          confidence: num('Confidence in the family classification (0–1).')
+        },
+        ['name', 'confidence']
+      ),
+      transformed: str('The deobfuscated source.'),
+      truncated: bool('Whether the transformed source was byte-capped.'),
+      metrics: objOf('Structural metrics of the before/after source.'),
+      passes: arrOf(
+        obj(
+          {
+            name: str('Pass name.'),
+            changed: bool('Whether the pass changed the source.'),
+            note: str('Optional pass note.')
+          },
+          ['name', 'changed']
+        ),
+        'Structured report of the passes applied.'
+      ),
+      indicators: obj(
+        {
+          urls: arrOf(str('A URL found in the source.'), 'URLs found in the source.'),
+          domains: arrOf(str('A domain found in the source.'), 'Domains found in the source.'),
+          stringLiterals: arrOf(str('A notable string literal.'), 'Notable string literals.')
+        },
+        ['urls', 'domains', 'stringLiterals']
+      ),
+      notes: arrOf(str('A non-fatal observation.'), 'Non-fatal observations.')
+    },
+    ['status', 'family', 'transformed', 'truncated', 'metrics', 'passes', 'indicators', 'notes']
+  ),
   validateInput: validate,
   handler: deobfuscate
 }

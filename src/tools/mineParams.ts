@@ -8,6 +8,7 @@
 // returned names into Dev 3's request tools separately.
 
 import type { CapabilityTool, ValidationResult } from '../shared/tools'
+import { arrOf, bool, enumOf, num, obj, objOf, str } from './schema'
 
 // ---------------------------------------------------------------------------
 // Inlined types (per §5.E: only generic helpers are imported from shared).
@@ -331,6 +332,21 @@ export const mineParamsTool: CapabilityTool<MineParamsInput, MineParamsOutput> =
   description:
     'Generates candidate HTTP parameter names from curated static wordlists and variants derived from observed names. Pure compute; never sends anything.',
   riskTier: 'read-only',
+  inputSchema: obj({
+    observed: arrOf(str('A parameter name already observed.'), 'Observed parameter names to derive variants from.'),
+    categories: arrOf(enumOf(ALL_CATEGORIES, 'A wordlist category.'), 'Wordlist categories to include (default: all).'),
+    includeCaseVariants: bool('Also emit snake/camel/Pascal case variants of each name.')
+  }),
+  outputSchema: obj(
+    {
+      candidates: arrOf(str('A candidate parameter name.'), 'De-duplicated, sorted candidate names.'),
+      byCategory: objOf('Category → candidate names.', {
+        additionalProperties: { type: 'array', items: { type: 'string' } }
+      }),
+      count: num('Number of candidates.')
+    },
+    ['candidates', 'byCategory', 'count']
+  ),
   validateInput: validate,
   handler: generate
 }

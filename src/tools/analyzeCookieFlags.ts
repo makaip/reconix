@@ -6,6 +6,7 @@
 // weaknesses (CSP, CORS, HSTS). No network, filesystem, or process I/O.
 
 import type { CapabilityTool, ValidationResult } from '../shared/tools'
+import { arrOf, bool, enumOf, nullable, obj, objOf, str } from './schema'
 
 // --- Inline input/output types (§5.E: declared in-tool, not in shared/tools) ---
 
@@ -283,6 +284,53 @@ export const analyzeCookieFlagsTool: CapabilityTool<AnalyzeCookieFlagsInput, Ana
   description:
     'Analyzes Set-Cookie header values and response headers for weak/missing cookie security attributes (Secure, HttpOnly, SameSite) and obvious CSP/CORS/HSTS weaknesses. Pure compute.',
   riskTier: 'read-only',
+  inputSchema: obj(
+    {
+      setCookieHeaders: arrOf(str('A raw Set-Cookie header value.'), 'Set-Cookie header values from the response.'),
+      responseHeaders: objOf('Other response headers as a string map.', {
+        additionalProperties: { type: 'string' }
+      })
+    },
+    ['setCookieHeaders']
+  ),
+  outputSchema: obj(
+    {
+      cookies: arrOf(
+        obj(
+          {
+            name: str('Cookie name.'),
+            secure: bool('Whether the Secure flag is set.'),
+            httpOnly: bool('Whether the HttpOnly flag is set.'),
+            sameSite: nullable(str('SameSite attribute value, or null if absent.')),
+            findings: arrOf(
+              obj(
+                {
+                  severity: enumOf(['info', 'low', 'medium', 'high'], 'Finding severity.'),
+                  message: str('Human-readable finding.')
+                },
+                ['severity', 'message']
+              ),
+              'Per-cookie findings.'
+            )
+          },
+          ['name', 'secure', 'httpOnly', 'sameSite', 'findings']
+        ),
+        'One entry per Set-Cookie header.'
+      ),
+      headerFindings: arrOf(
+        obj(
+          {
+            severity: enumOf(['info', 'low', 'medium', 'high'], 'Finding severity.'),
+            message: str('Human-readable finding.'),
+            header: str('The response header the finding concerns.')
+          },
+          ['severity', 'message', 'header']
+        ),
+        'Response-header weaknesses (CSP/CORS/HSTS).'
+      )
+    },
+    ['cookies', 'headerFindings']
+  ),
   validateInput: validate,
   handler: analyze
 }

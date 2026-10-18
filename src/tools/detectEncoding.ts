@@ -10,6 +10,7 @@ import type {
   DetectEncodingOutput,
   ValidationResult
 } from '../shared/tools'
+import { arrOf, bool, enumOf, num, obj, str } from './schema'
 
 const MAX_BODY_LENGTH = 5_000_000
 
@@ -102,6 +103,19 @@ export const detectEncodingTool: CapabilityTool<DetectEncodingInput, DetectEncod
   description:
     'Analyzes a response body string for entropy, likely encoding (base64/hex/url-encoded), and high-entropy flags. Pure string analysis.',
   riskTier: 'read-only',
+  inputSchema: obj({ body: str('The response body string to analyze.') }, ['body']),
+  outputSchema: obj(
+    {
+      entropy: num('Shannon entropy estimate in bits/char.'),
+      likelyEncodings: arrOf(
+        enumOf(['base64', 'hex', 'url-encoded', 'plain-text'], 'A likely encoding.'),
+        'Likely encodings, most specific first.'
+      ),
+      highEntropy: bool('Whether the body looks high-entropy (possibly encrypted/compressed).'),
+      flags: arrOf(str('A human-readable observation flag.'), 'Observation flags.')
+    },
+    ['entropy', 'likelyEncodings', 'highEntropy', 'flags']
+  ),
   validateInput: validate,
   handler: detect
 }
