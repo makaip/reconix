@@ -29,7 +29,8 @@ export type SlashCommand = {
   description: string
   /** Shown after the name in the popup, e.g. "<url>". */
   argHint?: string
-  /** True for tools registered in main but not yet implemented (they throw). */
+  /** True for tools registered in main but not yet implemented (they throw).
+   *  Every tool in the catalog below is implemented, so nothing currently sets this. */
   pending?: boolean
   run: (ctx: CommandContext, args: string) => void
 }
@@ -50,8 +51,8 @@ const SKILLS: { name: string; skill: string; description: string }[] = [
   { name: 'z3-solver', skill: 'z3-solver', description: 'Solve inputs for length bounds and regex constraints.' }
 ]
 
-// Full MCP tool catalog (src/main/mcp/tools). `pending` marks the ones whose
-// execute() still throws — included for completeness, flagged in the popup.
+// Full MCP tool catalog (src/main/mcp/tools). Every tool listed here is already
+// implemented and registered by main, so none is flagged `pending`.
 const TOOLS: { name: string; description: string; argHint?: string; pending?: boolean }[] = [
   { name: 'get_scope', description: 'Report the engagement scope.' },
   { name: 'get_engagement_state', description: 'Report the current engagement state.' },
@@ -73,21 +74,21 @@ const TOOLS: { name: string; description: string; argHint?: string; pending?: bo
   { name: 'mutate_payload', description: 'Mutations of a seed string (data).', argHint: '<seed>' },
   { name: 'detect_encoding', description: 'Classify encodings and entropy of a body (data).', argHint: '<body>' },
   { name: 'diff_responses', description: 'Compact delta between two response bodies (data).', argHint: '<a> <b>' },
-  { name: 'get_dom_extract', description: 'Schema’d DOM extract: forms/inputs/endpoints/links/headers/CSRF.', pending: true },
-  { name: 'list_forms', description: 'Forms on the current page with identity refs.', pending: true },
-  { name: 'list_links', description: 'Links on the current page, in/out of scope.', pending: true },
-  { name: 'get_headers', description: 'Response headers of the current document.', pending: true },
-  { name: 'dispatch_input', description: 'Raw CDP Input event sequence into the target page.', pending: true },
-  { name: 'query_dom', description: 'Query DOM nodes matching a selector.', pending: true },
-  { name: 'set_dom', description: 'Set innerHTML of a node in the target page only.', pending: true },
-  { name: 'set_emulation', description: 'CSS/Emulation: device, viewport, media.', pending: true },
-  { name: 'set_intercept_rule', description: 'CDP Fetch rewrite rule (gated).', pending: true },
-  { name: 'submit_form', description: 'Submit a form by ref with values (mutating).', pending: true },
-  { name: 'probe_reflection', description: 'Benign-marker reflection probe (detection only).', pending: true },
-  { name: 'vary_parameter', description: 'Differential over a param set (IDOR/BAC/fuzz).', pending: true },
-  { name: 'run_tool', description: 'Brokered external binary (nmap/nuclei/sqlmap).', pending: true },
-  { name: 'reproduce', description: 'Replay a stored interaction; report whether it matches.', pending: true },
-  { name: 'collect_evidence', description: 'Bundle screenshot + req/resp + trace into one ref.', pending: true }
+  { name: 'get_dom_extract', description: 'Schema’d DOM extract: forms/inputs/endpoints/links/headers/CSRF.' },
+  { name: 'list_forms', description: 'Forms on the current page with identity refs.' },
+  { name: 'list_links', description: 'Links on the current page, in/out of scope.' },
+  { name: 'get_headers', description: 'Response headers of the current document.' },
+  { name: 'dispatch_input', description: 'Raw CDP Input event sequence into the target page.' },
+  { name: 'query_dom', description: 'Query DOM nodes matching a selector.' },
+  { name: 'set_dom', description: 'Set innerHTML of a node in the target page only.' },
+  { name: 'set_emulation', description: 'CSS/Emulation: device, viewport, media.' },
+  { name: 'set_intercept_rule', description: 'CDP Fetch rewrite rule (gated).' },
+  { name: 'submit_form', description: 'Submit a form by ref with values (mutating).' },
+  { name: 'probe_reflection', description: 'Benign-marker reflection probe (detection only).' },
+  { name: 'vary_parameter', description: 'Differential over a param set (IDOR/BAC/fuzz).' },
+  { name: 'run_tool', description: 'Brokered external binary (nmap/nuclei/sqlmap).' },
+  { name: 'reproduce', description: 'Replay a stored interaction; report whether it matches.' },
+  { name: 'collect_evidence', description: 'Bundle screenshot + req/resp + trace into one ref.' }
 ]
 
 function toolInstruction(tool: string, args: string): string {

@@ -620,6 +620,20 @@ async function resolveSandboxDir(): Promise<string> {
   return dir
 }
 
+/** Owner session of a raw event, for the §6.4 raw-event audit log. The
+ *  connector's own `sessionId` is private (reading it would mean editing the
+ *  connector, out of scope here), so read the id the event already carries —
+ *  data.sessionID for streaming deltas, durable.aggregateID otherwise, the same
+ *  fields usage.ts keys on. Returns null when the event is unlabelled. */
+function rawEventSessionId(raw: RawEvent): string | null {
+  const data = raw.data as Record<string, unknown> | undefined
+  const durable = raw.durable as Record<string, unknown> | undefined
+  const fromData = typeof data?.sessionID === 'string' && data.sessionID.length > 0 ? data.sessionID : null
+  const fromDurable =
+    typeof durable?.aggregateID === 'string' && durable.aggregateID.length > 0 ? durable.aggregateID : null
+  return fromData ?? fromDurable
+}
+
 export function createCopilotBridge(win: BrowserWindow, getNetwork: () => NetworkCapture | undefined, getInterceptor?: () => { save(raw: unknown): InterceptRule | null; list(): InterceptRule[]; toggle(id: unknown, enabled: unknown): InterceptRule | null; remove(id: unknown): boolean } | undefined, getCrawler?: () => { start(raw: unknown): unknown; stop(): unknown; getState(): unknown } | undefined, getRepeater?: () => { list(): unknown; save(raw: unknown): unknown; remove(id: unknown): unknown; run(id: unknown): unknown; diff(raw: unknown): unknown } | undefined): CopilotBridge {
   setQuestionSender((payload) => { if (!win.isDestroyed()) win.webContents.send('copilot:question', payload) })
   let child: ChildProcessWithoutNullStreams | null = null
@@ -668,6 +682,15 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
   // — which runs outside the tool pipeline — can persist sign-offs to the same
   // append-only store (§6.4: tool_calls + approvals are the point of the store).
   const audit = createAuditLogger(db)
+
+  // Raw-event audit log (§6.4, TODO B): the connector's persist sink appends
+  // every observed event here verbatim. Continue the `re_<n>` sequence past any
+  // rows already on disk so a restart never reuses a PRIMARY KEY.
+  let rawEventSeq = 0
+  for (const row of db.all('SELECT id FROM raw_events')) {
+    const match = /^re_(\d+)$/.exec(String((row as Record<string, unknown>).id))
+    if (match) rawEventSeq = Math.max(rawEventSeq, Number(match[1]))
+  }
 
   // Cost/latency meter. Fed by the connector's persist (all sessions, incl.
   // subagents + the ambient DOM parser) and onAgentEvent (orchestrator turn
@@ -1074,9 +1097,18 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
           persist: (raw: RawEvent, _normalized: AgentEvent | null) => {
             usage.recordRaw(raw)
             emitUsage()
-            // TODO(B): write through to the engagement store (§6.4) once it
-            // exists. Dropped on the floor for now — not a regression, there
-            // was no store before this either.
+            // Write-through to the §6.4 store: append the raw event verbatim so
+            // the stream has a durable audit record. Best-effort and non-fatal —
+            // a store failure must never re-enter or stall the streaming loop
+            // that owns this callback, so it's swallowed, not thrown.
+            try {
+              db.run(
+                'INSERT INTO raw_events (id, engagement_id, session_id, type, data_json, ts) VALUES (?, ?, ?, ?, ?, ?)',
+                [`re_${++rawEventSeq}`, getEngagementId(), rawEventSessionId(raw), raw.type, JSON.stringify(raw), Date.now()]
+              )
+            } catch (err) {
+              console.warn('[copilot:persist] raw event dropped', err)
+            }
           },
           onStatus: (status: ServerStatus) => send('copilot:status', status)
         }

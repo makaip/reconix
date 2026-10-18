@@ -60,6 +60,18 @@ const SCHEMA = `
     actor              TEXT,
     ts                 INTEGER NOT NULL
   );
+  -- Raw event audit log (§6.4): the connector's persist sink appends every
+  -- observed event verbatim as data_json, so a run's stream is durably replayable
+  -- even though only the orchestrator's output reaches the transcript. Created
+  -- idempotently on open, so this doubles as the migration for existing DBs.
+  CREATE TABLE IF NOT EXISTS raw_events (
+    id            TEXT PRIMARY KEY,
+    engagement_id TEXT,
+    session_id    TEXT,
+    type          TEXT,
+    data_json     TEXT,
+    ts            INTEGER
+  );
 `
 
 /** Pre-release shape change: `traces` used to hold bytes inline (a `data` BLOB);
