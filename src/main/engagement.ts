@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs'
+import type { ScopeStatus } from '../shared/contracts'
 import type { ScopeChecker, ScopeConfig } from '../shared/scope'
 import { makeScopeChecker } from './scope'
 
@@ -39,6 +40,30 @@ function isScopeConfig(value: unknown): value is ScopeConfig {
     Array.isArray(c.targets) &&
     Array.isArray(c.infra)
   )
+}
+
+/** Reads the engagement ScopeConfig without building a checker. Returns null on
+ *  any failure (no path, missing file, bad JSON, wrong shape) — the same
+ *  default-deny posture as loadScopeChecker, for callers that only need the
+ *  config to display. */
+export function loadScopeConfig(path = process.env.SCOPE_CONFIG_PATH): ScopeConfig | null {
+  if (!path) return null
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'))
+    return isScopeConfig(parsed) ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+/** Projects the config into the renderer's read-only scope view (§6.5). */
+export function toScopeStatus(config: ScopeConfig | null): ScopeStatus {
+  if (!config) return { hosts: [], summary: 'none' }
+  const hosts = config.targets.flatMap((t) => (t.host ? [t.host] : []))
+  const rules = config.targets.length
+  const hostLabel = `${hosts.length} host${hosts.length === 1 ? '' : 's'}`
+  const ruleLabel = `${rules} rule${rules === 1 ? '' : 's'}`
+  return { hosts, summary: `${hostLabel} · ${ruleLabel}` }
 }
 
 /**

@@ -46,6 +46,8 @@ import type {
   AgentEvent as CopilotAgentEvent,
   ApprovalDecision as CopilotApprovalDecision,
   EngineStatus,
+  ProxyStatus,
+  ScopeStatus,
   ServerStatus,
   ToolAccess,
   UsageSnapshot
@@ -120,6 +122,20 @@ const api = {
     list: (): Promise<Finding[]> => ipcRenderer.invoke('findings:list'),
     onChanged: (callback: (findings: Finding[]) => void): (() => void) =>
       subscribe('findings:changed', callback)
+  },
+  scope: {
+    // Read-only view of the engagement's authorized scope, for the URL-bar
+    // badge and status-bar summary. Static per run (scope.json is read at boot).
+    get: (): Promise<ScopeStatus> => ipcRenderer.invoke('scope:get')
+  },
+  proxy: {
+    // Configured egress proxy address (RECONIX_PROXY_ADDR), or null. The app
+    // doesn't manage the container proxy, so there's no live health to report.
+    getStatus: (): Promise<ProxyStatus> => ipcRenderer.invoke('proxy:get-status')
+  },
+  engagement: {
+    // Authorized engagement id from the loaded scope.json, or null.
+    get: (): Promise<string | null> => ipcRenderer.invoke('engagement:get')
   },
   crawler: {
     // Deterministic scope-aware spider. Drives the gated replayer; no new egress.
