@@ -1,7 +1,7 @@
 // Shared main-process contracts. Mirrors ARCHITECTURE.md §6 and API.md §1/§3.
 // Changing a type here is a §6 contract change — version it (CONTRACTS_VERSION).
 
-export const CONTRACTS_VERSION = '0.2.0'
+export const CONTRACTS_VERSION = '0.3.0'
 
 // ─── Risk tiers (API.md §3 / ARCHITECTURE §5.C) ───────────────────────────────
 // R read-only (auto) · P page-mutating, sandbox-only (auto)
@@ -165,6 +165,8 @@ export interface UsageTotals {
 export interface UsageSnapshot {
   /** Most-recent-last, capped by the meter's ring buffer. */
   turns: TurnUsage[]
+  /** Turns still being assembled (in-flight), so the UI can show live TTFT. */
+  activeTurns: TurnUsage[]
   rollups: UsageRollups
   totals: UsageTotals
 }

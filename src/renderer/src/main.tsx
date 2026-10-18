@@ -9,6 +9,7 @@ import './styles/copilot.css'
 import './styles/devtools.css'
 import './styles/chrome.css'
 import './styles/settings.css'
+import './styles/usage.css'
 
 // lets CSS adjust per OS (e.g. room for the macOS traffic lights)
 document.documentElement.dataset.platform = window.reconix.platform

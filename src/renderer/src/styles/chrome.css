@@ -282,6 +282,46 @@
   border-left: 1px solid var(--color-border-subtle);
 }
 
+/* clickable latency readout, opens the cost/latency panel */
+.statusbar__button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 100%;
+  padding: 0 12px;
+  font: inherit;
+  color: var(--color-text-muted);
+  background: none;
+  border: 0;
+  border-left: 1px solid var(--color-border-subtle);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.statusbar__button:hover {
+  background: var(--color-hover);
+  color: var(--color-text);
+}
+
+.statusbar__dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--color-accent);
+  animation: statusbar-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes statusbar-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
+
 /* engine startup banner (opencode engine boot gating) */
 .engine-banner {
   flex: none;

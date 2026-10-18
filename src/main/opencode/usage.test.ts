@@ -38,6 +38,28 @@ describe('UsageMeter turn latency', () => {
     ])
   })
 
+  it('exposes the in-flight turn via activeTurns, then settles it', () => {
+    const c = clock()
+    const meter = new UsageMeter({ now: c.now, modelForRole: () => 'vllm-orchestrator/orchestrator-model' })
+    meter.registerSession('ses-1', 'orchestrator')
+
+    meter.noteSend() // t=1000
+    c.advance(150)
+    meter.recordAgentEvent({ kind: 'message.delta', messageId: 'm1', role: 'assistant', text: 'hi' }) // 1150
+
+    const live = meter.snapshot()
+    expect(live.activeTurns).toHaveLength(1)
+    expect(live.activeTurns[0].firstTokenAt).toBe(1150)
+    expect(live.turns).toHaveLength(0)
+
+    c.advance(50)
+    meter.recordAgentEvent({ kind: 'turn.done', messageId: 'm1' }) // 1200
+    const settled = meter.snapshot()
+    expect(settled.activeTurns).toHaveLength(0)
+    expect(settled.turns).toHaveLength(1)
+    expect(settled.turns[0].finishedAt).toBe(1200)
+  })
+
   it('counts tool errors without dropping the latency sample', () => {
     const c = clock()
     const meter = new UsageMeter({ now: c.now })

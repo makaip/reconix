@@ -634,6 +634,31 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
     if (!win.isDestroyed()) win.webContents.send(channel, payload)
   }
 
+  // Usage/latency push. Turn updates arrive in bursts (a delta per token, a
+  // rollup per tool), so coalesce them to ~2Hz; `immediate` flushes at
+  // boundaries where the UI should react at once (send, turn end, parser done).
+  let usageTimer: ReturnType<typeof setTimeout> | null = null
+  let usageDirty = false
+  const emitUsage = (immediate = false): void => {
+    if (immediate) {
+      if (usageTimer) {
+        clearTimeout(usageTimer)
+        usageTimer = null
+      }
+      usageDirty = false
+      send('copilot:usage', usage.snapshot())
+      return
+    }
+    usageDirty = true
+    if (usageTimer) return
+    usageTimer = setTimeout(() => {
+      usageTimer = null
+      if (!usageDirty) return
+      usageDirty = false
+      send('copilot:usage', usage.snapshot())
+    }, 500)
+  }
+
   async function spawnServer(): Promise<{ baseUrl: string; password: string }> {
     await syncGlobalOpenCodeConfig()
     const sandboxDir = await resolveSandboxDir()
@@ -827,6 +852,7 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
         return await runOneShotAgent(baseUrl, password, 'dom-analyzer', html)
       } finally {
         usage.noteAmbientCall('dom-analyzer', Date.now() - started)
+        emitUsage(true)
       }
     }
   )
@@ -856,10 +882,12 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
               }
             }
             usage.recordAgentEvent(ev)
+            emitUsage(ev.kind === 'turn.done' || ev.kind === 'error')
             send('copilot:event', ev)
           },
           persist: (raw: RawEvent, _normalized: AgentEvent | null) => {
             usage.recordRaw(raw)
+            emitUsage()
             // TODO(B): write through to the engagement store (§6.4) once it
             // exists. Dropped on the floor for now — not a regression, there
             // was no store before this either.
@@ -887,6 +915,7 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
       const c = await ensureConnector()
       const prefix = buildContextPrefix()
       usage.noteSend()
+      emitUsage(true)
       return await c.sendMessage(prefix + String(text))
     } catch (err) {
       responseStartedAt = null
@@ -914,6 +943,9 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
     return c.interrupt()
   })
 
+  ipcMain.removeHandler('copilot:usage-snapshot')
+  ipcMain.handle('copilot:usage-snapshot', () => usage.snapshot())
+
   return {
     setActiveTarget(wc, tabId) {
       cdp.setActive(wc)
@@ -939,6 +971,11 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
       ipcMain.removeHandler('copilot:get-engine-status')
       ipcMain.removeHandler('copilot:get-tool-access')
       ipcMain.removeHandler('copilot:set-enabled-tools')
+      ipcMain.removeHandler('copilot:usage-snapshot')
+      if (usageTimer) {
+        clearTimeout(usageTimer)
+        usageTimer = null
+      }
       domWatcher.setActive(null)
       await connector?.stop().catch(() => undefined)
       await mcpServer?.stop().catch(() => undefined)

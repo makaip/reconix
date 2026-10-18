@@ -234,7 +234,17 @@ export class UsageMeter {
   /** Current snapshot: retained turns plus per-model/role/tool rollups. */
   snapshot(): UsageSnapshot {
     const turns = [...this.turns]
-    return { turns, rollups: this.rollups(turns), totals: this.totals(turns) }
+    return {
+      turns,
+      // Copy in-flight turns (and their arrays) so callers can't mutate meter
+      // state, and a turn being fed mid-snapshot isn't observed half-updated.
+      activeTurns: [...this.active.values()].map((turn) => ({
+        ...turn,
+        toolLatencies: [...turn.toolLatencies]
+      })),
+      rollups: this.rollups(turns),
+      totals: this.totals(turns)
+    }
   }
 
   // ── internals ──────────────────────────────────────────────────────────────

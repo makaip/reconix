@@ -47,7 +47,8 @@ import type {
   ApprovalDecision as CopilotApprovalDecision,
   EngineStatus,
   ServerStatus,
-  ToolAccess
+  ToolAccess,
+  UsageSnapshot
 } from '../shared/contracts'
 import type { CrawlStartInput, CrawlState } from '../shared/crawler'
 
@@ -243,7 +244,11 @@ const api = {
       const listener = (_event: Electron.IpcRendererEvent, payload: EngineStatus): void => callback(payload)
       ipcRenderer.on('copilot:engine-status', listener)
       return () => ipcRenderer.removeListener('copilot:engine-status', listener)
-    }
+    },
+    // Cost/latency meter readback + live pushes (counts and timing only).
+    getUsage: (): Promise<UsageSnapshot> => ipcRenderer.invoke('copilot:usage-snapshot'),
+    onUsage: (callback: (usage: UsageSnapshot) => void): (() => void) =>
+      subscribe('copilot:usage', callback)
   }
 }
 

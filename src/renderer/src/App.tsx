@@ -4,6 +4,7 @@ import DevToolsPanel from './components/devtools/DevToolsPanel'
 import SettingsModal from './components/SettingsModal'
 import Sidebar from './components/sidebar/Sidebar'
 import Splash from './components/Splash'
+import UsagePanel from './components/UsagePanel'
 import ViewSlot from './components/ViewSlot'
 import EngineStatusBanner from './components/chrome/EngineStatusBanner'
 import ResizeHandle from './components/chrome/ResizeHandle'
@@ -16,6 +17,7 @@ import { useNetworkStats } from './hooks/useNetworkStats'
 import { useResizable } from './hooks/useResizable'
 import { useSettings } from './hooks/useSettings'
 import { useTabs } from './hooks/useTabs'
+import { useUsage } from './hooks/useUsage'
 
 const setTargetBounds = window.reconix.target.setBounds
 
@@ -24,10 +26,12 @@ function App(): JSX.Element {
   const engineStatus = useEngineStatus()
   const tabs = useTabs()
   const network = useNetworkStats()
+  const usage = useUsage()
   const settings = useSettings()
   const [dragActive, setDragActive] = useState(false)
   const [copilotTargetId, setCopilotTargetId] = useState<number | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [usageOpen, setUsageOpen] = useState(false)
   // Launch-time panel visibility comes from settings; the user can still toggle at runtime.
   const [copilotOpen, setCopilotOpen] = useState(settings.settings.openCopilotOnLaunch)
   const [sidebarOpen, setSidebarOpen] = useState(settings.settings.openSidebarOnLaunch)
@@ -174,9 +178,10 @@ function App(): JSX.Element {
         )}
       </div>
 
-      <StatusBar requests={network.total} />
+      <StatusBar requests={network.total} usage={usage} onOpenUsage={() => setUsageOpen(true)} />
 
       {settingsOpen && <SettingsModal settings={settings} onClose={() => setSettingsOpen(false)} />}
+      {usageOpen && <UsagePanel usage={usage} onClose={() => setUsageOpen(false)} />}
     </div>
   )
 }
