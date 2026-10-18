@@ -499,9 +499,9 @@ class DomSummaryWatcher {
 
 // In-memory stand-ins for traces/history (ARCHITECTURE §6.4) — B's real
 // SQLite-backed store doesn't exist yet, so nothing here survives a restart.
-// Findings are the exception: they live in createFindingsStore, which is also
-// in-memory for now but observable, so the renderer's panel reflects recorded
-// findings live. (Same stopgap pattern as smoke.ts's InMemoryAuditLogger.)
+// Findings are the exception: they live in createFindingsStore, which persists
+// to userData (and stays observable, so the renderer's panel reflects recorded
+// findings live). (Same stopgap pattern as smoke.ts's InMemoryAuditLogger.)
 function createInMemorySinks(findingsStore: FindingsStore): { traces: TraceStore; findings: FindingSink; history: HistoryReader } {
   let traceSeq = 0
   return {
@@ -585,9 +585,10 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
   const cdp = new ActiveTabCdpDriver((wc) => wc.id === win.webContents.id)
   const scope = new ActiveTabScope(() => cdp.pageContext()?.url ?? null)
   const networkReader = new ActiveTabNetworkReader(getNetwork)
-  // Findings persist for the window's lifetime; record_finding broadcasts to the
-  // renderer's panel. Registered here so the store owns its IPC handler + cleanup.
-  const findingsStore = createFindingsStore(win)
+  // Findings persist to userData so a recorded finding survives a restart;
+  // record_finding also broadcasts to the renderer's panel. Registered here so
+  // the store owns its IPC handler + cleanup.
+  const findingsStore = createFindingsStore(win, join(app.getPath('userData'), 'findings.json'))
 
   // Cost/latency meter. Fed by the connector's persist (all sessions, incl.
   // subagents + the ambient DOM parser) and onAgentEvent (orchestrator turn

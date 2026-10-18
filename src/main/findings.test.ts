@@ -1,4 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
+import { mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import type { BrowserWindow } from 'electron'
 
 // ipcMain.handle/removeHandler fire at store construction; capture handlers so
@@ -66,5 +69,40 @@ describe('createFindingsStore', () => {
     expect(handlers.get('findings:list')!()).toEqual([
       { id: 'finding_1', title: 'a', severity: 'critical' }
     ])
+  })
+})
+
+describe('createFindingsStore persistence', () => {
+  const tempFile = (): string => join(mkdtempSync(join(tmpdir(), 'reconix-findings-')), 'findings.json')
+
+  it('restores persisted rows and continues the id sequence across restarts', async () => {
+    const file = tempFile()
+    const first = createFindingsStore(makeWin(), file)
+    await first.sink.record({ title: 'Reflected XSS', severity: 'high' }, 'trace_1')
+
+    const second = createFindingsStore(makeWin(), file)
+    expect(second.summary()).toEqual([
+      { id: 'finding_1', title: 'Reflected XSS', severity: 'high' }
+    ])
+    expect(second.list()).toMatchObject([{ evidenceRef: 'trace_1' }])
+
+    // seq was recovered, so the next id doesn't clobber the restored one
+    expect(await second.sink.record({ title: 'SSRF', severity: 'medium' }, 'trace_2')).toBe(
+      'finding_2'
+    )
+  })
+
+  it('starts empty when the persisted file is malformed', () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const file = tempFile()
+    writeFileSync(file, '{ not json')
+
+    expect(createFindingsStore(makeWin(), file).summary()).toEqual([])
+  })
+
+  it('persists nothing when no path is given', async () => {
+    const store = createFindingsStore(makeWin())
+    await store.sink.record({ title: 'ephemeral', severity: 'low' }, 't')
+    expect(store.summary()).toHaveLength(1) // present in memory, just never written
   })
 })
