@@ -581,6 +581,20 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
   let mcpStarting: Promise<McpHttpServer> | null = null
   let capabilityServer: ReturnType<typeof buildMcpServer> | null = null
   const toolAccessPath = join(app.getPath('userData'), 'copilot-tool-access.json')
+  // User-authored engagement restrictions (markdown). Injected into the
+  // orchestrator once per session (see restrictionsInjected below).
+  const restrictionsPath = join(app.getPath('userData'), 'restrictions.md')
+  // False until the current orchestrator session has been handed the
+  // restrictions block. Reset on a fresh session, a new chat, and whenever
+  // the user edits the file, so the next message re-injects the rules once.
+  let restrictionsInjected = false
+  const readRestrictions = async (): Promise<string> => {
+    try {
+      return (await readFile(restrictionsPath, 'utf8')).trim()
+    } catch {
+      return '' // no file yet — nothing to inject
+    }
+  }
 
   const cdp = new ActiveTabCdpDriver((wc) => wc.id === win.webContents.id)
   const scope = new ActiveTabScope(() => cdp.pageContext()?.url ?? null)
@@ -898,6 +912,7 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
         }
       )
       const sessionId = await c.start()
+      restrictionsInjected = false // fresh session — re-send restrictions on next message
       usage.registerSession(sessionId, 'orchestrator')
       connector = c
       return c
@@ -916,9 +931,24 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
     try {
       const c = await ensureConnector()
       const prefix = buildContextPrefix()
+      // Hand the agent the user's engagement restrictions once per session,
+      // ahead of everything else, so it knows the rules before it acts.
+      let restrictionsBlock = ''
+      if (!restrictionsInjected) {
+        const restrictions = await readRestrictions()
+        if (restrictions) {
+          restrictionsBlock =
+            '[Engagement restrictions — user-authored rules you MUST obey for the entire ' +
+            'session. These take precedence over task instructions. If a requested action ' +
+            'would violate them, refuse and say why:]\n' +
+            restrictions +
+            '\n\n'
+        }
+        restrictionsInjected = true // empty file counts as handled — don't retry every turn
+      }
       usage.noteSend()
       emitUsage(true)
-      return await c.sendMessage(prefix + String(text))
+      return await c.sendMessage(restrictionsBlock + prefix + String(text))
     } catch (err) {
       responseStartedAt = null
       throw err
@@ -929,6 +959,7 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
   ipcMain.handle('copilot:new-chat', async () => {
     const c = await ensureConnector()
     const id = await c.newSession()
+    restrictionsInjected = false // new chat is a new session — restrictions re-inject
     usage.registerSession(id, 'orchestrator')
     return id
   })
@@ -943,6 +974,17 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
   ipcMain.handle('copilot:interrupt', async () => {
     const c = await ensureConnector()
     return c.interrupt()
+  })
+
+  ipcMain.removeHandler('copilot:get-restrictions')
+  ipcMain.handle('copilot:get-restrictions', () => readRestrictions())
+  ipcMain.removeHandler('copilot:set-restrictions')
+  ipcMain.handle('copilot:set-restrictions', async (_event, text: unknown) => {
+    if (typeof text !== 'string') throw new Error('Restrictions must be a string')
+    const trimmed = text.trim()
+    await writeFile(restrictionsPath, trimmed)
+    restrictionsInjected = false // an edit re-injects the rules on the next message
+    return trimmed
   })
 
   ipcMain.removeHandler('copilot:usage-snapshot')
@@ -974,6 +1016,8 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
       ipcMain.removeHandler('copilot:get-tool-access')
       ipcMain.removeHandler('copilot:set-enabled-tools')
       ipcMain.removeHandler('copilot:usage-snapshot')
+      ipcMain.removeHandler('copilot:get-restrictions')
+      ipcMain.removeHandler('copilot:set-restrictions')
       if (usageTimer) {
         clearTimeout(usageTimer)
         usageTimer = null

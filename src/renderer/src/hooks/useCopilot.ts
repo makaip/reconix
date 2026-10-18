@@ -95,6 +95,10 @@ export type Copilot = {
   toolAccess: ToolAccess[]
   setToolEnabled: (name: string, enabled: boolean) => void
   setAllToolsEnabled: (enabled: boolean) => void
+  /** User-authored engagement restrictions (markdown), sent to the agent
+   *  at the start of each session. */
+  restrictions: string
+  saveRestrictions: (text: string) => void
 }
 
 function appendPart(parts: TranscriptPart[], part: TranscriptPart): TranscriptPart[] {
@@ -134,6 +138,7 @@ export function useCopilot(): Copilot {
   const [thinking, setThinking] = useState(false)
   const [busy, setBusy] = useState(false)
   const [toolAccess, setToolAccess] = useState<ToolAccess[]>([])
+  const [restrictions, setRestrictions] = useState('')
   const busyRef = useRef(false)
   const queued = useRef<Array<{ messageId: string; text: string }>>([])
   const nextId = useRef(1)
@@ -179,6 +184,10 @@ export function useCopilot(): Copilot {
 
   useEffect(() => {
     void window.reconix.copilot.getToolAccess().then(setToolAccess).catch(() => undefined)
+  }, [])
+
+  useEffect(() => {
+    void window.reconix.copilot.getRestrictions().then(setRestrictions).catch(() => undefined)
   }, [])
 
   useEffect(() => {
@@ -517,6 +526,11 @@ export function useCopilot(): Copilot {
     [applyEnabledTools, toolAccess]
   )
 
+  const saveRestrictions = useCallback((text: string) => {
+    setRestrictions(text) // optimistic — reflect the edit immediately
+    void window.reconix.copilot.setRestrictions(text).then(setRestrictions).catch(() => undefined)
+  }, [])
+
   const showConversation = useCallback(
     (id: string) => setViewingHistory(history.find((conversation) => conversation.id === id) ?? null),
     [history]
@@ -585,6 +599,8 @@ export function useCopilot(): Copilot {
     toolAccess,
     setToolEnabled,
     setAllToolsEnabled,
-    attachRequests
+    attachRequests,
+    restrictions,
+    saveRestrictions
   }
 }

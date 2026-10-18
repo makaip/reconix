@@ -3,6 +3,7 @@ import chat from '../../assets/icons/chat.svg'
 import close from '../../assets/icons/close.svg'
 import clock from '../../assets/icons/clock.svg'
 import plus from '../../assets/icons/plus.svg'
+import restrictionsIcon from '../../assets/icons/restrictions.svg'
 import tools from '../../assets/icons/tools.svg'
 import type { Copilot } from '../../hooks/useCopilot'
 import type { TabInfo } from '../../../../shared/tabs'
@@ -65,11 +66,15 @@ function CopilotPanel({
     toolAccess,
     setToolEnabled,
     setAllToolsEnabled,
-    attachRequests
+    attachRequests,
+    restrictions,
+    saveRestrictions
   } = copilot
   const [over, setOver] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
   const [toolsOpen, setToolsOpen] = useState(false)
+  const [restrictionsOpen, setRestrictionsOpen] = useState(false)
+  const [restrictionsDraft, setRestrictionsDraft] = useState(restrictions)
   const listRef = useRef<HTMLDivElement>(null)
   // Whether the transcript should keep following new output. Stays true while
   // the user is at the bottom; flipping to false once they scroll up so a
@@ -79,6 +84,12 @@ function CopilotPanel({
   useEffect(() => {
     if (!dragActive) setOver(false)
   }, [dragActive])
+
+  // Keep the editor seeded with the saved text until the user opens the
+  // panel to edit it; once open, their in-progress draft is left alone.
+  useEffect(() => {
+    if (!restrictionsOpen) setRestrictionsDraft(restrictions)
+  }, [restrictions, restrictionsOpen])
 
   useEffect(() => {
     const list = listRef.current
@@ -131,12 +142,27 @@ function CopilotPanel({
         <button
           type="button"
           className="icon-button"
+          aria-label="Restrictions"
+          title="Restrictions"
+          aria-expanded={restrictionsOpen}
+          onClick={() => {
+            setRestrictionsOpen((open) => !open)
+            setToolsOpen(false)
+            setHistoryOpen(false)
+          }}
+        >
+          <img src={restrictionsIcon} width={15} height={15} alt="" />
+        </button>
+        <button
+          type="button"
+          className="icon-button"
           aria-label="Model functions"
           title="Model functions"
           aria-expanded={toolsOpen}
           onClick={() => {
             setToolsOpen((open) => !open)
             setHistoryOpen(false)
+            setRestrictionsOpen(false)
           }}
         >
           <img src={tools} width={15} height={15} alt="" />
@@ -150,6 +176,7 @@ function CopilotPanel({
           onClick={() => {
             setHistoryOpen((open) => !open)
             setToolsOpen(false)
+            setRestrictionsOpen(false)
           }}
         >
           <img src={clock} width={15} height={15} alt="" />
@@ -172,6 +199,43 @@ function CopilotPanel({
           <img src={close} width={14} height={14} alt="" />
         </button>
       </header>
+
+      {restrictionsOpen && (
+        <section className="restrictions" aria-label="Engagement restrictions">
+          <div className="restrictions__heading">
+            <strong>Restrictions</strong>
+            <div className="restrictions__heading-actions">
+              <button
+                type="button"
+                className="restrictions__save"
+                disabled={restrictionsDraft === restrictions}
+                onClick={() => saveRestrictions(restrictionsDraft)}
+              >
+                Save
+              </button>
+              <button
+                type="button"
+                className="icon-button restrictions__close"
+                aria-label="Close restrictions"
+                title="Close"
+                onClick={() => setRestrictionsOpen(false)}
+              >
+                <img src={close} width={14} height={14} alt="" />
+              </button>
+            </div>
+          </div>
+          <p className="restrictions__note">
+            Rules and policies the agent is told at the start of each chat (Markdown). Edit and save, then start a new chat to apply.
+          </p>
+          <textarea
+            className="restrictions__editor"
+            value={restrictionsDraft}
+            onChange={(event) => setRestrictionsDraft(event.currentTarget.value)}
+            placeholder={'e.g.\n- Only test https://staging.example.com\n- Never submit payment forms\n- No denial-of-service payloads'}
+            spellCheck={false}
+          />
+        </section>
+      )}
 
       {historyOpen && (
         <section className="chat-history" aria-label="Previous chats">

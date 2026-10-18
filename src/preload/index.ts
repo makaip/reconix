@@ -231,6 +231,8 @@ const api = {
     setTargetTab: (tabId: number): Promise<boolean> => ipcRenderer.invoke('copilot:set-target-tab', tabId),
     getTargetTab: (): Promise<number | null> => ipcRenderer.invoke('copilot:get-target-tab'),
     getToolAccess: (): Promise<ToolAccess[]> => ipcRenderer.invoke('copilot:get-tool-access'),
+    getRestrictions: (): Promise<string> => ipcRenderer.invoke('copilot:get-restrictions'),
+    setRestrictions: (text: string): Promise<string> => ipcRenderer.invoke('copilot:set-restrictions', text),
     setEnabledTools: (names: string[]): Promise<ToolAccess[]> =>
       ipcRenderer.invoke('copilot:set-enabled-tools', names),
     respondApproval: (approvalId: string, decision: CopilotApprovalDecision): Promise<void> =>
