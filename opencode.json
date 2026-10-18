@@ -120,7 +120,7 @@
     "evaluator": {
       "mode": "subagent",
       "description": "Evidence Analysis and False-Positive Filtering subagent. Reviews execution logs, console output, DOM changes, and network responses from @pentest-orchestrator; validates hypotheses with strict evidence-based reasoning; responds only with the structured JSON evaluation format (vulnerable, confidence, reason). Does not execute actions, modify code, or run terminal commands.",
-      "model": "opencode/grok-code",
+      "model": "openrouter/meta-llama/llama-3.1-8b-instruct:free",
       "permissions": [
         {
           "action": "edit",
@@ -137,7 +137,7 @@
     "dom-analyzer": {
       "mode": "subagent",
       "description": "Fast DOM Analyzer subagent. Inspects raw HTML snapshots, DOM trees, or accessibility trees; extracts elements, forms, inputs, attributes, and event handlers for @pentest-orchestrator; acts as a cheap filter to condense DOM noise into concise findings. Does not execute actions, modify code, or run terminal commands.",
-      "model": "opencode/grok-code",
+      "model": "openrouter/google/gemma-2-9b-it:free",
       "permissions": [
         {
           "action": "edit",
