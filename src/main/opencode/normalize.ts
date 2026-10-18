@@ -18,6 +18,34 @@ function s(v: unknown, fallback = ''): string {
   return typeof v === 'string' ? v : fallback
 }
 
+// Digs the human-readable cause out of an error payload. OpenCode reports a
+// session/model failure as a NESTED object (name/message/data), not a plain
+// string — so the naive `s(d.message ?? d.error, fallback)` always fell through
+// to the generic fallback and threw away the real reason (e.g. "context length
+// exceeded", "connection refused", a 403 body). This keeps that detail so the
+// UI can say *why* a turn failed, not just *that* it did.
+function errorText(d: Record<string, unknown>, fallback: string): string {
+  for (const key of ['message', 'reason', 'detail'] as const) {
+    const v = d[key]
+    if (typeof v === 'string' && v.length > 0) return v
+  }
+  const err = d.error ?? d.info ?? d.cause
+  if (typeof err === 'string' && err.length > 0) return err
+  if (err && typeof err === 'object') {
+    const e = err as Record<string, unknown>
+    const inner = e.data && typeof e.data === 'object' ? (e.data as Record<string, unknown>) : undefined
+    for (const v of [e.message, inner?.message, inner?.error, e.name]) {
+      if (typeof v === 'string' && v.length > 0) return v
+    }
+    try {
+      return `${fallback}: ${JSON.stringify(err).slice(0, 300)}`
+    } catch {
+      /* non-serializable — fall through to the bare fallback */
+    }
+  }
+  return fallback
+}
+
 function data(raw: RawEvent): Record<string, unknown> {
   return (raw.data ?? {}) as Record<string, unknown>
 }
@@ -121,7 +149,7 @@ export function normalize(raw: RawEvent): AgentEvent | null {
     // triggered live — a failing shell command surfaces as a tool.result,
     // not an execution-level failure, and nothing else reliably forced one.
     case 'session.execution.failed':
-      return { kind: 'error', scope: 'session', message: s(d.message ?? d.error, 'session execution failed') }
+      return { kind: 'error', scope: 'session', message: errorText(d, 'session execution failed') }
 
     default:
       return null

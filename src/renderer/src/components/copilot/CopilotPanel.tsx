@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties, type Drag
 import chat from '../../assets/icons/chat.svg'
 import close from '../../assets/icons/close.svg'
 import type { Copilot } from '../../hooks/useCopilot'
+import { useEngineStatus } from '../../hooks/useEngineStatus'
 import type { TabInfo } from '../../../../shared/tabs'
 import {
   NODE_DRAG_TYPE,
@@ -65,6 +66,13 @@ function CopilotPanel({
     setAllToolsEnabled,
     attachRequests
   } = copilot
+  const engine = useEngineStatus()
+  const engineLabel: Record<typeof engine.status, string> = {
+    starting: 'AI engine starting…',
+    ready: 'AI engine online',
+    offline: 'Model backend offline',
+    error: 'AI engine failed to start'
+  }
   const [over, setOver] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
   const [toolsOpen, setToolsOpen] = useState(false)
@@ -120,6 +128,12 @@ function CopilotPanel({
       <header className="copilot__header">
         <img src={chat} width={16} height={16} alt="" />
         <h2 className="copilot__title">Copilot</h2>
+        <span
+          className={`copilot__engine-dot copilot__engine-dot--${engine.status}`}
+          title={engineLabel[engine.status]}
+          aria-label={engineLabel[engine.status]}
+          role="img"
+        />
         <span className="copilot__engagement">{engagement}</span>
         {browserActive && (
           <span className="copilot__browser-state" title={browserAction ?? undefined}>

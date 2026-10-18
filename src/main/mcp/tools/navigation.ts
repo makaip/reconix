@@ -1,8 +1,38 @@
 // API.md §3.2 — Navigation & page read (tier R). `navigate` is scope-checked
 // via target(); the rest read the already-loaded page.
-import { defineTool, type Tool } from '../tool'
+import { defineTool, type Tool, type ToolContext } from '../tool'
 import { urlString } from '../validate'
 import { ToolExecError } from '../errors'
+import { capArray } from '../limits'
+
+// cdp.evaluate returns the page value already JSON-stringified; a tool that
+// wants structure parses it back. Keeps the DOM-walking expressions readable.
+async function evalJson<T>(ctx: ToolContext, expression: string): Promise<T> {
+  const raw = await ctx.cdp.evaluate(expression)
+  try {
+    return JSON.parse(raw) as T
+  } catch {
+    throw new ToolExecError(`page returned non-JSON result: ${raw.slice(0, 200)}`)
+  }
+}
+
+// Walks document.forms into a plain, serializable shape. Password values are
+// never read back. Shared by get_dom_extract and list_forms.
+const FORMS_EXPR = `[...document.forms].map((f,i)=>({
+  index:i,
+  name:f.getAttribute('name')||null,
+  id:f.id||null,
+  action:f.action||null,
+  method:(f.getAttribute('method')||'get').toLowerCase(),
+  enctype:f.enctype||null,
+  fields:[...f.elements].filter(e=>e.name||e.id).map(e=>({
+    name:e.getAttribute('name')||null,
+    id:e.id||null,
+    type:(e.getAttribute('type')||e.tagName||'').toLowerCase(),
+    required:!!e.required,
+    value:e.type==='password'?null:(typeof e.value==='string'?e.value.slice(0,200):null)
+  }))
+}))`
 
 const navigate = defineTool<{ url: string }, unknown>({
   name: 'navigate',
@@ -67,28 +97,140 @@ const screenshot = defineTool<{ fullPage?: boolean }, unknown>({
   }
 })
 
-// Schema-complete, handler pending the recon-extraction schema (open-decision 1/2).
-function pending(name: string, description: string): Tool {
-  return defineTool<Record<string, never>, never>({
-    name,
-    description,
-    riskTier: 'R',
-    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
-    outputSchema: { type: 'object' },
-    parse: () => ({}),
-    execute: async () => {
-      throw new ToolExecError(`${name}: pending recon-extraction schema (open-decision 1/2)`)
+// Schema'd DOM extract: forms/inputs/endpoints/links/meta-headers/CSRF markers.
+// One page read so the agent gets a coherent snapshot of the attack surface.
+const get_dom_extract = defineTool<Record<string, never>, unknown>({
+  name: 'get_dom_extract',
+  description: 'Schema’d DOM extract: forms/inputs/endpoints/links/headers/CSRF.',
+  riskTier: 'R',
+  inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  outputSchema: { type: 'object' },
+  parse: () => ({}),
+  execute: async (_i, ctx) => {
+    const raw = await evalJson<{
+      url: string
+      title: string
+      counts: Record<string, number>
+      forms: unknown[]
+      links: string[]
+      endpoints: string[]
+      metaHeaders: unknown[]
+      csrf: unknown
+    }>(
+      ctx,
+      `(()=>{
+        const forms=${FORMS_EXPR};
+        const links=[...new Set([...document.querySelectorAll('a[href]')].map(a=>a.href).filter(Boolean))];
+        const endpoints=[...new Set([
+          ...forms.map(f=>f.action).filter(Boolean),
+          ...[...document.querySelectorAll('[src]')].map(e=>e.src).filter(Boolean)
+        ])];
+        const metaHeaders=[...document.querySelectorAll('meta[http-equiv]')]
+          .map(m=>({name:m.getAttribute('http-equiv'),content:m.getAttribute('content')}));
+        const csrfMeta=[...document.querySelectorAll('meta[name]')]
+          .filter(m=>/csrf|xsrf/i.test(m.getAttribute('name')||''))
+          .map(m=>({name:m.getAttribute('name'),content:m.getAttribute('content')}));
+        const csrfInputs=[...document.querySelectorAll('input[name]')]
+          .filter(i=>/csrf|xsrf|authenticity_token|_token/i.test(i.getAttribute('name')||''))
+          .map(i=>({name:i.name,hasValue:!!i.value}));
+        return {url:location.href,title:document.title,
+          counts:{forms:forms.length,links:links.length,endpoints:endpoints.length},
+          forms,links,endpoints,metaHeaders,csrf:{meta:csrfMeta,inputs:csrfInputs}};
+      })()`
+    )
+    // The page's own counts stay accurate; the returned arrays are capped so a
+    // large page can't overflow the context in one extract.
+    const forms = capArray(raw.forms, 40)
+    const links = capArray(raw.links, 80)
+    const endpoints = capArray(raw.endpoints, 80)
+    return {
+      ...raw,
+      forms: forms.items,
+      links: links.items,
+      endpoints: endpoints.items,
+      omitted: { forms: forms.omitted, links: links.omitted, endpoints: endpoints.omitted }
     }
-  }) as Tool
-}
+  }
+})
+
+const list_forms = defineTool<Record<string, never>, unknown>({
+  name: 'list_forms',
+  description: 'Forms on the current page with identity refs.',
+  riskTier: 'R',
+  inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  outputSchema: { type: 'object', properties: { forms: { type: 'array' } } },
+  parse: () => ({}),
+  execute: async (_i, ctx) => {
+    const all = await evalJson<unknown[]>(ctx, `(()=>(${FORMS_EXPR}))()`)
+    const { items, omitted } = capArray(all, 40)
+    return { forms: items, total: all.length, omitted }
+  }
+})
+
+// Links on the page, each tagged in/out of scope via the same enforcer the
+// pipeline uses — so recon and gating never disagree.
+const list_links = defineTool<Record<string, never>, unknown>({
+  name: 'list_links',
+  description: 'Links on the current page, in/out of scope.',
+  riskTier: 'R',
+  inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  outputSchema: { type: 'object', properties: { links: { type: 'array' } } },
+  parse: () => ({}),
+  execute: async (_i, ctx) => {
+    const hrefs = await evalJson<string[]>(
+      ctx,
+      `(()=>[...new Set([...document.querySelectorAll('a[href]')].map(a=>a.href).filter(Boolean))])()`
+    )
+    const { items, omitted } = capArray(hrefs, 80)
+    return {
+      links: items.map((url) => ({ url, inScope: ctx.scope.isInScope(url) })),
+      total: hrefs.length,
+      omitted
+    }
+  }
+})
+
+// Response headers of the current document. We don't re-fetch — we read the
+// headers already captured for the main-document request on this target.
+const get_headers = defineTool<Record<string, never>, unknown>({
+  name: 'get_headers',
+  description: 'Response headers of the current document.',
+  riskTier: 'R',
+  inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  outputSchema: { type: 'object' },
+  parse: () => ({}),
+  execute: async (_i, ctx) => {
+    const { url } = await ctx.cdp.pageInfo()
+    const entries = ctx.network.list()
+    // Prefer the most recent main-document response for the current URL; fall
+    // back to the newest entry carrying response headers for that URL.
+    // Electron's webRequest tags the top document 'mainFrame'; CDP/other
+    // sources may say 'document' — accept either.
+    const forUrl = entries.filter((e) => e.url === url && e.responseHeaders)
+    const match =
+      [...forUrl].reverse().find((e) => /mainframe|document|main_frame/i.test(e.resourceType)) ??
+      forUrl[forUrl.length - 1]
+    if (!match) {
+      throw new ToolExecError(
+        `no captured response headers for the current document (${url}) — ` +
+          `the page may predate capture, or be a non-http document; navigate to refresh`
+      )
+    }
+    return {
+      url: match.url,
+      statusCode: match.statusCode,
+      headers: match.responseHeaders
+    }
+  }
+})
 
 export const navigationTools: Tool[] = [
   navigate as Tool,
   get_page_info as Tool,
   get_cookies as Tool,
   screenshot as Tool,
-  pending('get_dom_extract', 'Schema’d DOM extract: forms/inputs/endpoints/links/headers/CSRF.'),
-  pending('list_forms', 'Forms on the current page with identity refs.'),
-  pending('list_links', 'Links on the current page, in/out of scope.'),
-  pending('get_headers', 'Response headers of the current document.')
+  get_dom_extract as Tool,
+  list_forms as Tool,
+  list_links as Tool,
+  get_headers as Tool
 ]

@@ -2,9 +2,20 @@
 // Generous expressiveness (eval_in_page passes arbitrary expressions) is safe
 // here: the target view is process-isolated, has no Node, and its network hits
 // D's egress proxy. Each is still a named, logged, tiered tool.
-import { defineTool, type Tool } from '../tool'
-import { str } from '../validate'
-import { ToolExecError } from '../errors'
+import { defineTool, type Tool, type ToolContext } from '../tool'
+import { str, optStr } from '../validate'
+import { ToolExecError, ToolInputError } from '../errors'
+
+// cdp.evaluate hands back the page value already JSON-stringified; parse it
+// when the tool wants structure instead of text.
+async function evalJson<T>(ctx: ToolContext, expression: string): Promise<T> {
+  const raw = await ctx.cdp.evaluate(expression)
+  try {
+    return JSON.parse(raw) as T
+  } catch {
+    throw new ToolExecError(`page returned non-JSON result: ${raw.slice(0, 200)}`)
+  }
+}
 
 const eval_in_page = defineTool<{ expression: string }, unknown>({
   name: 'eval_in_page',
@@ -64,26 +75,170 @@ const fill = defineTool<{ selector: string; value: string }, unknown>({
   }
 })
 
-function pending(name: string, description: string): Tool {
-  return defineTool<Record<string, never>, never>({
-    name,
-    description,
-    riskTier: 'P',
-    inputSchema: { type: 'object', additionalProperties: true },
-    outputSchema: { type: 'object' },
-    parse: () => ({}),
-    execute: async () => {
-      throw new ToolExecError(`${name}: not implemented in Phase 1`)
+// Raw CDP Input event sequence into the target page. The events are opaque CDP
+// payloads; we validate the envelope (a non-empty array of objects) and let the
+// driver forward them — invalid events surface as a CDP exec error, not a crash.
+const dispatch_input = defineTool<{ events: object[] }, unknown>({
+  name: 'dispatch_input',
+  description: 'Raw CDP Input event sequence into the target page.',
+  riskTier: 'P',
+  inputSchema: {
+    type: 'object',
+    required: ['events'],
+    properties: { events: { type: 'array', items: { type: 'object' } } },
+    additionalProperties: false
+  },
+  outputSchema: { type: 'object', properties: { ok: { type: 'boolean' } } },
+  parse: (raw) => {
+    const v = (raw as { events?: unknown })?.events
+    if (!Array.isArray(v) || v.length === 0) {
+      throw new ToolInputError('"events" must be a non-empty array')
     }
-  }) as Tool
+    if (v.some((e) => typeof e !== 'object' || e === null || Array.isArray(e))) {
+      throw new ToolInputError('each event in "events" must be an object')
+    }
+    return { events: v as object[] }
+  },
+  execute: async (i, ctx) => {
+    await ctx.cdp.dispatchInput(i.events)
+    return { ok: true }
+  }
+})
+
+const query_dom = defineTool<{ selector: string }, unknown>({
+  name: 'query_dom',
+  description: 'Query DOM nodes matching a selector.',
+  riskTier: 'P',
+  inputSchema: {
+    type: 'object',
+    required: ['selector'],
+    properties: { selector: { type: 'string' } },
+    additionalProperties: false
+  },
+  outputSchema: { type: 'object', properties: { nodes: { type: 'array' } } },
+  parse: (raw) => ({ selector: str(raw, 'selector') }),
+  execute: (i, ctx) => {
+    const sel = JSON.stringify(i.selector)
+    // querySelectorAll can throw SyntaxError on a bad selector — catch it in
+    // the page and hand back a tagged result so the tool reports a clean input
+    // error rather than a raw page exception.
+    return evalJson<{ nodes: unknown[] } | { error: string }>(
+      ctx,
+      // Caps (count + per-field length) keep a broad selector from overflowing
+      // the context window; `total` tells the agent how many actually matched.
+      `(()=>{let els;try{els=[...document.querySelectorAll(${sel})]}catch(e){return {error:'invalid selector: '+e.message}}
+        const total=els.length;
+        return {total,truncated:total>50,nodes:els.slice(0,50).map(el=>({
+          tag:el.tagName.toLowerCase(),
+          id:el.id||null,
+          classes:el.className&&typeof el.className==='string'?el.className.split(/\\s+/).filter(Boolean):[],
+          name:el.getAttribute&&el.getAttribute('name')||null,
+          type:el.getAttribute&&el.getAttribute('type')||null,
+          text:(el.textContent||'').trim().slice(0,120),
+          html:(el.outerHTML||'').slice(0,200)
+        }))}})()`
+    ).then((r) => {
+      if ('error' in r) throw new ToolInputError(r.error)
+      return r
+    })
+  }
+})
+
+const set_dom = defineTool<{ selector: string; html: string }, unknown>({
+  name: 'set_dom',
+  description: 'Set innerHTML of a node in the target page only.',
+  riskTier: 'P',
+  inputSchema: {
+    type: 'object',
+    required: ['selector', 'html'],
+    properties: { selector: { type: 'string' }, html: { type: 'string' } },
+    additionalProperties: false
+  },
+  outputSchema: { type: 'object', properties: { ok: { type: 'boolean' } } },
+  parse: (raw) => ({ selector: str(raw, 'selector'), html: str(raw, 'html') }),
+  execute: async (i, ctx) => {
+    const sel = JSON.stringify(i.selector)
+    const html = JSON.stringify(i.html)
+    const r = await ctx.cdp.evaluate(
+      `(()=>{const el=document.querySelector(${sel});if(!el)return false;el.innerHTML=${html};return true;})()`
+    )
+    if (r !== 'true') throw new ToolExecError(`no element matched selector: ${i.selector}`)
+    return { ok: true }
+  }
+})
+
+interface EmulationInput {
+  viewport?: { width: number; height: number; mobile?: boolean; deviceScaleFactor?: number }
+  media?: string
+  reset?: boolean
 }
+
+// CSS/Emulation: viewport, media, or reset. `device` from the API is accepted
+// as a viewport preset shorthand but kept minimal — explicit viewport wins.
+const set_emulation = defineTool<EmulationInput, unknown>({
+  name: 'set_emulation',
+  description: 'CSS/Emulation: device, viewport, media.',
+  riskTier: 'P',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      viewport: {
+        type: 'object',
+        required: ['width', 'height'],
+        properties: {
+          width: { type: 'number' },
+          height: { type: 'number' },
+          mobile: { type: 'boolean' },
+          deviceScaleFactor: { type: 'number' }
+        }
+      },
+      media: { type: 'string' },
+      reset: { type: 'boolean' }
+    },
+    additionalProperties: false
+  },
+  outputSchema: { type: 'object', properties: { ok: { type: 'boolean' } } },
+  parse: (raw) => {
+    const r = (raw ?? {}) as Record<string, unknown>
+    const out: EmulationInput = {}
+    if (r.reset !== undefined) {
+      if (typeof r.reset !== 'boolean') throw new ToolInputError('"reset" must be a boolean')
+      out.reset = r.reset
+    }
+    if (r.media !== undefined) out.media = optStr(r, 'media')
+    if (r.viewport !== undefined) {
+      const v = r.viewport as Record<string, unknown>
+      if (typeof v !== 'object' || v === null) throw new ToolInputError('"viewport" must be an object')
+      const width = v.width
+      const height = v.height
+      if (typeof width !== 'number' || typeof height !== 'number' || width <= 0 || height <= 0) {
+        throw new ToolInputError('"viewport.width" and "viewport.height" must be positive numbers')
+      }
+      out.viewport = {
+        width,
+        height,
+        mobile: typeof v.mobile === 'boolean' ? v.mobile : undefined,
+        deviceScaleFactor:
+          typeof v.deviceScaleFactor === 'number' ? v.deviceScaleFactor : undefined
+      }
+    }
+    if (!out.reset && !out.media && !out.viewport) {
+      throw new ToolInputError('set_emulation needs at least one of: viewport, media, reset')
+    }
+    return out
+  },
+  execute: async (i, ctx) => {
+    await ctx.cdp.setEmulation(i)
+    return { ok: true }
+  }
+})
 
 export const interactionTools: Tool[] = [
   eval_in_page as Tool,
   click as Tool,
   fill as Tool,
-  pending('dispatch_input', 'Raw CDP Input event sequence into the target page.'),
-  pending('query_dom', 'Query DOM nodes matching a selector.'),
-  pending('set_dom', 'Set innerHTML of a node in the target page only.'),
-  pending('set_emulation', 'CSS/Emulation: device, viewport, media.')
+  dispatch_input as Tool,
+  query_dom as Tool,
+  set_dom as Tool,
+  set_emulation as Tool
 ]

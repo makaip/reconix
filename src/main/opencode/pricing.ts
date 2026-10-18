@@ -21,7 +21,9 @@ export const SELF_HOSTED_PREFIXES: readonly string[] = ['vllm-orchestrator/']
  * model constants in copilot.ts / opencode.json.
  */
 export const MODEL_PRICING: Readonly<Record<string, ModelPrice>> = {
-  'gemini/gemini-flash-lite-latest': { input: 0.075, output: 0.3 }
+  'gemini/gemini-flash-lite-latest': { input: 0.075, output: 0.3 },
+  // OpenCode Zen serves grok-code-fast-1 free; $0 at the margin.
+  'opencode/grok-code': { input: 0, output: 0 }
 }
 
 export function isSelfHosted(model: string): boolean {

@@ -75,7 +75,16 @@ export interface ServerStatus {
 // Engine boot status — `opencode serve` + the MCP tool server coming up at
 // app launch, before any chat session exists. Distinct from ServerStatus
 // above (which tracks an active OpenCode session's connection state).
-export type EngineStatus = { status: 'starting' } | { status: 'ready' } | { status: 'error'; error: string }
+// 'starting' and 'error' are the one-time boot states of the LOCAL engine
+// (`opencode serve` + the MCP tool server). 'ready' and 'offline' are the live
+// state of the remote MODEL backend the orchestrator runs on, which can come
+// and go independently of boot: 'ready' = reachable, 'offline' = booted fine
+// but the model provider is not responding (recoverable; keeps retrying).
+export type EngineStatus =
+  | { status: 'starting' }
+  | { status: 'ready' }
+  | { status: 'offline'; error?: string }
+  | { status: 'error'; error: string }
 
 // ─── Error envelope (API.md §4) ───────────────────────────────────────────────
 export interface ErrorEnvelope {
