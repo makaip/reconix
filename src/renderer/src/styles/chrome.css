@@ -312,6 +312,11 @@
   animation: statusbar-pulse 1.2s ease-in-out infinite;
 }
 
+.statusbar__icon {
+  flex: none;
+  opacity: 0.85;
+}
+
 @keyframes statusbar-pulse {
   0%,
   100% {
