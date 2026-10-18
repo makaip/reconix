@@ -4,9 +4,11 @@ import close from '../../assets/icons/close.svg'
 import type { Copilot } from '../../hooks/useCopilot'
 import {
   NODE_DRAG_TYPE,
+  REQUEST_DRAG_TYPE,
   RESOURCE_DRAG_TYPE,
   readDragItems,
   type NodeDragItem,
+  type RequestDragItem,
   type ResourceDragItem
 } from '../../lib/dragTypes'
 import { engagement } from '../../mock/data'
@@ -16,7 +18,7 @@ import Message from './Message'
 
 type CopilotPanelProps = {
   copilot: Copilot
-  /** True while any attachable item (DOM node or file) is being dragged. */
+  /** True while any attachable item (DOM node, file or request) is being dragged. */
   dragActive: boolean
   onDrop: () => void
   onClose: () => void
@@ -32,8 +34,16 @@ function CopilotPanel({
   requestCount,
   style
 }: CopilotPanelProps): JSX.Element {
-  const { messages, attachments, attachNodes, attachResources, detach, send, respondApproval } =
-    copilot
+  const {
+    messages,
+    attachments,
+    attachNodes,
+    attachResources,
+    attachRequests,
+    detach,
+    send,
+    respondApproval
+  } = copilot
   const [over, setOver] = useState(false)
   const listRef = useRef<HTMLDivElement>(null)
 
@@ -48,7 +58,8 @@ function CopilotPanel({
 
   const acceptsDrag = (event: DragEvent): boolean =>
     event.dataTransfer.types.includes(NODE_DRAG_TYPE) ||
-    event.dataTransfer.types.includes(RESOURCE_DRAG_TYPE)
+    event.dataTransfer.types.includes(RESOURCE_DRAG_TYPE) ||
+    event.dataTransfer.types.includes(REQUEST_DRAG_TYPE)
 
   return (
     <aside className="copilot" aria-label="Copilot" style={style}>
@@ -79,7 +90,9 @@ function CopilotPanel({
           const nodeData = event.dataTransfer.getData(NODE_DRAG_TYPE)
           const resourceData = event.dataTransfer.getData(RESOURCE_DRAG_TYPE)
           if (nodeData) void attachNodes(readDragItems<NodeDragItem>(nodeData))
+          const requestData = event.dataTransfer.getData(REQUEST_DRAG_TYPE)
           if (resourceData) attachResources(readDragItems<ResourceDragItem>(resourceData))
+          if (requestData) attachRequests(readDragItems<RequestDragItem>(requestData))
           setOver(false)
           onDrop()
         }}

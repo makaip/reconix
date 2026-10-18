@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { AgentEvent, ApprovalDecision } from '../../../shared/agent'
 import type { NodeContext } from '../../../shared/devtools'
+import type { CapturedRequest } from '../../../shared/tabs'
 import { reduceTranscript, type TranscriptItem } from './transcript'
 
 /** A DOM node being dragged out of DevTools. */
@@ -9,9 +10,13 @@ export type NodeRef = { nodeId: number; label: string; selector: string }
 /** A source/sitemap file being dragged into Copilot. */
 export type ResourceRef = { url: string; label: string; frameId?: string }
 
+/** A captured network request being dragged into Copilot (snapshot taken at drag time). */
+export type RequestRef = CapturedRequest & { label: string }
+
 export type NodeAttachment = { kind: 'node'; id: number } & NodeRef & NodeContext
 export type ResourceAttachment = { kind: 'resource'; id: number } & ResourceRef
-export type ContextAttachment = NodeAttachment | ResourceAttachment
+export type RequestAttachment = Omit<RequestRef, 'id'> & { kind: 'request'; id: number; requestId: string }
+export type ContextAttachment = NodeAttachment | ResourceAttachment | RequestAttachment
 
 export type Copilot = {
   messages: TranscriptItem[]
@@ -20,6 +25,8 @@ export type Copilot = {
   attachNodes: (nodes: NodeRef[]) => Promise<void>
   /** Attach source/sitemap files; de-duped by URL. */
   attachResources: (resources: ResourceRef[]) => void
+  /** Attach captured network requests; de-duped by request id. */
+  attachRequests: (requests: RequestRef[]) => void
   detach: (id: number) => void
   send: (text: string) => void
   respondApproval: (decision: ApprovalDecision) => void
@@ -64,6 +71,17 @@ export function useCopilot(): Copilot {
     })
   }, [])
 
+  const attachRequests = useCallback((requests: RequestRef[]) => {
+    setAttachments((current) => {
+      const next = [...current]
+      for (const { id: requestId, ...request } of requests) {
+        if (next.some((a) => a.kind === 'request' && a.requestId === requestId)) continue
+        next.push({ ...request, kind: 'request', id: nextId.current++, requestId })
+      }
+      return next
+    })
+  }, [])
+
   const detach = useCallback((id: number) => {
     setAttachments((current) => current.filter((a) => a.id !== id))
   }, [])
@@ -80,5 +98,14 @@ export function useCopilot(): Copilot {
     void window.reconix.agent.respondApproval(decision)
   }, [])
 
-  return { messages, attachments, attachNodes, attachResources, detach, send, respondApproval }
+  return {
+    messages,
+    attachments,
+    attachNodes,
+    attachResources,
+    attachRequests,
+    detach,
+    send,
+    respondApproval
+  }
 }

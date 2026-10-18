@@ -195,6 +195,17 @@
   color: var(--color-success);
 }
 
+.url-bar__error {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 50%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-2xs);
+  color: var(--color-sev-medium);
+}
+
 .toolbar__divider {
   flex: none;
   width: 1px;

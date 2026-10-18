@@ -180,7 +180,9 @@ function DevToolsPanel({
           <StylesPane rules={rules} style={{ width: stylesResize.size }} />
         </div>
       )}
-      {devtoolsTab === 'network' && <NetworkPanel requests={networkRequests} />}
+      {devtoolsTab === 'network' && (
+        <NetworkPanel requests={networkRequests} onDragStart={onDragStart} onDragEnd={onDragEnd} />
+      )}
       {devtoolsTab === 'websocket' && <WebSocketPanel connections={websockets} />}
       {devtoolsTab === 'crawler' && <CrawlerPanel api={crawler} defaultUrl={targetUrl} />}
       {devtoolsTab === 'repeater' && <RepeaterPanel api={repeater} />}

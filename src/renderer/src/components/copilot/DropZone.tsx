@@ -1,3 +1,5 @@
+import clipboard from '../../assets/icons/clipboard.svg'
+
 type DropZoneProps = {
   /** True while a dragged node is hovering over the drop target. */
   over: boolean
@@ -6,11 +8,8 @@ type DropZoneProps = {
 function DropZone({ over }: DropZoneProps): JSX.Element {
   return (
     <div className={over ? 'drop-zone drop-zone--over' : 'drop-zone'}>
+      <img src={clipboard} width={16} height={16} alt="" />
       <p className="drop-zone__title">Drop to attach as context</p>
-      <p className="drop-zone__hint">
-        DOM nodes bring outerHTML, selector and computed styles. Source and sitemap files
-        bring their URL.
-      </p>
     </div>
   )
 }

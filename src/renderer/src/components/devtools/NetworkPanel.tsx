@@ -2,11 +2,15 @@ import { useEffect, useMemo, useState } from 'react'
 import type { CapturedRequest } from '../../../../shared/tabs'
 import { queryRequests, type RequestQuery } from '../../lib/requestQuery'
 import { toHar } from '../../lib/har'
+import { REQUEST_DRAG_TYPE, type RequestDragItem } from '../../lib/dragTypes'
 import { useResizable } from '../../hooks/useResizable'
 import ResizeHandle from '../chrome/ResizeHandle'
 
 type NetworkPanelProps = {
   requests: CapturedRequest[]
+  /** Fired when a request row starts/stops being dragged toward Copilot. */
+  onDragStart: () => void
+  onDragEnd: () => void
 }
 
 /** Request name as Chrome's Network panel shows it: path + query, falling back to the full URL. */
@@ -57,7 +61,7 @@ function flattenResponseHeaders(headers: Record<string, string[]> | undefined): 
 
 const EMPTY_QUERY: RequestQuery = {}
 
-function NetworkPanel({ requests }: NetworkPanelProps): JSX.Element {
+function NetworkPanel({ requests, onDragStart, onDragEnd }: NetworkPanelProps): JSX.Element {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const detailResize = useResizable({
     axis: 'x',
@@ -142,6 +146,18 @@ function NetworkPanel({ requests }: NetworkPanelProps): JSX.Element {
                 }
                 onClick={() => setSelectedId(request.id)}
                 title={request.url}
+                draggable
+                onDragStart={(event) => {
+                  const item: RequestDragItem = {
+                    ...request,
+                    label: `${request.method} ${requestName(request.url)}`
+                  }
+                  event.dataTransfer.effectAllowed = 'copy'
+                  event.dataTransfer.setData(REQUEST_DRAG_TYPE, JSON.stringify([item]))
+                  event.dataTransfer.setData('text/plain', `${request.method} ${request.url}`)
+                  onDragStart()
+                }}
+                onDragEnd={onDragEnd}
               >
                 <span className={`dt-network__cell dt-network__cell--status ${statusClass(request)}`}>
                   {statusLabel(request)}

@@ -1,4 +1,4 @@
-import { BrowserWindow, WebContents, WebContentsView, ipcMain, session } from 'electron'
+import { BrowserWindow, app, WebContents, WebContentsView, ipcMain, session } from 'electron'
 import type { NavigateResult, TabInfo, TabsState } from '../shared/tabs'
 
 export const TARGET_PARTITION = 'target'
@@ -29,7 +29,12 @@ function isBounds(value: unknown): value is Bounds {
   )
 }
 
-/** Turns address-bar input into a URL: bare hosts get https:// (http:// for local hosts). */
+/**
+ * Turns address-bar input into a URL: bare hosts get https:// (http:// for local hosts).
+ * Input that reads as a search term (spaces, or a lone word like "google") is rejected
+ * rather than searched, so typed text never leaks to a third party. Single-label internal
+ * hosts still load when written unambiguously: "http://jenkins", "jenkins/", "jenkins:8080".
+ */
 export function parseAddress(input: string): URL | null {
   const text = input.trim()
   if (!text) return null
@@ -37,6 +42,7 @@ export function parseAddress(input: string): URL | null {
     /^[a-z][a-z0-9+.-]*:\/\//i.test(text) ||
     /^(about|data|file|javascript|blob|view-source|chrome|devtools):/i.test(text)
   const isLocal = /^(localhost|127\.|0\.0\.0\.0|\[::1\])/i.test(text)
+  if (!hasScheme && !isLocal && (/\s/.test(text) || /^[^./:]+$/.test(text))) return null
   try {
     return new URL(hasScheme ? text : `${isLocal ? 'http' : 'https'}://${text}`)
   } catch {
@@ -179,7 +185,8 @@ export function createTabManager(win: BrowserWindow, hooks: TabHooks): TabManage
     tab.view.webContents.close()
     hooks.onTabClosed(id)
 
-    if (order.length === 0) create()
+    // closing the last tab closes the program (all platforms, including macOS)
+    if (order.length === 0) app.quit()
     else if (activeId === id) activate(order[Math.min(index, order.length - 1)])
     else emitState()
   }
@@ -259,7 +266,9 @@ export function createTabManager(win: BrowserWindow, hooks: TabHooks): TabManage
   handle('tabs:reload', () => activeContents()?.reload())
   handle('tabs:navigate', async (input): Promise<NavigateResult> => {
     const parsed = parseAddress(String(input))
-    if (!parsed) return { ok: false, error: 'Invalid URL' }
+    if (!parsed) {
+      return { ok: false, error: 'Not a URL. Include a domain (e.g. example.com) or a scheme (e.g. http://host).' }
+    }
     if (!ALLOWED_PROTOCOLS.has(parsed.protocol)) {
       return { ok: false, error: `Unsupported protocol ${parsed.protocol}` }
     }
