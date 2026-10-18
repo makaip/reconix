@@ -43,6 +43,14 @@ const SCHEMA = `
     started_ts    INTEGER NOT NULL,
     finished_ts   INTEGER
   );
+  CREATE TABLE IF NOT EXISTS approvals (
+    id                 TEXT PRIMARY KEY,
+    tool_call_id       TEXT,
+    decision           TEXT NOT NULL,
+    edited_params_json TEXT,
+    actor              TEXT,
+    ts                 INTEGER NOT NULL
+  );
 `
 
 /** Pre-release shape change: `traces` used to hold bytes inline (a `data` BLOB);

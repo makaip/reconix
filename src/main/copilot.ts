@@ -598,6 +598,10 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
     tracesDir: join(app.getPath('userData'), 'traces')
   })
   const history = createHistoryReader(db, findingsStore)
+  // The audit logger is created here (not per-MCP-server) so the approval relay
+  // — which runs outside the tool pipeline — can persist sign-offs to the same
+  // append-only store (§6.4: tool_calls + approvals are the point of the store).
+  const audit = createAuditLogger(db)
 
   // Cost/latency meter. Fed by the connector's persist (all sessions, incl.
   // subagents + the ambient DOM parser) and onAgentEvent (orchestrator turn
@@ -739,7 +743,6 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
         findings: findingsStore.sink,
         history
       }
-      const audit = createAuditLogger(db)
       const registry = buildMcpServer({ audit, context, surface: 'all' })
       try {
         const saved = JSON.parse(await readFile(toolAccessPath, 'utf8'))
@@ -964,7 +967,13 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
   ipcMain.removeHandler('copilot:respond-approval')
   ipcMain.handle('copilot:respond-approval', async (_event, approvalId: string, decision: ApprovalDecision) => {
     const c = await ensureConnector()
-    return c.respondApproval(String(approvalId), decision)
+    await c.respondApproval(String(approvalId), decision)
+    // Persist the human sign-off (§6.4 approvals, append-only). Best-effort: an
+    // audit write must never break the approval relay. The app has no auth yet,
+    // so the actor is the acting operator.
+    void audit
+      .recordApproval({ approvalId: String(approvalId), decision, actor: 'operator' })
+      .catch(() => undefined)
   })
 
   ipcMain.removeHandler('copilot:interrupt')
