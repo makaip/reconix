@@ -67,8 +67,8 @@ import { WebContentsCdpDriver, type CdpDriver, type CookieRecord } from './mcp/c
 import { ScopeChecker, type ScopeEnforcer } from './mcp/scope'
 import type { NetworkReader, ToolContext } from './mcp/tool'
 import { openDatabase } from './db'
-import { loadScopeConfig } from './engagement'
 import { createFindingsStore } from './findings'
+import { createEngagementStore } from './engagements'
 import { createTraceStore } from './traces'
 import { createAuditLogger } from './auditLog'
 import { createHistoryReader } from './history'
@@ -590,11 +590,15 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
   // the real scope.json id (or null when none is loaded) — the same value the
   // tool context and audit log attribute rows to, so nothing diverges.
   const db = openDatabase(join(app.getPath('userData'), 'reconix.db'))
-  const engagementId = loadScopeConfig()?.engagementId ?? null
-  const findingsStore = createFindingsStore(db, win, { engagementId })
+  // The engagement store owns the run lifecycle + the engagement:* IPC. Its
+  // currentId() feeds attribution (findings/traces/tool_calls/ctx), so a
+  // started run's rows are attributed consistently without rewiring per call.
+  const engagementStore = createEngagementStore(db, win, { defaultPolicy: POLICY })
+  const getEngagementId = (): string | null => engagementStore.currentId()
+  const findingsStore = createFindingsStore(db, win, { getEngagementId })
   // Trace bytes live as files on disk (§6.4); the DB keeps only ref + path.
   const traces = createTraceStore(db, win, {
-    engagementId,
+    getEngagementId,
     tracesDir: join(app.getPath('userData'), 'traces')
   })
   const history = createHistoryReader(db, findingsStore)
@@ -734,7 +738,9 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
     if (mcpStarting) return mcpStarting
     mcpStarting = (async () => {
       const context: ToolContext = {
-        engagementId,
+        get engagementId() {
+          return engagementStore.currentId()
+        },
         scope,
         policy: POLICY,
         cdp,

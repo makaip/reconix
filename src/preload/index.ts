@@ -53,6 +53,7 @@ import type {
   UsageSnapshot
 } from '../shared/contracts'
 import type { CrawlStartInput, CrawlState } from '../shared/crawler'
+import type { EngagementRow } from '../shared/engagements'
 import type { TraceDetail, TraceSummary } from '../shared/traces'
 
 // typed surface is exposed to renderer but renderer never accesses ipcRenderer directly
@@ -145,7 +146,15 @@ const api = {
   },
   engagement: {
     // Authorized engagement id from the loaded scope.json, or null.
-    get: (): Promise<string | null> => ipcRenderer.invoke('engagement:get')
+    get: (): Promise<string | null> => ipcRenderer.invoke('engagement:get'),
+    // Start a new engagement run over the loaded scope. Returns the row, or null.
+    start: (goal: string, scope?: unknown, policy?: unknown): Promise<EngagementRow | null> =>
+      ipcRenderer.invoke('engagement:start', goal, scope, policy),
+    stop: (id?: string): Promise<void> => ipcRenderer.invoke('engagement:stop', id),
+    current: (): Promise<EngagementRow | null> => ipcRenderer.invoke('engagement:current'),
+    list: (): Promise<EngagementRow[]> => ipcRenderer.invoke('engagement:list'),
+    onChanged: (callback: (row: EngagementRow | null) => void): (() => void) =>
+      subscribe('engagement:changed', callback)
   },
   crawler: {
     // Deterministic scope-aware spider. Drives the gated replayer; no new egress.

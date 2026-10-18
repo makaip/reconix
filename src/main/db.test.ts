@@ -14,6 +14,7 @@ describe('openDatabase', () => {
   it('creates the §6.4 tables on a fresh database', () => {
     const db = openDatabase()
     expect(columns(db, 'findings')).toEqual(['id', 'engagement_id', 'schema_json', 'evidence_ref', 'status', 'ts'])
+    expect(columns(db, 'engagements')).toEqual(['id', 'goal', 'scope_json', 'policy_json', 'started_at', 'stopped_at', 'status'])
     expect(columns(db, 'traces')).toEqual(['id', 'engagement_id', 'kind', 'path', 'ts'])
     expect(columns(db, 'tool_calls')).toContain('risk_tier')
     expect(columns(db, 'approvals')).toEqual([

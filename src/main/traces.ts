@@ -14,8 +14,10 @@ import type { TraceRecord, TraceStore } from './mcp/tool'
 export interface TraceStoreOptions {
   /** Directory the trace bytes are written to. Created if missing. */
   tracesDir: string
-  /** Engagement these traces belong to; null when no scope is loaded. */
+  /** Static engagement id (legacy). Prefer `getEngagementId` for live runs. */
   engagementId?: string | null
+  /** Resolver for the current engagement id (live runs). */
+  getEngagementId?: () => string | null
 }
 
 /** The MCP-facing sink plus the renderer IPC surface over the same table. */
@@ -44,8 +46,11 @@ export function createTraceStore(
   win: BrowserWindow,
   options: TraceStoreOptions
 ): TracesStore {
-  const { tracesDir, engagementId = null } = options
+  const { tracesDir, engagementId = null, getEngagementId } = options
   mkdirSync(tracesDir, { recursive: true })
+
+  const resolveEngagementId = (): string | null =>
+    getEngagementId ? getEngagementId() : (engagementId ?? null)
 
   let seq = 0
   for (const row of db.all('SELECT id FROM traces')) {
@@ -112,7 +117,7 @@ export function createTraceStore(
       writeFileSync(path, bytes)
       db.run('INSERT INTO traces (id, engagement_id, kind, path, ts) VALUES (?, ?, ?, ?, ?)', [
         ref,
-        engagementId,
+        resolveEngagementId(),
         kind,
         path,
         Date.now()

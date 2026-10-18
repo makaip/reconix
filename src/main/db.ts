@@ -15,6 +15,15 @@ import { Database } from 'node-sqlite3-wasm'
 // traces follows §6.4: the row holds a `path` to the bytes on disk, not the bytes
 // themselves, so a multi-MB screenshot never bloats the database.
 const SCHEMA = `
+  CREATE TABLE IF NOT EXISTS engagements (
+    id            TEXT PRIMARY KEY,
+    goal          TEXT NOT NULL,
+    scope_json    TEXT,
+    policy_json   TEXT,
+    started_at    INTEGER NOT NULL,
+    stopped_at    INTEGER,
+    status        TEXT NOT NULL DEFAULT 'stopped'
+  );
   CREATE TABLE IF NOT EXISTS findings (
     id            TEXT PRIMARY KEY,
     engagement_id TEXT,
