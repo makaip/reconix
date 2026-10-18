@@ -8,9 +8,12 @@ export function useFindings(): Finding[] {
 
   useEffect(() => {
     let live = true
-    void window.reconix.findings.list().then((initial) => {
-      if (live) setFindings(initial)
-    })
+    void window.reconix.findings
+      .list()
+      .then((initial) => {
+        if (live) setFindings(initial)
+      })
+      .catch(() => undefined)
     const unsubscribe = window.reconix.findings.onChanged(setFindings)
     return () => {
       live = false
