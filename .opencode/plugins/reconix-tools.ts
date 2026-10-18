@@ -22,6 +22,48 @@ const CODEMODE_NAMESPACE = "reconix"
 
 const Z3_SCRIPT = [".opencode", "tools", "z3_string_solver.py"]
 
+/**
+ * The static deobfuscator engine lives in the repo (`src/tools/deobfuscateStatic`)
+ * so the plugin and the §5.E tool catalog share one implementation. It is loaded
+ * LAZILY and defensively: if the path cannot be resolved at runtime, only this
+ * tool reports an error — `z3_string_solver` and `dom_evaluator` keep working.
+ */
+type DeobfuscateEngine = typeof import("../../src/tools/deobfuscateStatic")
+
+let deobfuscateEnginePromise: Promise<DeobfuscateEngine> | null = null
+
+function loadDeobfuscateEngine(): Promise<DeobfuscateEngine> {
+  if (!deobfuscateEnginePromise) {
+    deobfuscateEnginePromise = import("../../src/tools/deobfuscateStatic")
+  }
+  return deobfuscateEnginePromise
+}
+
+/**
+ * The dynamic deobfuscator consumes a captured runtime trace and reuses the
+ * static engine internally, so it is loaded the same lazy, guarded way.
+ */
+type DeobfuscateDynamicEngine = typeof import("../../src/tools/deobfuscateDynamic")
+
+let deobfuscateDynamicEnginePromise: Promise<DeobfuscateDynamicEngine> | null = null
+
+function loadDeobfuscateDynamicEngine(): Promise<DeobfuscateDynamicEngine> {
+  if (!deobfuscateDynamicEnginePromise) {
+    deobfuscateDynamicEnginePromise = import("../../src/tools/deobfuscateDynamic")
+  }
+  return deobfuscateDynamicEnginePromise
+}
+
+const DEOBFUSCATE_TECHNIQUES = [
+  "constant-fold",
+  "string-array-unpack",
+  "decoder-chain",
+  "eval-packer-unpack",
+  "simplify",
+  "rename",
+  "dead-code",
+]
+
 function resolvePython(directory: string): string {
   const candidates = [
     process.env.RECONIX_PYTHON,
@@ -185,6 +227,144 @@ export default Plugin.define({
       },
     }
 
+    const deobfuscateStatic = {
+      description:
+        "Static JavaScript deobfuscator. Parses untrusted JS (never executes it) and rewrites constant folding, decoder chains, obfuscator.io string arrays and Dean Edwards packer output into readable source, with a structural report and extracted indicators. Pure string analysis.",
+      input: {
+        type: "object",
+        properties: {
+          source: {
+            type: "string",
+            description: "The JavaScript source to deobfuscate.",
+          },
+          techniques: {
+            type: "array",
+            items: { type: "string", enum: DEOBFUSCATE_TECHNIQUES },
+            description: "Optional subset of passes to run (default: all).",
+          },
+          maxOutputBytes: {
+            type: "number",
+            description: "Cap on the returned transformed source in bytes (default 262144).",
+          },
+        },
+        required: ["source"],
+        additionalProperties: false,
+      },
+      execute: async (input: unknown) => {
+        let engine: DeobfuscateEngine
+        try {
+          engine = await loadDeobfuscateEngine()
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error)
+          return {
+            content: JSON.stringify({
+              status: "error",
+              reason: `deobfuscate engine unavailable: ${detail}`,
+            }),
+          }
+        }
+        const validated = engine.deobfuscateStaticTool.validateInput(input)
+        if (!validated.ok) {
+          return { content: JSON.stringify({ status: "error", errors: validated.errors }) }
+        }
+        const result = engine.deobfuscateStaticTool.handler(validated.value)
+        return { content: JSON.stringify(result, null, 2) }
+      },
+    }
+
+    const deobfuscateDynamic = {
+      description:
+        "Analyze a captured runtime hook trace from a dynamically obfuscated page: eval/Function/document.write/string-timer code and atob/fromCharCode-style decodes. Deobfuscates each code-bearing payload with the static engine and extracts indicators. Pure string analysis; never executes trace content.",
+      input: {
+        type: "object",
+        properties: {
+          trace: {
+            type: "object",
+            description:
+              "A normalized DynamicTrace (schemaVersion: 1, records: [...]). Provide this OR `dump`.",
+          },
+          dump: {
+            description:
+              "Raw harness dump returned by the injected deobfuscate_harness.js (object or JSON string): {status,entries}. Normalized internally. Provide this OR `trace`.",
+          },
+          recurse: {
+            type: "boolean",
+            description: "Run the static engine over code-bearing payloads (default true).",
+          },
+          maxRecords: {
+            type: "number",
+            description: "Cap on distinct findings analyzed (default 200).",
+          },
+          maxOutputBytes: {
+            type: "number",
+            description: "Cumulative cap on deobfuscated output in bytes (default 262144).",
+          },
+          kinds: {
+            type: "array",
+            items: {
+              type: "string",
+              enum: [
+                "eval",
+                "function",
+                "document.write",
+                "document.writeln",
+                "setTimeout",
+                "setInterval",
+                "atob",
+                "btoa",
+                "unescape",
+                "escape",
+                "decodeURIComponent",
+                "encodeURIComponent",
+                "String.fromCharCode",
+                "String.fromCodePoint",
+                "custom",
+              ],
+            },
+            description: "Only analyze these hook kinds (default: all).",
+          },
+          classes: {
+            type: "array",
+            items: {
+              type: "string",
+              enum: ["eval", "function-body", "document-write", "deferred-code", "decode"],
+            },
+            description: "Only analyze these record classes (default: all).",
+          },
+          minLength: {
+            type: "number",
+            description: "Skip payloads shorter than this many chars (default 1).",
+          },
+          maxDepth: {
+            type: "number",
+            description:
+              "Static passes chained per payload until it stabilizes (default 2, max 5).",
+          },
+        },
+        additionalProperties: false,
+      },
+      execute: async (input: unknown) => {
+        let engine: DeobfuscateDynamicEngine
+        try {
+          engine = await loadDeobfuscateDynamicEngine()
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error)
+          return {
+            content: JSON.stringify({
+              status: "error",
+              reason: `deobfuscate dynamic engine unavailable: ${detail}`,
+            }),
+          }
+        }
+        const validated = engine.deobfuscateDynamicTool.validateInput(input)
+        if (!validated.ok) {
+          return { content: JSON.stringify({ status: "error", errors: validated.errors }) }
+        }
+        const result = engine.deobfuscateDynamicTool.handler(validated.value)
+        return { content: JSON.stringify(result, null, 2) }
+      },
+    }
+
     await ctx.tool.transform((editor) => {
       // Code Mode namespace so the runtime exposes `tools.reconix.<tool>`.
       editor.namespace({
@@ -217,6 +397,8 @@ export default Plugin.define({
 
       register("z3_string_solver", z3Solver)
       register("dom_evaluator", domEvaluator)
+      register("deobfuscate_static", deobfuscateStatic)
+      register("deobfuscate_dynamic", deobfuscateDynamic)
     })
   },
 })
