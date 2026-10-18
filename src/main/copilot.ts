@@ -43,10 +43,23 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { BrowserWindow, WebContents } from 'electron'
 import { app, ipcMain } from 'electron'
-import type { AgentEvent, ApprovalDecision, EngineStatus, Policy, ServerStatus } from '../shared/contracts'
+import type {
+  AgentEvent,
+  ApprovalDecision,
+  EngineStatus,
+  Policy,
+  ServerStatus,
+  UsageSnapshot
+} from '../shared/contracts'
 import type { CapturedRequest } from '../shared/tabs'
 import type { NetworkCapture } from './network'
-import { createOpenCodeConnector, mergeConfig, type JsonObject, type OpenCodeConnector } from './opencode'
+import {
+  createOpenCodeConnector,
+  mergeConfig,
+  UsageMeter,
+  type JsonObject,
+  type OpenCodeConnector
+} from './opencode'
 import { parseModel, type RawEvent } from './opencode/transport'
 import { buildMcpServer } from './mcp'
 import { InMemoryAuditLogger } from './mcp/audit'
@@ -83,6 +96,8 @@ export interface CopilotBridge {
    *  gate on this (tabs.ts's navigate handler) should still let the user
    *  proceed on ok:false rather than block forever on a dead engine. */
   waitUntilReady(): Promise<{ ok: boolean; error?: string }>
+  /** Cost/latency figures for the agentic pipeline (counts + timing only). */
+  usageSnapshot(): UsageSnapshot
   stop(): Promise<void>
 }
 
@@ -511,6 +526,18 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
   const scope = new ActiveTabScope(() => cdp.pageContext()?.url ?? null)
   const networkReader = new ActiveTabNetworkReader(getNetwork)
 
+  // Cost/latency meter. Fed by the connector's persist (all sessions, incl.
+  // subagents + the ambient DOM parser) and onAgentEvent (orchestrator turn
+  // timeline) sinks below, plus explicit notes at the send/parser call sites.
+  const usage = new UsageMeter({
+    modelForRole: (role) =>
+      role === 'orchestrator'
+        ? ORCHESTRATOR_MODEL
+        : role === 'dom-analyzer' || role === 'subagent'
+          ? DOM_ANALYZER_MODEL
+          : 'unknown'
+  })
+
   // Ambient state, prepended to every message sent to the orchestrator so it
   // doesn't have to spend a tool call just to re-orient itself each turn
   // (what page, what origin). Never shown in the renderer's own transcript —
@@ -728,7 +755,12 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
     async (html) => {
       const { baseUrl, password } = await ensureServerInfo().catch(() => ({ baseUrl: '', password: '' }))
       if (!baseUrl) return null
-      return runOneShotAgent(baseUrl, password, 'dom-analyzer', html)
+      const started = Date.now()
+      try {
+        return await runOneShotAgent(baseUrl, password, 'dom-analyzer', html)
+      } finally {
+        usage.noteAmbientCall('dom-analyzer', Date.now() - started)
+      }
     }
   )
 
@@ -756,9 +788,11 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
                 responseStartedAt = null
               }
             }
+            usage.recordAgentEvent(ev)
             send('copilot:event', ev)
           },
-          persist: (_raw: RawEvent, _normalized: AgentEvent | null) => {
+          persist: (raw: RawEvent, _normalized: AgentEvent | null) => {
+            usage.recordRaw(raw)
             // TODO(B): write through to the engagement store (§6.4) once it
             // exists. Dropped on the floor for now — not a regression, there
             // was no store before this either.
@@ -766,7 +800,8 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
           onStatus: (status: ServerStatus) => send('copilot:status', status)
         }
       )
-      await c.start()
+      const sessionId = await c.start()
+      usage.registerSession(sessionId, 'orchestrator')
       connector = c
       return c
     })()
@@ -784,6 +819,7 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
     try {
       const c = await ensureConnector()
       const prefix = buildContextPrefix()
+      usage.noteSend()
       return await c.sendMessage(prefix + String(text))
     } catch (err) {
       responseStartedAt = null
@@ -794,7 +830,9 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
   ipcMain.removeHandler('copilot:new-chat')
   ipcMain.handle('copilot:new-chat', async () => {
     const c = await ensureConnector()
-    return c.newSession()
+    const id = await c.newSession()
+    usage.registerSession(id, 'orchestrator')
+    return id
   })
 
   ipcMain.removeHandler('copilot:respond-approval')
@@ -822,6 +860,9 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
     },
     waitUntilReady() {
       return engineReady
+    },
+    usageSnapshot() {
+      return usage.snapshot()
     },
     async stop() {
       ipcMain.removeHandler('copilot:send')

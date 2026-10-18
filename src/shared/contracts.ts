@@ -1,7 +1,7 @@
 // Shared main-process contracts. Mirrors ARCHITECTURE.md §6 and API.md §1/§3.
 // Changing a type here is a §6 contract change — version it (CONTRACTS_VERSION).
 
-export const CONTRACTS_VERSION = '0.1.0'
+export const CONTRACTS_VERSION = '0.2.0'
 
 // ─── Risk tiers (API.md §3 / ARCHITECTURE §5.C) ───────────────────────────────
 // R read-only (auto) · P page-mutating, sandbox-only (auto)
@@ -80,4 +80,91 @@ export type EngineStatus = { status: 'starting' } | { status: 'ready' } | { stat
 // ─── Error envelope (API.md §4) ───────────────────────────────────────────────
 export interface ErrorEnvelope {
   error: { code: string; message: string; retriable: boolean }
+}
+
+// ─── Usage / cost / latency (cost-latency-dashboard) ──────────────────────────
+// Counts and timing ONLY — never prompt or response text. Deliberately kept
+// separate from AgentEvent so the transcript stream stays lean and the meter
+// cannot leak content into the UI. See docs/plan: cost-latency-dashboard.md.
+
+/** Which part of the pipeline a call belongs to — the model-tiering breakdown. */
+export type AgentRole = 'orchestrator' | 'dom-analyzer' | 'subagent' | 'unknown'
+
+/** One tool call's wall-clock duration, paired from tool.call -> tool.result. */
+export interface ToolLatency {
+  tool: string
+  callId: string
+  ms: number
+  ok: boolean
+}
+
+/** One agent turn (or one ambient call, e.g. a DOM-parser refresh). */
+export interface TurnUsage {
+  /** assistant messageId when known, else a synthetic id. */
+  id: string
+  /** Owning OpenCode session id, or '' for an ambient call we can't attribute. */
+  sessionId: string
+  role: AgentRole
+  /** "provider/model". */
+  model: string
+  startedAt: number
+  /** First streamed token (TTFT); undefined when the turn produced none. */
+  firstTokenAt?: number
+  finishedAt?: number
+  inputTokens?: number
+  outputTokens?: number
+  /** Cost reported by OpenCode itself, when available; else computed locally. */
+  reportedCostUsd?: number
+  toolCallCount: number
+  toolErrorCount: number
+  toolLatencies: ToolLatency[]
+  error?: boolean
+}
+
+export interface ModelRollup {
+  model: string
+  calls: number
+  inputTokens: number
+  outputTokens: number
+  costUsd: number
+  p50Ms: number | null
+  p95Ms: number | null
+}
+
+export interface RoleRollup {
+  role: AgentRole
+  calls: number
+  inputTokens: number
+  outputTokens: number
+  costUsd: number
+}
+
+export interface ToolRollup {
+  tool: string
+  calls: number
+  errors: number
+  p50Ms: number | null
+  p95Ms: number | null
+}
+
+export interface UsageRollups {
+  byModel: ModelRollup[]
+  byRole: RoleRollup[]
+  byTool: ToolRollup[]
+}
+
+export interface UsageTotals {
+  inputTokens: number
+  outputTokens: number
+  costUsd: number
+  turns: number
+  /** How many background DOM-parser refreshes ran (the hidden recurring cost). */
+  parserRefreshes: number
+}
+
+export interface UsageSnapshot {
+  /** Most-recent-last, capped by the meter's ring buffer. */
+  turns: TurnUsage[]
+  rollups: UsageRollups
+  totals: UsageTotals
 }

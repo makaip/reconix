@@ -15,3 +15,12 @@ export type { OpenCodeTransport, OpenCodeConfig, RawEvent } from './transport'
 export type { ConnectorSinks } from './connector'
 export { normalize } from './normalize'
 export { mergeConfig, isPlainObject, type JsonObject } from './configMerge'
+export { UsageMeter, extractUsage, turnCostUsd, type UsageMeterOptions, type ExtractedUsage } from './usage'
+export {
+  estimateCostUsd,
+  priceFor,
+  isSelfHosted,
+  MODEL_PRICING,
+  SELF_HOSTED_PREFIXES,
+  type ModelPrice
+} from './pricing'
