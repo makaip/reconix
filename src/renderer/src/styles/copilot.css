@@ -725,14 +725,15 @@
   width: 24px;
   height: 24px;
   padding: 0;
-  background: var(--color-text);
+  background: var(--color-accent);
+  color: #fff;
   border: 0;
   border-radius: var(--radius-sm);
   cursor: pointer;
 }
 
 .composer__send:hover {
-  background: var(--color-text-muted);
+  background: #6fb0ff;
 }
 
 .composer__stop {
