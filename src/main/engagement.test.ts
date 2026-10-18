@@ -2,7 +2,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
-import { loadScopeChecker } from './engagement'
+import { createActiveOriginScopeChecker, loadScopeChecker } from './engagement'
 
 const dir = mkdtempSync(join(tmpdir(), 'reconix-scope-'))
 const write = (name: string, contents: string): string => {
@@ -42,5 +42,19 @@ describe('loadScopeChecker', () => {
     const checker = loadScopeChecker(p)
     expect(checker.isAllowed('https://target.local/')).toBe(true)
     expect(checker.isAllowed('https://evil.example/')).toBe(false)
+  })
+})
+
+describe('createActiveOriginScopeChecker', () => {
+  it('allows only the active origin and its loopback alias', () => {
+    let active: string | null = 'http://localhost:9090/page'
+    const checker = createActiveOriginScopeChecker(() => active)
+    expect(checker.isAllowed('http://localhost:9090/get_config', 'GET')).toBe(true)
+    expect(checker.isAllowed('http://127.0.0.1:9090/get_config', 'GET')).toBe(true)
+    expect(checker.isAllowed('http://localhost:8080/get_config', 'GET')).toBe(false)
+    expect(checker.isAllowed('https://localhost:9090/get_config', 'GET')).toBe(false)
+    expect(checker.isAllowed('http://example.com:9090/get_config', 'GET')).toBe(false)
+    active = null
+    expect(checker.isAllowed('http://localhost:9090/get_config', 'GET')).toBe(false)
   })
 })

@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { NodeContext } from '../../../shared/devtools'
 import type { AgentEvent, ToolAccess } from '../../../shared/contracts'
 import { isBrowserTool, isSubagentTool, type CopilotMessage, type TranscriptPart } from '../components/copilot/transcript'
 import type { CapturedRequest } from '../../../shared/tabs'
+import { createThrottledWriter } from './throttledWriter'
 
 /** A DOM node being dragged out of DevTools. */
 export type NodeRef = { nodeId: number; label: string; selector: string }
@@ -34,6 +35,14 @@ function readStored<T>(key: string, fallback: T): T {
     return value ? (JSON.parse(value) as T) : fallback
   } catch {
     return fallback
+  }
+}
+
+function writeStored(key: string, value: unknown): void {
+  try {
+    localStorage.setItem(key, JSON.stringify(value))
+  } catch {
+    // Storage quotas or an unavailable store must not interrupt a live turn.
   }
 }
 
@@ -128,6 +137,10 @@ export function useCopilot(): Copilot {
   const busyRef = useRef(false)
   const queued = useRef<Array<{ messageId: string; text: string }>>([])
   const nextId = useRef(1)
+  const flushRequested = useRef(false)
+  const [persistence] = useState(() =>
+    createThrottledWriter<SavedConversation>((conversation) => writeStored(CURRENT_CHAT_KEY, conversation), 500)
+  )
 
   // Tracks which assistant CopilotMessage.id owns a given OpenCode
   // messageId, so repeated events for the same turn accumulate into one
@@ -141,15 +154,27 @@ export function useCopilot(): Copilot {
   const toolOwner = useRef(new Map<string, string>())
   const browserCalls = useRef(new Map<string, string>())
 
-  useEffect(() => {
-    localStorage.setItem(
-      CURRENT_CHAT_KEY,
-      JSON.stringify({ id: conversationId, title: conversationTitle, updatedAt: Date.now(), messages })
-    )
-  }, [conversationId, conversationTitle, messages])
+  useLayoutEffect(() => {
+    // Capture the committed snapshot before pagehide can flush the prior one.
+    persistence.schedule({ id: conversationId, title: conversationTitle, updatedAt: Date.now(), messages })
+    // Wait for React to commit the final deltas before flushing a turn boundary,
+    // including boundaries that immediately start a queued turn (busy stays true).
+    if (!busy || flushRequested.current) {
+      flushRequested.current = false
+      persistence.flush()
+    }
+  }, [conversationId, conversationTitle, messages, busy, persistence])
 
   useEffect(() => {
-    localStorage.setItem(CHAT_HISTORY_KEY, JSON.stringify(history.slice(0, 50)))
+    window.addEventListener('pagehide', persistence.flush)
+    return () => {
+      window.removeEventListener('pagehide', persistence.flush)
+      persistence.flush()
+    }
+  }, [persistence])
+
+  useEffect(() => {
+    writeStored(CHAT_HISTORY_KEY, history.slice(0, 50))
   }, [history])
 
   useEffect(() => {
@@ -191,6 +216,7 @@ export function useCopilot(): Copilot {
     }
 
     function failMessage(messageId: string, err: unknown): void {
+      flushRequested.current = true
       setThinking(false)
       setActivityLabel(null)
       setMessages((current) => [
@@ -299,6 +325,7 @@ export function useCopilot(): Copilot {
           return
         }
         case 'turn.done':
+          flushRequested.current = true
           assistantByMessageId.current.clear()
           activeAssistantId.current = null
           browserCalls.current.clear()
@@ -351,7 +378,8 @@ export function useCopilot(): Copilot {
           setActivityLabel('Resuming tool')
           setMessages((current) =>
             current.map((message) =>
-              message.role === 'assistant'
+              message.role === 'assistant' &&
+              message.parts.some((part) => part.kind === 'tool' && part.approval?.id === ev.approvalId)
                 ? {
                     ...message,
                     parts: message.parts.map((part) =>
@@ -500,6 +528,8 @@ export function useCopilot(): Copilot {
     void window.reconix.copilot
       .newChat()
       .then((id) => {
+        persistence.flush()
+        flushRequested.current = true
         if (messages.length > 0) {
           const archived = { id: conversationId, title: conversationTitle, updatedAt: Date.now(), messages }
           setHistory((current) =>
@@ -531,7 +561,7 @@ export function useCopilot(): Copilot {
           { id: `asst-${nextId.current++}`, role: 'assistant', parts: [{ kind: 'text', text: `⚠ ${message}` }] }
         ])
       })
-  }, [conversationId, conversationTitle, messages])
+  }, [conversationId, conversationTitle, messages, persistence])
 
   return {
     messages: viewingHistory?.messages ?? messages,

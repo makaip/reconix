@@ -119,12 +119,18 @@ export class OpenCodeConnector {
 
     // /api/event is process-global: it includes the orchestrator session, its
     // child/subagent sessions, ambient DOM-analysis sessions, and unrelated
-    // sessions opened against the same server. Durable OpenCode events identify
-    // their owner with aggregateID. Only the long-lived Copilot session belongs
+    // sessions opened against the same server. Streaming text/reasoning deltas
+    // are NOT durable: their owner is data.sessionID. Ignoring that field lets
+    // ambient parser text mark the UI busy forever, since its durable turn.done
+    // is correctly filtered out and cannot release the renderer's message queue.
+    // Only the long-lived Copilot session belongs
     // in the user-visible transcript; child output remains available to the
     // orchestrator and audit sink without leaking into the UI.
     const durable = raw.durable as Record<string, unknown> | undefined
-    const eventSessionId = typeof durable?.aggregateID === 'string' ? durable.aggregateID : undefined
+    const data = raw.data as Record<string, unknown> | undefined
+    const eventSessionId = typeof data?.sessionID === 'string'
+      ? data.sessionID
+      : typeof durable?.aggregateID === 'string' ? durable.aggregateID : undefined
     if (eventSessionId && eventSessionId !== this.sessionId) return
 
     if (ev.kind === 'approval.request') this.pendingApprovals.set(ev.approvalId, ev.approvalId)

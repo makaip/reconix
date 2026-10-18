@@ -5,6 +5,31 @@ import { makeScopeChecker } from './scope'
 /** Deny-by-default checker: used whenever no valid engagement scope is loaded. */
 export const DENY_ALL: ScopeChecker = { isAllowed: () => false }
 
+/**
+ * Development fallback used before the engagement UI can load a scope.json.
+ * It follows the active browser origin, keeping Repeater/Crawler aligned with
+ * the Copilot tool scope without turning missing configuration into allow-all.
+ */
+export function createActiveOriginScopeChecker(getActiveUrl: () => string | null): ScopeChecker {
+  return {
+    isAllowed(candidate) {
+      const activeValue = getActiveUrl()
+      if (!activeValue) return false
+      try {
+        const active = new URL(activeValue)
+        const target = new URL(candidate)
+        if (!['http:', 'https:'].includes(active.protocol) || target.protocol !== active.protocol) return false
+        if (target.port !== active.port) return false
+        if (target.hostname === active.hostname) return true
+        const loopback = new Set(['localhost', '127.0.0.1'])
+        return loopback.has(active.hostname) && loopback.has(target.hostname)
+      } catch {
+        return false
+      }
+    }
+  }
+}
+
 /** Minimal structural check — the config drives egress authorization, treat it as hostile. */
 function isScopeConfig(value: unknown): value is ScopeConfig {
   if (typeof value !== 'object' || value === null) return false

@@ -3,7 +3,7 @@ import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { createBodyStore } from './bodies'
 import { createCopilotBridge, type CopilotBridge } from './copilot'
-import { loadScopeChecker } from './engagement'
+import { createActiveOriginScopeChecker, loadScopeChecker } from './engagement'
 import { attachInspector, combineNetworkSinks } from './inspector'
 import { createInterceptor } from './intercept'
 import { startNetworkCapture, type NetworkCapture } from './network'
@@ -157,7 +157,15 @@ function createWindow(): void {
   network = startNetworkCapture(mainWindow, tabs)
   // Host-side replay (Repeater) gates every send on the engagement scope; no
   // scope loaded -> deny all (default-deny holds). Same scope.json the proxy uses.
-  const { replayer } = createReplay(mainWindow, loadScopeChecker())
+  const configuredScope = process.env.SCOPE_CONFIG_PATH ? loadScopeChecker() : null
+  // Resolve the URL at authorization time: a WebContents can navigate without
+  // changing its tab id, so a URL captured by onActiveChanged would be stale.
+  const activeOriginScope = createActiveOriginScopeChecker(() => {
+    if (copilotTargetTabId === null) return null
+    const target = tabs.targetFor(copilotTargetTabId)
+    return target && !target.isDestroyed() ? target.getURL() : null
+  })
+  const { replayer } = createReplay(mainWindow, configuredScope ?? activeOriginScope)
   // Repeater reuses the one gated replayer so its sends are scope-/rate-checked too.
   createRepeater(mainWindow, replayer)
   // The crawler drives the SAME gated replayer, so its spidering never egresses

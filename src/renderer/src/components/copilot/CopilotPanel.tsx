@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties, type DragEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type DragEvent } from 'react'
 import chat from '../../assets/icons/chat.svg'
 import close from '../../assets/icons/close.svg'
 import type { Copilot } from '../../hooks/useCopilot'
@@ -93,7 +93,7 @@ function CopilotPanel({
   })()
   const targetTitle = activeTab?.title || targetHost || 'New Tab'
   const targetLabel = activeTab ? `Target tab: ${targetTitle}${targetHost && targetHost !== targetTitle ? ` — ${targetHost}` : ''}` : undefined
-  const sendToActiveTab = (text: string): void => send(text, targetLabel)
+  const sendToActiveTab = useCallback((text: string): void => send(text, targetLabel), [send, targetLabel])
   const viewingDifferentTab = Boolean(viewedTab && activeTab && viewedTab.id !== activeTab.id)
 
   return (

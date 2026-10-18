@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { memo, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { CopilotMessage, ToolPart, ToolPartStatus, TranscriptPart } from './transcript'
@@ -140,6 +140,17 @@ function ReasoningBlock({ text }: { text: string }): JSX.Element {
   )
 }
 
+// Completed text segments within a still-streaming turn can skip markdown parsing too.
+const TextBlock = memo(function TextBlock({ text, onReply }: { text: string; onReply: (text: string) => void }): JSX.Element {
+  const question = parseEmbeddedQuestion(text)
+  if (question) return <QuestionCard question={question} onReply={onReply} />
+  return (
+    <div className="message__text message__markdown">
+      <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
+    </div>
+  )
+})
+
 function Message({
   message,
   onReply,
@@ -181,13 +192,7 @@ function Message({
       </header>
       {visibleParts.map((part, i) => {
         if (part.kind === 'text') {
-          const question = parseEmbeddedQuestion(part.text)
-          if (question) return <QuestionCard key={i} question={question} onReply={onReply} />
-          return (
-            <div className="message__text message__markdown" key={i}>
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>{part.text}</ReactMarkdown>
-            </div>
-          )
+          return <TextBlock key={i} text={part.text} onReply={onReply} />
         }
         if (part.kind === 'reasoning') {
           return <ReasoningBlock key={i} text={part.text} />
@@ -198,4 +203,4 @@ function Message({
   )
 }
 
-export default Message
+export default memo(Message)

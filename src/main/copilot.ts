@@ -132,6 +132,13 @@ class ActiveTabCdpDriver implements CdpDriver {
     this.driver = wc ? new WebContentsCdpDriver(wc, this.isUiGuard) : null
   }
 
+  /** Browser-owned metadata stays available even if the target renderer is
+   * busy. Preparing a chat must not wait on Runtime.evaluate in that page. */
+  pageContext(): { url: string; title: string } | null {
+    if (!this.current || this.current.isDestroyed()) return null
+    return { url: this.current.getURL(), title: this.current.getTitle() }
+  }
+
   private require(): WebContentsCdpDriver {
     if (!this.driver) throw new Error('no active tab — open a page in the browser first')
     return this.driver
@@ -167,17 +174,26 @@ class ActiveTabCdpDriver implements CdpDriver {
 class ActiveTabScope implements ScopeEnforcer {
   private host: string | null = null
 
+  constructor(private readonly getCurrentUrl?: () => string | null) {}
+
   setActiveHost(host: string | null): void {
     this.host = host
   }
 
   private checker(): ScopeChecker {
+    let currentHost = this.host
+    try {
+      const currentUrl = this.getCurrentUrl?.()
+      if (currentUrl) currentHost = new URL(currentUrl).hostname || null
+    } catch {
+      currentHost = null
+    }
     // A local target can be addressed through either loopback spelling. The
     // browser may display `localhost` while captured requests use
     // `127.0.0.1` (or vice versa); both names refer to the same authorized
     // CVE-Bench site and must share the active-tab scope.
-    const hosts = this.host
-      ? [this.host, `*.${this.host}`, ...(this.host === 'localhost' ? ['127.0.0.1'] : []), ...(this.host === '127.0.0.1' ? ['localhost'] : [])]
+    const hosts = currentHost
+      ? [currentHost, `*.${currentHost}`, ...(currentHost === 'localhost' ? ['127.0.0.1'] : []), ...(currentHost === '127.0.0.1' ? ['localhost'] : [])]
       : []
     return new ScopeChecker({
       allowed_hosts: hosts,
@@ -492,7 +508,7 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
   const toolAccessPath = join(app.getPath('userData'), 'copilot-tool-access.json')
 
   const cdp = new ActiveTabCdpDriver((wc) => wc.id === win.webContents.id)
-  const scope = new ActiveTabScope()
+  const scope = new ActiveTabScope(() => cdp.pageContext()?.url ?? null)
   const networkReader = new ActiveTabNetworkReader(getNetwork)
 
   // Ambient state, prepended to every message sent to the orchestrator so it
@@ -500,9 +516,10 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
   // (what page, what origin). Never shown in the renderer's own transcript —
   // the user bubble there is the raw typed text (useCopilot.ts), this prefix
   // only goes to OpenCode.
-  async function buildContextPrefix(): Promise<string> {
+  function buildContextPrefix(): string {
     try {
-      const info = await cdp.pageInfo()
+      const info = cdp.pageContext()
+      if (!info) return ''
       const origin = (() => {
         try {
           return new URL(info.url).origin
@@ -513,7 +530,7 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
       const recent = networkReader.list().length
       const header =
         `[Current browser state — url: ${info.url} | origin: ${origin} | ` +
-        `title: ${JSON.stringify(info.title)} | readyState: ${info.readyState} | ` +
+        `title: ${JSON.stringify(info.title)} | ` +
         `${recent} network request(s) captured for this tab (get_network_log for detail)]`
       const domSummary = domWatcher.summaryFor(info.url)
       const domBlock = domSummary
@@ -670,6 +687,11 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
   setEngineStatus({ status: 'starting' })
   const engineReady: Promise<{ ok: boolean; error?: string }> = ensureServerInfo().then(
     () => {
+      // Warm the session/event stream before the first prompt, but do not make
+      // browser navigation wait on OpenCode's session/health endpoints.
+      void ensureConnector().catch((err: unknown) => {
+        console.error('[copilot] session warm-up failed:', err)
+      })
       setEngineStatus({ status: 'ready' })
       return { ok: true }
     },
@@ -710,6 +732,10 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
     }
   )
 
+  // Only timing metadata is logged, never prompts, target data or credentials.
+  let responseStartedAt: number | null = null
+  let firstOutputSeen = false
+
   async function ensureConnector(): Promise<OpenCodeConnector> {
     if (connector) return connector
     if (starting) return starting
@@ -718,7 +744,20 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
       const c = createOpenCodeConnector(
         { baseUrl, password, agent: 'pentest-orchestrator', model: ORCHESTRATOR_MODEL },
         {
-          onAgentEvent: (ev: AgentEvent) => send('copilot:event', ev),
+          onAgentEvent: (ev: AgentEvent) => {
+            if (responseStartedAt !== null) {
+              const elapsedMs = Math.round(performance.now() - responseStartedAt)
+              if (!firstOutputSeen && (ev.kind === 'message.delta' || ev.kind === 'reasoning.delta' || ev.kind === 'tool.call')) {
+                firstOutputSeen = true
+                console.info('[copilot:latency]', { phase: 'first-output', kind: ev.kind, elapsedMs })
+              }
+              if (ev.kind === 'turn.done' || ev.kind === 'error') {
+                console.info('[copilot:latency]', { phase: 'turn-finished', elapsedMs })
+                responseStartedAt = null
+              }
+            }
+            send('copilot:event', ev)
+          },
           persist: (_raw: RawEvent, _normalized: AgentEvent | null) => {
             // TODO(B): write through to the engagement store (§6.4) once it
             // exists. Dropped on the floor for now — not a regression, there
@@ -740,9 +779,16 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
 
   ipcMain.removeHandler('copilot:send')
   ipcMain.handle('copilot:send', async (_event, text: string) => {
-    const c = await ensureConnector()
-    const prefix = await buildContextPrefix()
-    return c.sendMessage(prefix + String(text))
+    responseStartedAt = performance.now()
+    firstOutputSeen = false
+    try {
+      const c = await ensureConnector()
+      const prefix = buildContextPrefix()
+      return await c.sendMessage(prefix + String(text))
+    } catch (err) {
+      responseStartedAt = null
+      throw err
+    }
   })
 
   ipcMain.removeHandler('copilot:new-chat')
