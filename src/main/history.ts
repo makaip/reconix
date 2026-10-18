@@ -1,15 +1,17 @@
 // History reader (ARCHITECTURE §6.4) — backs query_log, the agent's only history
-// access. Reads the persisted engagement log: tool calls from `tool_calls` plus
-// recorded findings, merged newest-first. Structured and narrow — never a DB
-// handle. Filter keys are read defensively; anything unrecognized is ignored.
+// access. Reads the persisted engagement log: recorded findings, tool calls, and
+// human approval decisions, merged newest-first. Structured and narrow — never a
+// DB handle. Filter keys are read defensively; anything unrecognized is ignored.
 import type { Database } from 'node-sqlite3-wasm'
 import type { FindingSeverity } from '../shared/findings'
 import { findingSummary, type FindingsStore } from './findings'
 import type { HistoryReader } from './mcp/tool'
 
+export type LogKind = 'finding' | 'tool_call' | 'approval'
+
 export interface LogFilter {
-  /** Restrict to one row kind; omit for both. */
-  kind?: 'tool_call' | 'finding'
+  /** Restrict to one row kind; omit for all three. */
+  kind?: LogKind
   /** Only tool calls for this tool name. */
   tool?: string
   /** Only rows at/after this epoch-ms timestamp. */
@@ -31,6 +33,7 @@ export type LogRow =
       startedAt: number
       finishedAt?: number
     }
+  | { type: 'approval'; id: string; decision: string; actor?: string; ts: number }
 
 const DEFAULT_LIMIT = 100
 const MAX_LIMIT = 500
@@ -40,7 +43,7 @@ function clampLimit(value: unknown): number {
   return Math.min(MAX_LIMIT, Math.max(1, Math.floor(value)))
 }
 
-const tsOf = (row: LogRow): number => (row.type === 'finding' ? row.ts : row.startedAt)
+const tsOf = (row: LogRow): number => (row.type === 'tool_call' ? row.startedAt : row.ts)
 
 export function createHistoryReader(db: Database, findings: FindingsStore): HistoryReader {
   const toolCallRows = (since: number, tool: string | undefined): LogRow[] => {
@@ -73,16 +76,32 @@ export function createHistoryReader(db: Database, findings: FindingsStore): Hist
         return { type: 'finding' as const, id: s.id, title: s.title, severity: s.severity, ts: r.ts }
       })
 
+  const approvalRows = (since: number): LogRow[] =>
+    db
+      .all('SELECT id, decision, actor, ts FROM approvals WHERE ts >= ? ORDER BY ts DESC', [since])
+      .map((row) => {
+        const r = row as Record<string, unknown>
+        return {
+          type: 'approval' as const,
+          id: String(r.id),
+          decision: String(r.decision),
+          ...(typeof r.actor === 'string' ? { actor: r.actor } : {}),
+          ts: Number(r.ts) || 0
+        }
+      })
+
   return {
     query: async (filter) => {
       const f = (filter ?? {}) as LogFilter
       const limit = clampLimit(f.limit)
       const since = typeof f.since === 'number' ? f.since : 0
       const tool = typeof f.tool === 'string' && f.tool ? f.tool : undefined
+      const kinds: LogKind[] = f.kind ? [f.kind] : ['finding', 'tool_call', 'approval']
 
       const rows: LogRow[] = []
-      if (f.kind !== 'tool_call') rows.push(...findingRows(since))
-      if (f.kind !== 'finding') rows.push(...toolCallRows(since, tool))
+      if (kinds.includes('finding')) rows.push(...findingRows(since))
+      if (kinds.includes('tool_call')) rows.push(...toolCallRows(since, tool))
+      if (kinds.includes('approval')) rows.push(...approvalRows(since))
 
       return rows.sort((a, b) => tsOf(b) - tsOf(a)).slice(0, limit)
     }

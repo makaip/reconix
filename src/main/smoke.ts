@@ -29,7 +29,12 @@ const SCOPE: ScopeConfig = {
   denied: ['evil.invalid'],
   rate_limits: {}
 }
-const POLICY: Policy = { autoApprove: ['R', 'P'], redactCookies: true, maxToolCallsPerTurn: 100 }
+const POLICY: Policy = {
+  autoApprove: ['R', 'P'],
+  redactCookies: true,
+  maxToolCallsPerTurn: 100,
+  maxReplayBatch: 20
+}
 
 function buildServer(wc: Electron.WebContents, audit: InMemoryAuditLogger): ReturnType<typeof buildMcpServer> {
   const ctx: ToolContext = {

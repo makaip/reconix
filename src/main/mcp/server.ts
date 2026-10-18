@@ -16,6 +16,7 @@ import { Server as McpSdkServer } from '@modelcontextprotocol/sdk/server/index.j
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 import type { McpServer as ReconixMcpServer } from './index'
+import { clampToolResult } from './limits'
 
 export interface McpHttpServer {
   readonly port: number
@@ -38,10 +39,16 @@ function buildSdkServer(reconix: ReconixMcpServer): McpSdkServer {
   sdk.setRequestHandler(CallToolRequestSchema, async (req) => {
     const result = await reconix.callTool(req.params.name, req.params.arguments ?? {})
     if (result.ok) {
-      return { content: [{ type: 'text' as const, text: JSON.stringify(result.output ?? null) }] }
+      // Clamp here so the ceiling covers EVERY tool uniformly — including Dev
+      // 1's custom tools and anything added later — not just the ones that
+      // remembered to cap themselves. An oversized result overflows the
+      // orchestrator's context and surfaces as session.execution.failed, so
+      // this is the last line of defense against a turn-killing tool output.
+      const text = clampToolResult(JSON.stringify(result.output ?? null))
+      return { content: [{ type: 'text' as const, text }] }
     }
     return {
-      content: [{ type: 'text' as const, text: JSON.stringify(result.error) }],
+      content: [{ type: 'text' as const, text: clampToolResult(JSON.stringify(result.error)) }],
       isError: true
     }
   })

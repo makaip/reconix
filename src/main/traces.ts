@@ -1,16 +1,23 @@
 // Traces store (ARCHITECTURE §6.4): opaque evidence blobs — screenshots, captured
 // request/response pairs, raw traces — addressed by a `traceRef`, never inlined
-// over the bridge by the tools. Bytes live in the shared SQLite DB (db.ts); text
-// traces are stored as UTF-8 bytes, screenshots as PNG bytes. get_trace reads
-// them back for the agent; the Traces panel reads them over the traces:* IPC.
+// over the bridge by the tools. Per §6.4 the bytes live as files on disk under
+// userData/traces and the shared SQLite DB (db.ts) holds only a ref + path, so a
+// multi-MB screenshot never bloats the database. get_trace reads them back for
+// the agent; the Traces panel reads them over the traces:* IPC.
+import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { ipcMain, type BrowserWindow } from 'electron'
 import type { Database } from 'node-sqlite3-wasm'
 import type { TraceDetail, TraceKind, TraceSummary } from '../shared/traces'
 import type { TraceRecord, TraceStore } from './mcp/tool'
 
 export interface TraceStoreOptions {
-  /** Engagement these traces belong to; null when no scope is loaded. */
+  /** Directory the trace bytes are written to. Created if missing. */
+  tracesDir: string
+  /** Static engagement id (legacy). Prefer `getEngagementId` for live runs. */
   engagementId?: string | null
+  /** Resolver for the current engagement id (live runs). */
+  getEngagementId?: () => string | null
 }
 
 /** The MCP-facing sink plus the renderer IPC surface over the same table. */
@@ -21,7 +28,7 @@ export interface TracesStore {
   list(): TraceSummary[]
   /** Renderer-facing contents: binary as base64, text as UTF-8. Null if unknown. */
   get(ref: string): TraceDetail | null
-  /** Detach the IPC handlers + window listener. Does NOT close the shared DB. */
+  /** Detach the IPC handlers + window listener. Does NOT delete trace files. */
   close(): void
 }
 
@@ -37,36 +44,48 @@ const validKind = (value: unknown): value is TraceKind =>
 export function createTraceStore(
   db: Database,
   win: BrowserWindow,
-  options: TraceStoreOptions = {}
+  options: TraceStoreOptions
 ): TracesStore {
-  const { engagementId = null } = options
+  const { tracesDir, engagementId = null, getEngagementId } = options
+  mkdirSync(tracesDir, { recursive: true })
+
+  const resolveEngagementId = (): string | null =>
+    getEngagementId ? getEngagementId() : (engagementId ?? null)
 
   let seq = 0
-  for (const row of db.all('SELECT ref FROM traces')) {
-    seq = Math.max(seq, refSeq(String((row as Record<string, unknown>).ref)))
+  for (const row of db.all('SELECT id FROM traces')) {
+    seq = Math.max(seq, refSeq(String((row as Record<string, unknown>).id)))
   }
 
+  // A row whose file is gone is treated as unresolvable (null) rather than an
+  // error: evidence can be pruned out from under us without breaking the reads.
   const read = (ref: string): TraceRecord | null => {
-    const row = db.get('SELECT ref, kind, data, ts FROM traces WHERE ref = ?', [ref])
+    const row = db.get('SELECT id, kind, path, ts FROM traces WHERE id = ?', [ref])
     if (!row) return null
     const r = row as Record<string, unknown>
     if (!validKind(r.kind)) return null
-    return {
-      ref: String(r.ref),
-      kind: r.kind,
-      ts: Number(r.ts) || 0,
-      data: r.data instanceof Uint8Array ? r.data : Buffer.from(String(r.data ?? ''), 'utf8')
+    let data: Uint8Array
+    try {
+      data = readFileSync(String(r.path))
+    } catch {
+      return null
     }
+    return { ref: String(r.id), kind: r.kind, ts: Number(r.ts) || 0, data }
   }
 
   const list = (): TraceSummary[] =>
     db
-      .all('SELECT ref, kind, ts, length(data) AS bytes FROM traces ORDER BY rowid DESC')
+      .all('SELECT id, kind, path, ts FROM traces ORDER BY rowid DESC')
       .flatMap((row) => {
         const r = row as Record<string, unknown>
-        return validKind(r.kind)
-          ? [{ ref: String(r.ref), kind: r.kind, ts: Number(r.ts) || 0, bytes: Number(r.bytes) || 0 }]
-          : []
+        if (!validKind(r.kind)) return []
+        let bytes = 0
+        try {
+          bytes = statSync(String(r.path)).size
+        } catch {
+          bytes = 0
+        }
+        return [{ ref: String(r.id), kind: r.kind, ts: Number(r.ts) || 0, bytes }]
       })
 
   const detail = (ref: string): TraceDetail | null => {
@@ -94,11 +113,13 @@ export function createTraceStore(
     save: async (kind, data) => {
       const ref = `trace_${++seq}`
       const bytes = Buffer.isBuffer(data) ? data : Buffer.from(data, 'utf8')
-      db.run('INSERT INTO traces (ref, engagement_id, kind, data, ts) VALUES (?, ?, ?, ?, ?)', [
+      const path = join(tracesDir, ref)
+      writeFileSync(path, bytes)
+      db.run('INSERT INTO traces (id, engagement_id, kind, path, ts) VALUES (?, ?, ?, ?, ?)', [
         ref,
-        engagementId,
+        resolveEngagementId(),
         kind,
-        bytes,
+        path,
         Date.now()
       ])
       broadcast()

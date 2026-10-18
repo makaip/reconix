@@ -84,4 +84,32 @@ describe('createHistoryReader', () => {
     )
     expect(await history.query({ limit: 2 })).toHaveLength(2)
   })
+
+  it('includes approval decisions in the merged log', async () => {
+    const db = openDatabase()
+    await createAuditLogger(db).recordApproval({
+      approvalId: 'perm_1',
+      decision: 'approve',
+      actor: 'operator'
+    })
+
+    const history = createHistoryReader(db, fakeFindings([]))
+    const rows = (await history.query({})) as Array<Record<string, unknown>>
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({
+      type: 'approval',
+      id: 'perm_1',
+      decision: 'approve',
+      actor: 'operator'
+    })
+  })
+
+  it('filters to approvals by kind', async () => {
+    const db = openDatabase()
+    await createAuditLogger(db).recordApproval({ approvalId: 'perm_1', decision: 'deny' })
+
+    const history = createHistoryReader(db, fakeFindings([finding('finding_1', 1)]))
+    const rows = (await history.query({ kind: 'approval' })) as Array<{ type: string }>
+    expect(rows.map((r) => r.type)).toEqual(['approval'])
+  })
 })

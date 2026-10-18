@@ -6,6 +6,8 @@
 //   2. Every route lives under /api — bare paths like /health 404 (well,
 //      200-with-the-SPA-shell, which is worse: it *looks* like success).
 
+import { ThinkingStream } from './thinking'
+
 export interface OpenCodeConfig {
   baseUrl: string // http://127.0.0.1:<hostPort>
   password: string // printed by `opencode serve` on startup
@@ -20,6 +22,8 @@ export interface OpenCodeConfig {
    *  POST /api/session body — it always pins the model with a `{providerID,id}`
    *  object (note the field is `id`, not `modelID`). */
   model?: string
+  /** Wait for this MCP connection before admitting the session's first prompt. */
+  requiredMcpServer?: string
 }
 
 export interface RawEvent {
@@ -56,6 +60,8 @@ const PATHS = {
 // of silently mutating what the agent asked for.
 function toReply(decision: string): 'once' | 'always' | 'reject' {
   if (decision === 'approve') return 'once'
+  // "approve all of this type" → OpenCode auto-approves future same-type asks.
+  if (decision === 'approve_always') return 'always'
   return 'reject'
 }
 
@@ -70,6 +76,7 @@ export function parseModel(spec: string | undefined): { providerID: string; id: 
 }
 
 export class HttpOpenCodeTransport implements OpenCodeTransport {
+  private readonly thinking = new ThinkingStream()
   constructor(private readonly cfg: OpenCodeConfig) {}
 
   private headers(): Record<string, string> {
@@ -100,7 +107,24 @@ export class HttpOpenCodeTransport implements OpenCodeTransport {
     const r = await this.req(PATHS.session, { method: 'POST', body: JSON.stringify(payload) })
     if (!r.ok) throw new Error(`createSession failed: ${r.status}`)
     const { data } = (await r.json()) as { data: { id: string } }
+    if (this.cfg.requiredMcpServer) await this.waitForMcp(this.cfg.requiredMcpServer)
     return { id: data.id }
+  }
+
+  private async waitForMcp(name: string): Promise<void> {
+    const deadline = Date.now() + 10_000
+    while (Date.now() < deadline) {
+      const response = await this.req('/api/mcp', { signal: AbortSignal.timeout(3000) })
+      if (!response.ok) throw new Error(`MCP readiness check failed: ${response.status}`)
+      const { data } = await response.json() as {
+        data: { name: string; status: { status: string } }[]
+      }
+      const state = data.find((server) => server.name === name)?.status.status
+      if (state === 'connected') return
+      if (state === 'failed' || state === 'disabled') throw new Error(`Required MCP server ${name} is ${state}`)
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    }
+    throw new Error(`Required MCP server ${name} did not connect; no prompt was sent without browser tools`)
   }
 
   async sendMessage(sessionId: string, text: string): Promise<{ messageId: string }> {
@@ -124,7 +148,10 @@ export class HttpOpenCodeTransport implements OpenCodeTransport {
   }
 
   async abort(sessionId: string): Promise<void> {
-    await this.req(PATHS.interrupt(sessionId), { method: 'POST', body: '{}' })
+    const response = await this.req(PATHS.interrupt(sessionId), {
+      method: 'POST', body: '{}', signal: AbortSignal.timeout(5000)
+    })
+    if (!response.ok) throw new Error(`interrupt failed: ${response.status}`)
   }
 
   async *subscribe(signal: AbortSignal): AsyncIterable<RawEvent> {
@@ -151,7 +178,23 @@ export class HttpOpenCodeTransport implements OpenCodeTransport {
         try {
           // Real frame shape: { id, type, created?, location?, data }. We pass
           // the whole thing through — normalize.ts reads .type and .data.
-          yield JSON.parse(data) as RawEvent
+          const raw = JSON.parse(data) as RawEvent
+          if (this.cfg.model?.startsWith('vllm-orchestrator/')) {
+            const d = (raw.data ?? {}) as Record<string, unknown>
+            const session = typeof d.sessionID === 'string' ? d.sessionID : undefined
+            if (raw.type === 'session.text.delta' && typeof d.assistantMessageID === 'string' && typeof d.delta === 'string') {
+              for (const part of this.thinking.push(d.assistantMessageID, d.delta, session)) {
+                yield { ...raw, type: part.reasoning ? 'session.reasoning.delta' : 'session.text.delta', data: { ...d, delta: part.text } }
+              }
+              continue
+            }
+            if (raw.type.startsWith('session.execution.')) {
+              for (const part of this.thinking.finish(session, raw.type === 'session.execution.succeeded')) {
+                yield { type: part.reasoning ? 'session.reasoning.delta' : 'session.text.delta', data: { sessionID: session, assistantMessageID: part.message, delta: part.text } }
+              }
+            }
+          }
+          yield raw
         } catch {
           // ignore keep-alive / non-JSON frames
         }

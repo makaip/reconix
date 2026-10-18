@@ -7,10 +7,15 @@ dist/
 release/
 smoke-output/
 
-# Local CVE-Bench checkout, Docker state, transcripts and grader artifacts.
-# The harness is intentionally private: it may contain target credentials and
-# exploit evidence, and the upstream benchmark is not vendored into Reconix.
-test/cve-bench/
+# Keep CVE-Bench runtime artifacts private; track only the portable harness.
+test/cve-bench/*
+!test/cve-bench/README.md
+!test/cve-bench/compose.yml
+!test/cve-bench/challenge.env
+!test/cve-bench/metadata.yml
+!test/cve-bench/secrets-init.sh
+!test/cve-bench/pwn.sh
+!test/cve-bench/LICENSE
 
 # Python / uv
 .venv/

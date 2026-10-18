@@ -4,7 +4,7 @@
 // query_log/history reads back. Replaces InMemoryAuditLogger in the live bridge
 // (smoke.ts still uses the in-memory one for its isolated checks).
 import type { Database } from 'node-sqlite3-wasm'
-import type { AuditIntent, AuditLogger, AuditOutcome } from './mcp/audit'
+import type { AuditApproval, AuditIntent, AuditLogger, AuditOutcome } from './mcp/audit'
 
 /** Ids are `tc_<n>`; recover the sequence so restored ids never collide. */
 function callSeq(id: string): number {
@@ -40,6 +40,23 @@ export function createAuditLogger(db: Database): AuditLogger {
         'UPDATE tool_calls SET ok = ?, result_ref = ?, error = ?, finished_ts = ? WHERE id = ?',
         [outcome.ok ? 1 : 0, outcome.resultRef ?? null, outcome.error ?? null, Date.now(), toolCallId]
       )
+    },
+    recordApproval: async (approval: AuditApproval) => {
+      // INSERT OR REPLACE: a double-submit of the same approval id overwrites
+      // rather than throwing on the primary key — the relay de-dupes anyway, so
+      // this just keeps a stray second decision from failing the write.
+      db.run(
+        'INSERT OR REPLACE INTO approvals (id, tool_call_id, decision, edited_params_json, actor, ts) VALUES (?, ?, ?, ?, ?, ?)',
+        [
+          approval.approvalId,
+          approval.toolCallId ?? null,
+          approval.decision,
+          approval.editedParams === undefined ? null : JSON.stringify(approval.editedParams),
+          approval.actor ?? null,
+          Date.now()
+        ]
+      )
+      return approval.approvalId
     }
   }
 }

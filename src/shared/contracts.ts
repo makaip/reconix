@@ -1,7 +1,7 @@
 // Shared main-process contracts. Mirrors ARCHITECTURE.md §6 and API.md §1/§3.
 // Changing a type here is a §6 contract change — version it (CONTRACTS_VERSION).
 
-export const CONTRACTS_VERSION = '0.7.0'
+export const CONTRACTS_VERSION = '0.8.0'
 
 // ─── Risk tiers (API.md §3 / ARCHITECTURE §5.C) ───────────────────────────────
 // R read-only (auto) · P page-mutating, sandbox-only (auto)
@@ -28,6 +28,7 @@ export interface Policy {
   autoApprove: RiskTier[] // tiers that never raise a permission request
   redactCookies: boolean
   maxToolCallsPerTurn: number
+  maxReplayBatch: number // max variants per reconix_replay_batch call (sweep size cap)
 }
 
 // ─── Scope status (renderer-facing projection of §6.5) ────────────────────────
@@ -104,7 +105,10 @@ export type AgentEvent =
   | { kind: 'turn.done'; messageId: string }
   | { kind: 'error'; scope: 'session' | 'tool' | 'model'; message: string }
 
-export type ApprovalDecision = 'approve' | 'deny' | 'edit'
+// 'approve' authorizes this one call; 'approve_always' authorizes every future
+// call of the same (action, resource) type for the rest of the session (maps to
+// OpenCode's "always" reply — the server stops asking); 'deny' rejects this one.
+export type ApprovalDecision = 'approve' | 'approve_always' | 'deny' | 'edit'
 
 export interface ServerStatus {
   state: 'starting' | 'ready' | 'reconnecting' | 'down'
@@ -114,7 +118,16 @@ export interface ServerStatus {
 // Engine boot status — `opencode serve` + the MCP tool server coming up at
 // app launch, before any chat session exists. Distinct from ServerStatus
 // above (which tracks an active OpenCode session's connection state).
-export type EngineStatus = { status: 'starting' } | { status: 'ready' } | { status: 'error'; error: string }
+// 'starting' and 'error' are the one-time boot states of the LOCAL engine
+// (`opencode serve` + the MCP tool server). 'ready' and 'offline' are the live
+// state of the remote MODEL backend the orchestrator runs on, which can come
+// and go independently of boot: 'ready' = reachable, 'offline' = booted fine
+// but the model provider is not responding (recoverable; keeps retrying).
+export type EngineStatus =
+  | { status: 'starting' }
+  | { status: 'ready' }
+  | { status: 'offline'; error?: string }
+  | { status: 'error'; error: string }
 
 // ─── Error envelope (API.md §4) ───────────────────────────────────────────────
 export interface ErrorEnvelope {

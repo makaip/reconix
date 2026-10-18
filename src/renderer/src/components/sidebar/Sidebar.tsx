@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react'
 import plus from '../../assets/icons/plus.svg'
 import { useFindings } from '../../hooks/useFindings'
+import { useEngagement } from '../../hooks/useEngagement'
 import { useSitemap } from '../../hooks/useSitemap'
 import type { ResourceDragItem } from '../../lib/dragTypes'
 import { nextSelection, type SelectMods } from '../../lib/selection'
@@ -24,6 +25,8 @@ const toDragItem = (node: SitemapNode): ResourceDragItem => ({ url: node.id, lab
 function Sidebar({ style, onDragStart, onDragEnd, onOpenSource }: SidebarProps): JSX.Element {
   const sitemap = useSitemap()
   const findings = useFindings()
+  const engagement = useEngagement()
+  const [goalDraft, setGoalDraft] = useState('')
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [anchor, setAnchor] = useState<string | null>(null)
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
@@ -207,6 +210,47 @@ function Sidebar({ style, onDragStart, onDragEnd, onOpenSource }: SidebarProps):
           <p className="dt-empty">No findings yet.</p>
         ) : (
           findings.map((finding) => <FindingCard key={finding.id} finding={finding} />)
+        )}
+      </div>
+
+      <div className="sidebar__engagement">
+        <SectionHeader label="Engagement" count={engagement.current ? 1 : 0} />
+        {engagement.current ? (
+          <>
+            <p className="sidebar__engagement-status">
+              Running: <code>{engagement.current.id}</code>
+            </p>
+            <p className="sidebar__engagement-goal">{engagement.current.goal}</p>
+            <button type="button" className="sidebar__engagement-btn" onClick={() => void engagement.stop()}>
+              Stop engagement
+            </button>
+          </>
+        ) : (
+          <>
+            <input
+              type="text"
+              className="sidebar__engagement-input"
+              placeholder="Engagement goal…"
+              value={goalDraft}
+              onChange={(e) => setGoalDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && goalDraft.trim()) {
+                  void engagement.start(goalDraft.trim()).then(() => setGoalDraft(''))
+                }
+              }}
+            />
+            <button
+              type="button"
+              className="sidebar__engagement-btn"
+              disabled={!goalDraft.trim()}
+              onClick={() => {
+                if (!goalDraft.trim()) return
+                void engagement.start(goalDraft.trim()).then(() => setGoalDraft(''))
+              }}
+            >
+              Start engagement
+            </button>
+          </>
         )}
       </div>
 

@@ -29,8 +29,10 @@ export interface FindingsStore {
 }
 
 export interface FindingsStoreOptions {
-  /** Engagement these findings belong to; null when no scope is loaded. */
+  /** Static engagement id (legacy callers). Prefer `getEngagementId` for live runs. */
   engagementId?: string | null
+  /** Resolver for the current engagement id (live runs). */
+  getEngagementId?: () => string | null
 }
 
 const SEVERITIES: readonly FindingSeverity[] = ['critical', 'high', 'medium', 'low', 'info']
@@ -94,7 +96,9 @@ export function createFindingsStore(
   win: BrowserWindow,
   options: FindingsStoreOptions = {}
 ): FindingsStore {
-  const { engagementId = null } = options
+  const { engagementId = null, getEngagementId } = options
+  const resolveEngagementId = (): string | null =>
+    getEngagementId ? getEngagementId() : (engagementId ?? null)
 
   // Restore the id sequence so a restart continues it instead of colliding with
   // an existing PRIMARY KEY.
@@ -119,7 +123,7 @@ export function createFindingsStore(
       const id = `finding_${++seq}`
       db.run(
         'INSERT INTO findings (id, engagement_id, schema_json, evidence_ref, ts) VALUES (?, ?, ?, ?, ?)',
-        [id, engagementId, JSON.stringify(schema ?? null), evidenceRef, Date.now()]
+        [id, resolveEngagementId(), JSON.stringify(schema ?? null), evidenceRef, Date.now()]
       )
       broadcast()
       return id

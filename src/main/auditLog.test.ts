@@ -56,6 +56,44 @@ describe('createAuditLogger', () => {
     expect(row.engagement_id).toBeNull()
   })
 
+  it('appends approval decisions to the approvals table', async () => {
+    const db = openDatabase()
+    const audit = createAuditLogger(db)
+    const id = await audit.recordApproval({
+      approvalId: 'perm_1',
+      decision: 'approve',
+      actor: 'operator'
+    })
+
+    expect(id).toBe('perm_1')
+    const row = db.get('SELECT * FROM approvals WHERE id = ?', [id]) as Record<string, unknown>
+    expect(row).toMatchObject({
+      tool_call_id: null,
+      decision: 'approve',
+      edited_params_json: null,
+      actor: 'operator'
+    })
+    expect(row.ts).not.toBeNull()
+  })
+
+  it('records an edit decision with its params', async () => {
+    const db = openDatabase()
+    const audit = createAuditLogger(db)
+    await audit.recordApproval({
+      approvalId: 'perm_2',
+      toolCallId: 'tc_9',
+      decision: 'edit',
+      editedParams: { url: 'http://x/' }
+    })
+
+    const row = db.get('SELECT tool_call_id, edited_params_json FROM approvals') as Record<
+      string,
+      unknown
+    >
+    expect(row.tool_call_id).toBe('tc_9')
+    expect(JSON.parse(String(row.edited_params_json))).toEqual({ url: 'http://x/' })
+  })
+
   it('continues the id sequence across restarts', async () => {
     const file = tempFile()
     const firstDb = openDatabase(file)

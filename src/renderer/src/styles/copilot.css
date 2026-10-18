@@ -21,6 +21,36 @@
   min-width: 0;
 }
 
+/* Ambient model-backend indicator in the header. Driven by EngineStatus:
+   green = online, amber = backend offline, red = boot failure, grey/pulsing =
+   still starting. */
+.copilot__engine-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--color-text-faint);
+}
+
+.copilot__engine-dot--ready {
+  background: var(--color-success);
+  box-shadow: 0 0 0 3px rgba(79, 178, 134, 0.14);
+}
+
+.copilot__engine-dot--offline {
+  background: var(--color-warning, #e0a53f);
+  box-shadow: 0 0 0 3px rgba(224, 165, 63, 0.16);
+}
+
+.copilot__engine-dot--error {
+  background: var(--color-danger, #e5484d);
+  box-shadow: 0 0 0 3px rgba(229, 72, 77, 0.16);
+}
+
+.copilot__engine-dot--starting {
+  animation: browser-state-pulse 1.2s ease-in-out infinite;
+}
+
 .copilot__browser-state {
   display: inline-flex;
   flex: none;
@@ -1040,6 +1070,7 @@
 
 @media (prefers-reduced-motion: reduce) {
   .copilot__browser-state > span,
+  .copilot__engine-dot--starting,
   .thinking__dots span {
     animation: none;
     opacity: 0.6;

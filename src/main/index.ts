@@ -238,10 +238,8 @@ function createWindow(): void {
   ipcMain.handle('proxy:get-status', (event) =>
     event.sender === mainWindow.webContents ? proxyStatus() : null
   )
-  ipcMain.removeHandler('engagement:get')
-  ipcMain.handle('engagement:get', (event) =>
-    event.sender === mainWindow.webContents ? (engagementScope?.engagementId ?? null) : null
-  )
+  // engagement:get is owned by the engagement store (src/main/engagements.ts),
+  // which returns the active run's id (falling back to the scope.json id).
   // Resolve the URL at authorization time: a WebContents can navigate without
   // changing its tab id, so a URL captured by onActiveChanged would be stale.
   const activeOriginScope = createActiveOriginScopeChecker(() => {
@@ -284,14 +282,19 @@ app.whenReady().then(async () => {
   createWindow()
 
   app.on('activate', () => {
+    // While shutting down (e.g. the last tab just closed), don't reopen a
+    // window — the app is on its way out.
+    if (shuttingDown) return
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
 })
 
+// Close the app when every window is gone on every platform, including macOS:
+// this app's content lives in tabs, so an empty window means "done". (The last
+// tab's close() also calls app.quit() directly to kick off teardown promptly.)
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
-    app.quit()
-  }
+  if (shuttingDown) return
+  app.quit()
 })
 
 app.on('before-quit', (event) => {

@@ -197,9 +197,11 @@ export function createTabManager(win: BrowserWindow, hooks: TabHooks): TabManage
     tab.view.webContents.close()
     hooks.onTabClosed(id)
 
-    // closing the last tab closes the program (all platforms, including macOS)
-    if (order.length === 0) app.quit()
-    else if (activeId === id) activate(order[Math.min(index, order.length - 1)])
+    // closing the last tab closes the program on every platform
+    if (order.length === 0) {
+      if (!win.isDestroyed()) win.close()
+      app.quit()
+    } else if (activeId === id) activate(order[Math.min(index, order.length - 1)])
     else emitState()
   }
 
