@@ -2,12 +2,16 @@ import navLeft from '../../assets/icons/nav-left.svg'
 import navReload from '../../assets/icons/nav-reload.svg'
 import navRight from '../../assets/icons/nav-right.svg'
 import toolbarChat from '../../assets/icons/toolbar-chat.svg'
+import toolbarSettings from '../../assets/icons/toolbar-settings.svg'
+import toolbarSidebar from '../../assets/icons/toolbar-sidebar.svg'
 import UrlBar from './UrlBar'
 
 type ToolbarProps = {
   url: string
   canGoBack: boolean
   canGoForward: boolean
+  sidebarOpen: boolean
+  onToggleSidebar: () => void
   copilotOpen: boolean
   onToggleCopilot: () => void
   /** True while the Copilot engine is still booting — navigation is
@@ -15,6 +19,7 @@ type ToolbarProps = {
    *  engine's ready, so disable the controls rather than let the user
    *  think a click did nothing. */
   navDisabled?: boolean
+  onOpenSettings: () => void
 }
 
 type NavButtonProps = {
@@ -37,14 +42,28 @@ function Toolbar({
   url,
   canGoBack,
   canGoForward,
+  sidebarOpen,
+  onToggleSidebar,
   copilotOpen,
   onToggleCopilot,
-  navDisabled
+  navDisabled,
+  onOpenSettings
 }: ToolbarProps): JSX.Element {
+  const settingsHint = window.reconix.platform === 'darwin' ? '⌘,' : 'Ctrl+,'
   const { target } = window.reconix
 
   return (
     <div className="toolbar">
+      <button
+        type="button"
+        className="toolbar-button"
+        aria-label="Toggle sitemap"
+        title="Toggle sitemap"
+        aria-pressed={sidebarOpen}
+        onClick={onToggleSidebar}
+      >
+        <img src={toolbarSidebar} width={14} height={14} alt="" />
+      </button>
       {/* the design only draws the left arrow enabled and the right one disabled, so each state mirrors one of them */}
       <NavButton
         label="Back"
@@ -72,6 +91,15 @@ function Toolbar({
         Recorder
       </button>
       <span className="toolbar__divider" />
+      <button
+        type="button"
+        className="toolbar-button"
+        aria-label="Settings"
+        title={`Settings (${settingsHint})`}
+        onClick={onOpenSettings}
+      >
+        <img src={toolbarSettings} width={14} height={14} alt="" />
+      </button>
       <button
         type="button"
         className="toolbar-button"

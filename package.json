@@ -1,5 +1,6 @@
 {
   "name": "reconix",
+  "productName": "Reconix",
   "version": "0.0.1",
   "description": "AI-driven penetration testing browser",
   "main": "./out/main/index.cjs",
@@ -39,6 +40,8 @@
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.4",
+    "acorn": "^8.19.0",
+    "astring": "^1.9.0",
     "electron": "^33.2.1",
     "electron-builder": "^26.15.3",
     "electron-vite": "^2.3.0",

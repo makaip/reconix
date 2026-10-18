@@ -8,6 +8,7 @@
 // tool (§5.E, §10).
 
 import type { CapabilityTool, ValidationResult } from '../shared/tools'
+import { arrOf, enumOf, num, obj, str } from './schema'
 
 const MAX_BODY_LENGTH = 5_000_000
 
@@ -209,6 +210,25 @@ export const detectSecretsTool: CapabilityTool<DetectSecretsInput, DetectSecrets
   description:
     'Regex-scans a response body string for common secret/token shapes (AWS/Google/Slack/GitHub keys, JWTs, private keys, bearer/basic auth, credential assignments). Returns redacted hits with offsets and confidence. Pure string analysis.',
   riskTier: 'read-only',
+  inputSchema: obj({ body: str('The response body string to scan for secret/token shapes.') }, ['body']),
+  outputSchema: obj(
+    {
+      hits: arrOf(
+        obj(
+          {
+            type: str('Shape label, e.g. aws-access-key-id, jwt, private-key.'),
+            redacted: str('Matched secret REDACTED to its first/last 4 chars.'),
+            offset: num('Offset of the secret within body.'),
+            confidence: enumOf(['low', 'medium', 'high'], 'How strongly the shape implies a real secret.')
+          },
+          ['type', 'redacted', 'offset', 'confidence']
+        ),
+        'Redacted secret hits.'
+      ),
+      count: num('Number of hits.')
+    },
+    ['hits', 'count']
+  ),
   validateInput: validate,
   handler: detect
 }

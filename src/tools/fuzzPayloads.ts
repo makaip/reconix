@@ -16,6 +16,7 @@ import type {
   GenFuzzPayloadsOutput,
   ValidationResult
 } from '../shared/tools'
+import { arrOf, enumOf, obj, str } from './schema'
 
 const VALID_CORPUS: readonly FuzzCorpus[] = [
   'xss',
@@ -182,6 +183,15 @@ export const genFuzzPayloadsTool: CapabilityTool<GenFuzzPayloadsInput, GenFuzzPa
   description:
     'Generates fuzz payload sets (injection corpora, encoding variants, boundary values) as data. Pure compute; never sends anything.',
   riskTier: 'read-only',
+  inputSchema: obj(
+    {
+      corpus: arrOf(enumOf(VALID_CORPUS, 'Injection corpora to emit payloads for.'), 'Corpora to include.'),
+      encodings: arrOf(enumOf(VALID_ENCODINGS, 'Encoding transforms to apply to each payload.'), 'Encodings to apply.'),
+      boundaries: arrOf(enumOf(VALID_BOUNDARIES, 'Boundary/edge-value categories to emit.'), 'Boundary categories to include.')
+    },
+    ['corpus', 'encodings', 'boundaries']
+  ),
+  outputSchema: arrOf(str('A generated payload string.'), 'Generated payloads, in input order.'),
   validateInput: validate,
   handler: generate
 }

@@ -12,6 +12,8 @@ type UseResizableOptions = {
   invert?: boolean
   /** Remember the size in localStorage under this key, so it survives remounts and restarts. */
   storageKey?: string
+  /** Called when the panel is dragged well past `min`, so the caller can hide it outright. */
+  onCollapse?: () => void
 }
 
 export type Resizable = {
@@ -39,7 +41,8 @@ export function useResizable({
   min,
   max,
   invert = false,
-  storageKey
+  storageKey,
+  onCollapse
 }: UseResizableOptions): Resizable {
   const [size, setSize] = useState(() => readSize(storageKey, initial, min, max))
   const [dragging, setDragging] = useState(false)
@@ -57,10 +60,19 @@ export function useResizable({
       const onMove = (moveEvent: PointerEvent): void => {
         const pos = axis === 'x' ? moveEvent.clientX : moveEvent.clientY
         const delta = (pos - startPos.current) * (invert ? -1 : 1)
-        latest = Math.min(max, Math.max(min, startSize.current + delta))
+        const raw = startSize.current + delta
+        if (onCollapse && raw < min / 2) {
+          // keep the pre-drag size so reopening restores it
+          latest = startSize.current
+          setSize(latest)
+          onUp()
+          onCollapse()
+          return
+        }
+        latest = Math.min(max, Math.max(min, raw))
         setSize(latest)
       }
-      const onUp = (): void => {
+      function onUp(): void {
         setDragging(false)
         if (storageKey) {
           try {
@@ -75,7 +87,7 @@ export function useResizable({
       window.addEventListener('pointermove', onMove)
       window.addEventListener('pointerup', onUp)
     },
-    [axis, invert, max, min, size, storageKey]
+    [axis, invert, max, min, onCollapse, size, storageKey]
   )
 
   return { size, dragging, onHandlePointerDown }

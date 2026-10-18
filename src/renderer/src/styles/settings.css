@@ -1,0 +1,106 @@
+.settings__overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.5);
+}
+
+.settings__dialog {
+  width: 420px;
+  max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 64px);
+  display: flex;
+  flex-direction: column;
+  background: var(--color-bg-panel);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+}
+
+.settings__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: var(--color-bg-bar);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.settings__title {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.settings__close {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  font-size: 18px;
+  line-height: 1;
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+
+.settings__close:hover {
+  background: var(--color-hover);
+  color: var(--color-text);
+}
+
+.settings__body {
+  padding: 8px 14px 14px;
+  overflow-y: auto;
+}
+
+.settings__section-title {
+  margin: 12px 0 6px;
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-text-faint);
+}
+
+.settings__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 8px 0;
+  cursor: pointer;
+}
+
+.settings__row + .settings__row {
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+.settings__row-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.settings__row-label {
+  color: var(--color-text);
+}
+
+.settings__row-hint {
+  font-size: var(--text-2xs);
+  color: var(--color-text-faint);
+}
+
+.settings__row input[type='checkbox'] {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  accent-color: var(--color-accent);
+  cursor: pointer;
+}

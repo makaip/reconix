@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react'
 import CopilotPanel from './components/copilot/CopilotPanel'
 import DevToolsPanel from './components/devtools/DevToolsPanel'
+import SettingsModal from './components/SettingsModal'
 import Sidebar from './components/sidebar/Sidebar'
+import Splash from './components/Splash'
 import ViewSlot from './components/ViewSlot'
 import EngineStatusBanner from './components/chrome/EngineStatusBanner'
 import ResizeHandle from './components/chrome/ResizeHandle'
@@ -12,6 +14,7 @@ import { useCopilot } from './hooks/useCopilot'
 import { useEngineStatus } from './hooks/useEngineStatus'
 import { useNetworkStats } from './hooks/useNetworkStats'
 import { useResizable } from './hooks/useResizable'
+import { useSettings } from './hooks/useSettings'
 import { useTabs } from './hooks/useTabs'
 
 const setTargetBounds = window.reconix.target.setBounds
@@ -21,17 +24,48 @@ function App(): JSX.Element {
   const engineStatus = useEngineStatus()
   const tabs = useTabs()
   const network = useNetworkStats()
+  const settings = useSettings()
   const [dragActive, setDragActive] = useState(false)
-  const [copilotOpen, setCopilotOpen] = useState(true)
   const [copilotTargetId, setCopilotTargetId] = useState<number | null>(null)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  // Launch-time panel visibility comes from settings; the user can still toggle at runtime.
+  const [copilotOpen, setCopilotOpen] = useState(settings.settings.openCopilotOnLaunch)
+  const [sidebarOpen, setSidebarOpen] = useState(settings.settings.openSidebarOnLaunch)
+
+  // Cmd+, on macOS, Ctrl+, elsewhere — the OS-standard "open preferences" shortcut.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      const mod = window.reconix.platform === 'darwin' ? e.metaKey : e.ctrlKey
+      if (mod && e.key === ',') {
+        e.preventDefault()
+        setSettingsOpen((open) => !open)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
   // Set when a sitemap file is double-clicked, so DevTools opens it in Sources. The counter
   // forces a re-open even when the same file is double-clicked twice in a row.
   const [openSource, setOpenSource] = useState<{ target: string; nonce: number } | null>(null)
 
   // Panel sizes are drag-resizable; see shell.css for the matching defaults these fall back to.
-  const sidebarResize = useResizable({ axis: 'x', initial: 240, min: 180, max: 480 })
+  // Dragging the sidebar edge far enough left collapses it; the toolbar button brings it back.
+  const sidebarResize = useResizable({
+    axis: 'x',
+    initial: 240,
+    min: 180,
+    max: 480,
+    onCollapse: () => setSidebarOpen(false)
+  })
   const copilotResize = useResizable({ axis: 'x', initial: 360, min: 280, max: 560, invert: true })
-  const devtoolsResize = useResizable({ axis: 'y', initial: 380, min: 160, max: 640, invert: true })
+  // DevTools opens at a quarter of the window height.
+  const devtoolsResize = useResizable({
+    axis: 'y',
+    initial: Math.round(window.innerHeight * 0.25),
+    min: 160,
+    max: 640,
+    invert: true
+  })
 
   const activeTab = tabs.tabs.find((tab) => tab.id === tabs.activeId)
   const copilotTargetTab = tabs.tabs.find((tab) => tab.id === copilotTargetId)
@@ -64,23 +98,30 @@ function App(): JSX.Element {
         url={activeTab?.url ?? ''}
         canGoBack={tabs.canGoBack}
         canGoForward={tabs.canGoForward}
+        sidebarOpen={sidebarOpen}
+        onToggleSidebar={() => setSidebarOpen((open) => !open)}
         copilotOpen={copilotOpen}
         onToggleCopilot={() => setCopilotOpen((open) => !open)}
         navDisabled={engineStatus.status === 'starting'}
+        onOpenSettings={() => setSettingsOpen(true)}
       />
 
       <div className="shell">
-        <Sidebar
-          style={{ flexBasis: sidebarResize.size }}
-          onDragStart={() => setDragActive(true)}
-          onDragEnd={() => setDragActive(false)}
-          onOpenSource={(target) => setOpenSource((prev) => ({ target, nonce: (prev?.nonce ?? 0) + 1 }))}
-        />
-        <ResizeHandle
-          orientation="vertical"
-          dragging={sidebarResize.dragging}
-          onPointerDown={sidebarResize.onHandlePointerDown}
-        />
+        {sidebarOpen && (
+          <>
+            <Sidebar
+              style={{ flexBasis: sidebarResize.size }}
+              onDragStart={() => setDragActive(true)}
+              onDragEnd={() => setDragActive(false)}
+              onOpenSource={(target) => setOpenSource((prev) => ({ target, nonce: (prev?.nonce ?? 0) + 1 }))}
+            />
+            <ResizeHandle
+              orientation="vertical"
+              dragging={sidebarResize.dragging}
+              onPointerDown={sidebarResize.onHandlePointerDown}
+            />
+          </>
+        )}
 
         <main className="center">
           <section className="viewport" aria-label="Target page">
@@ -89,6 +130,7 @@ function App(): JSX.Element {
               onBoundsChange={setTargetBounds}
               agentActive={copilot.browserActive && tabs.activeId === copilotTargetId}
             />
+            {activeTab && !activeTab.url && <Splash />}
           </section>
           <ResizeHandle
             orientation="horizontal"
@@ -133,6 +175,8 @@ function App(): JSX.Element {
       </div>
 
       <StatusBar requests={network.total} />
+
+      {settingsOpen && <SettingsModal settings={settings} onClose={() => setSettingsOpen(false)} />}
     </div>
   )
 }

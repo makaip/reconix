@@ -648,9 +648,11 @@
 .drop-zone {
   flex: none;
   display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 12px 12px 36px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 72px;
+  padding: 12px;
   border: 1px dashed var(--color-border);
   border-radius: var(--radius-sm);
 }
@@ -663,11 +665,6 @@
 .drop-zone__title {
   margin: 0;
   font-weight: 600;
-}
-
-.drop-zone__hint {
-  margin: 0;
-  color: var(--color-text-muted);
 }
 
 .composer {

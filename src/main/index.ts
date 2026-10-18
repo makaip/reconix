@@ -183,7 +183,8 @@ app.whenReady().then(async () => {
   }
 
   app.on('browser-window-created', (_, window) => {
-    optimizer.watchWindowShortcuts(window)
+    // zoom: true stops the toolkit from swallowing Cmd/Ctrl+Minus, which broke zoom out
+    optimizer.watchWindowShortcuts(window, { escToCloseWindow: false, zoom: true })
   })
 
   ipcMain.handle('ping', () => 'pong')

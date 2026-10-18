@@ -12,8 +12,13 @@ import { analyzeCookieFlagsTool } from './analyzeCookieFlags'
 import { detectSecretsTool } from './detectSecrets'
 import { mineParamsTool } from './mineParams'
 import { inspectTlsCertTool } from './inspectTlsCert'
+import { deobfuscateStaticTool } from './deobfuscateStatic'
+import { deobfuscateDynamicTool } from './deobfuscateDynamic'
 
 export { createMockToolRegistry } from './registry'
+export { fromCapabilityTool, type ToolDescriptor } from './opencode/descriptor'
+export { capabilityLoaders, type CapabilityToolLoader, type ErasedCapabilityTool } from './opencode/catalog'
+export type { JsonSchema } from './schema'
 export { breakRegexTool } from './breakRegex'
 export { detectEncodingTool } from './detectEncoding'
 export { diffResponsesTool } from './diffResponses'
@@ -23,6 +28,21 @@ export { analyzeCookieFlagsTool } from './analyzeCookieFlags'
 export { detectSecretsTool } from './detectSecrets'
 export { mineParamsTool } from './mineParams'
 export { inspectTlsCertTool } from './inspectTlsCert'
+export { deobfuscateStaticTool } from './deobfuscateStatic'
+export { deobfuscateDynamicTool } from './deobfuscateDynamic'
+export {
+  normalizeHarnessDump,
+  validateDynamicTrace,
+  classifyRecord,
+  TRACE_SCHEMA_VERSION,
+  DYNAMIC_HOOK_KINDS
+} from './deobfuscateTrace'
+export type {
+  DynamicTrace,
+  DynamicTraceRecord,
+  DynamicHookKind,
+  DynamicRecordClass
+} from './deobfuscateTrace'
 
 export function registerCustomTools(registry: ToolRegistry): void {
   registry.register(genFuzzPayloadsTool)
@@ -34,4 +54,6 @@ export function registerCustomTools(registry: ToolRegistry): void {
   registry.register(detectSecretsTool)
   registry.register(mineParamsTool)
   registry.register(inspectTlsCertTool)
+  registry.register(deobfuscateStaticTool)
+  registry.register(deobfuscateDynamicTool)
 }

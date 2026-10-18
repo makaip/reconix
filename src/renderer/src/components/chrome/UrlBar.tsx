@@ -42,7 +42,12 @@ function UrlBar({ url, disabled }: { url: string; disabled?: boolean }): JSX.Ele
     setEditing(false)
     if (!text || text === url) return
     const result = await window.reconix.target.navigate(text)
-    if (result && !result.ok) setError(result.error)
+    if (result && !result.ok) {
+      // reopen with the typed text so it can be corrected in place
+      setDraft(text)
+      setError(result.error)
+      setEditing(true)
+    }
   }
 
   return (
@@ -58,7 +63,10 @@ function UrlBar({ url, disabled }: { url: string; disabled?: boolean }): JSX.Ele
           spellCheck={false}
           aria-label="Address"
           value={draft}
-          onChange={(event) => setDraft(event.target.value)}
+          onChange={(event) => {
+            setDraft(event.target.value)
+            setError(null)
+          }}
           onBlur={() => setEditing(false)}
           onKeyDown={(event) => {
             if (event.key === 'Enter') void submit()
@@ -81,12 +89,18 @@ function UrlBar({ url, disabled }: { url: string; disabled?: boolean }): JSX.Ele
               <span className="url-bar__muted">{parts.rest}</span>
             </>
           ) : (
-            <span className="url-bar__muted">Search or enter address</span>
+            <span className="url-bar__muted">Enter address</span>
           )}
         </button>
       )}
 
-      {parts && scope.hosts.includes(parts.hostname) && <span className="url-bar__scope">In scope</span>}
+      {error && (
+        <span className="url-bar__error" role="alert">
+          {error}
+        </span>
+      )}
+
+      {!error && parts && scope.hosts.includes(parts.hostname) && <span className="url-bar__scope">In scope</span>}
     </div>
   )
 }

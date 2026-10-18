@@ -79,6 +79,9 @@ try {
 
   check('chrome renders tab bar, toolbar and status bar', (await shell.locator('.tabbar, .toolbar, .statusbar').count()) === 3)
 
+  await shell.locator('.splash').waitFor({ timeout: 15_000 })
+  check('blank tab shows the splash screen', true)
+
   const result = await shell.evaluate((target) => window.reconix.target.navigate(target), url)
   check('navigates the active tab', result.ok === true, JSON.stringify(result))
 
@@ -88,6 +91,9 @@ try {
     { timeout: 15_000 }
   )
   check('tab picks up the page title', true)
+
+  await shell.locator('.splash').waitFor({ state: 'detached', timeout: 15_000 })
+  check('splash screen hides once a page loads', true)
 
   await shell.locator('.dt-row', { hasText: '<main' }).first().waitFor({ timeout: 15_000 })
   check('DevTools shows the page DOM', true)

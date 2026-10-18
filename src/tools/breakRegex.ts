@@ -19,6 +19,7 @@ import type {
   RedosCandidate,
   ValidationResult
 } from '../shared/tools'
+import { arrOf, bool, obj, str } from './schema'
 
 /** Hard cap on pattern length we will even look at — bounds every scan below. */
 const MAX_PATTERN_LENGTH = 2000
@@ -167,6 +168,24 @@ export const breakRegexTool: CapabilityTool<BreakRegexInput, BreakRegexOutput> =
   description:
     'Statically analyzes a regex pattern string for catastrophic-backtracking (ReDoS) structures and emits candidate attack strings. Never executes the pattern itself.',
   riskTier: 'read-only',
+  inputSchema: obj({ pattern: str('The regex pattern to analyze for ReDoS structures.') }, ['pattern']),
+  outputSchema: obj(
+    {
+      vulnerable: bool('Whether a catastrophic-backtracking structure was detected.'),
+      redosCandidates: arrOf(
+        obj(
+          {
+            candidate: str('The attack string constructed to probe the flagged structure.'),
+            reason: str('Why this structure is suspected catastrophic.'),
+            matchedStructure: str('The suspicious substring of the pattern.')
+          },
+          ['candidate', 'reason', 'matchedStructure']
+        ),
+        'Candidate attack strings (data only; never executed here).'
+      )
+    },
+    ['vulnerable', 'redosCandidates']
+  ),
   validateInput: validate,
   handler: analyze
 }
