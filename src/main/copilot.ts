@@ -39,10 +39,10 @@
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { readFileSync } from 'node:fs'
-import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
+import { access, mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import { setQuestionSender } from './questionBridge'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import type { BrowserWindow, WebContents } from 'electron'
 import { app, ipcMain } from 'electron'
 import type {
@@ -596,6 +596,31 @@ async function syncGlobalOpenCodeConfig(): Promise<void> {
     // config as-is rather than failing startup on a malformed user file.
     existingConfig = undefined
   }
+  // Discover an AGENTS.md at the repo root and hand it to OpenCode's engine as
+  // project guidance. The global config lives in ~/.config/opencode, so the
+  // entry has to be an absolute path — a bare `AGENTS.md` would resolve against
+  // that global dir and miss the file. Any `instructions` the repo
+  // opencode.json already declares is preserved (merged, deduped). Never fatal:
+  // a missing file just means there is nothing to add.
+  try {
+    const agentsMd = join(repoRoot, 'AGENTS.md')
+    await access(agentsMd)
+    const declared = Array.isArray(repoConfig.instructions) ? repoConfig.instructions : []
+    const alreadyListed = declared.some(
+      (entry) =>
+        entry === agentsMd ||
+        entry === 'AGENTS.md' ||
+        (typeof entry === 'string' && basename(entry) === 'AGENTS.md')
+    )
+    if (!alreadyListed) repoConfig.instructions = [...declared, agentsMd]
+  } catch (err) {
+    // ENOENT is the normal "no AGENTS.md here" case — only warn on the
+    // unexpected (unreadable file, bad permissions).
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+      console.warn('[opencode] AGENTS.md discovery skipped:', err)
+    }
+  }
+
   await writeFile(globalConfigPath, `${JSON.stringify(mergeConfig(repoConfig, existingConfig), null, 2)}\n`)
 
   const agentsDir = join(repoRoot, '.opencode', 'agents')
