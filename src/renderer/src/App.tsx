@@ -1,11 +1,6 @@
-import { useEffect, useState } from 'react'
-import CopilotPanel from './components/copilot/CopilotPanel'
-import DevToolsPanel from './components/devtools/DevToolsPanel'
-import SettingsModal from './components/SettingsModal'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import Sidebar from './components/sidebar/Sidebar'
 import Splash from './components/Splash'
-import TracesPanel from './components/TracesPanel'
-import UsagePanel from './components/UsagePanel'
 import ViewSlot from './components/ViewSlot'
 import EngineStatusBanner from './components/chrome/EngineStatusBanner'
 import ResizeHandle from './components/chrome/ResizeHandle'
@@ -19,6 +14,16 @@ import { useResizable } from './hooks/useResizable'
 import { useSettings } from './hooks/useSettings'
 import { useTabs } from './hooks/useTabs'
 import { useUsage } from './hooks/useUsage'
+
+// Heavy panels are code-split so the initial bundle stays small; each loads on
+// first use. The fallbacks are deliberately minimal to avoid layout shift.
+const CopilotPanel = lazy(() => import('./components/copilot/CopilotPanel'))
+const DevToolsPanel = lazy(() => import('./components/devtools/DevToolsPanel'))
+const SettingsModal = lazy(() => import('./components/SettingsModal'))
+const TracesPanel = lazy(() => import('./components/TracesPanel'))
+const UsagePanel = lazy(() => import('./components/UsagePanel'))
+
+const PanelFallback = (): JSX.Element => <div className="dock__panel" aria-busy="true" />
 
 const setTargetBounds = window.reconix.target.setBounds
 
@@ -167,14 +172,16 @@ function App(): JSX.Element {
             dragging={devtoolsResize.dragging}
             onPointerDown={devtoolsResize.onHandlePointerDown}
           />
-          <DevToolsPanel
-            activeTabId={tabs.activeId}
-            targetUrl={activeTab?.url ?? ''}
-            onDragStart={() => setDragActive(true)}
-            onDragEnd={() => setDragActive(false)}
-            openSource={openSource}
-            style={{ flexBasis: devtoolsResize.size }}
-          />
+          <Suspense fallback={<PanelFallback />}>
+            <DevToolsPanel
+              activeTabId={tabs.activeId}
+              targetUrl={activeTab?.url ?? ''}
+              onDragStart={() => setDragActive(true)}
+              onDragEnd={() => setDragActive(false)}
+              openSource={openSource}
+              style={{ flexBasis: devtoolsResize.size }}
+            />
+          </Suspense>
         </main>
 
         {copilotOpen && !dockOpen && (
@@ -184,22 +191,24 @@ function App(): JSX.Element {
               dragging={copilotResize.dragging}
               onPointerDown={copilotResize.onHandlePointerDown}
             />
-            <CopilotPanel
-              copilot={copilot}
-              dragActive={dragActive}
-              onDrop={() => setDragActive(false)}
-              onClose={() => setCopilotOpen(false)}
-              requestCount={copilotRequestCount}
-              activeTab={copilotTargetTab}
-              viewedTab={activeTab}
-              onUseViewedTab={() => {
-                if (!activeTab) return
-                void window.reconix.copilot.setTargetTab(activeTab.id).then((ok) => {
-                  if (ok) setCopilotTargetId(activeTab.id)
-                })
-              }}
-              style={{ flexBasis: copilotResize.size }}
-            />
+            <Suspense fallback={<PanelFallback />}>
+              <CopilotPanel
+                copilot={copilot}
+                dragActive={dragActive}
+                onDrop={() => setDragActive(false)}
+                onClose={() => setCopilotOpen(false)}
+                requestCount={copilotRequestCount}
+                activeTab={copilotTargetTab}
+                viewedTab={activeTab}
+                onUseViewedTab={() => {
+                  if (!activeTab) return
+                  void window.reconix.copilot.setTargetTab(activeTab.id).then((ok) => {
+                    if (ok) setCopilotTargetId(activeTab.id)
+                  })
+                }}
+                style={{ flexBasis: copilotResize.size }}
+              />
+            </Suspense>
           </>
         )}
 
@@ -211,8 +220,10 @@ function App(): JSX.Element {
               onPointerDown={dockResize.onHandlePointerDown}
             />
             <aside className="dock" style={{ flexBasis: dockResize.size }}>
-              {usageOpen && <UsagePanel usage={usage} onClose={() => setUsageOpen(false)} />}
-              {tracesOpen && <TracesPanel onClose={() => setTracesOpen(false)} />}
+              <Suspense fallback={<PanelFallback />}>
+                {usageOpen && <UsagePanel usage={usage} onClose={() => setUsageOpen(false)} />}
+                {tracesOpen && <TracesPanel onClose={() => setTracesOpen(false)} />}
+              </Suspense>
             </aside>
           </>
         )}
@@ -233,7 +244,11 @@ function App(): JSX.Element {
         }}
       />
 
-      {settingsOpen && <SettingsModal settings={settings} onClose={() => setSettingsOpen(false)} />}
+      {settingsOpen && (
+        <Suspense fallback={null}>
+          <SettingsModal settings={settings} onClose={() => setSettingsOpen(false)} />
+        </Suspense>
+      )}
     </div>
   )
 }
