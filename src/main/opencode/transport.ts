@@ -112,19 +112,36 @@ export class HttpOpenCodeTransport implements OpenCodeTransport {
   }
 
   private async waitForMcp(name: string): Promise<void> {
-    const deadline = Date.now() + 10_000
+    // OpenCode connects to MCP servers asynchronously after the session is
+    // created; /api/mcp can be slow or empty for the first few seconds. A single
+    // transient timeout used to abort the whole warm-up, so retry on
+    // network/timeout errors instead of failing the session.
+    const deadline = Date.now() + 30_000
+    let lastErr: unknown
     while (Date.now() < deadline) {
-      const response = await this.req('/api/mcp', { signal: AbortSignal.timeout(3000) })
-      if (!response.ok) throw new Error(`MCP readiness check failed: ${response.status}`)
-      const { data } = await response.json() as {
-        data: { name: string; status: { status: string } }[]
+      let terminal: Error | null = null
+      try {
+        const response = await this.req('/api/mcp', { signal: AbortSignal.timeout(8000) })
+        if (!response.ok) throw new Error(`MCP readiness check failed: ${response.status}`)
+        const { data } = await response.json() as {
+          data: { name: string; status: { status: string; error?: string } }[]
+        }
+        const entry = data.find((server) => server.name === name)
+        const state = entry?.status.status
+        if (state === 'connected') return
+        if (state === 'failed' || state === 'disabled') {
+          terminal = new Error(`Required MCP server ${name} is ${state}${entry?.status.error ? ': ' + entry.status.error : ''}`)
+        }
+        // absent or still pending — keep polling
+      } catch (e) {
+        // Transient network/timeout errors are expected during cold start.
+        lastErr = e
+        console.error('[waitForMcp]', (e as Error)?.name, (e as Error)?.message)
       }
-      const state = data.find((server) => server.name === name)?.status.status
-      if (state === 'connected') return
-      if (state === 'failed' || state === 'disabled') throw new Error(`Required MCP server ${name} is ${state}`)
+      if (terminal) throw terminal
       await new Promise((resolve) => setTimeout(resolve, 100))
     }
-    throw new Error(`Required MCP server ${name} did not connect; no prompt was sent without browser tools`)
+    throw new Error(`Required MCP server ${name} did not connect within 30s: ${lastErr instanceof Error ? lastErr.message : lastErr}`)
   }
 
   async sendMessage(sessionId: string, text: string): Promise<{ messageId: string }> {

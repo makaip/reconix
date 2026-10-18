@@ -939,7 +939,7 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
     try {
       const ok = await probeProvider()
       if (ok === null) return
-      if (engineStatus.status === 'starting' || engineStatus.status === 'error') return
+      if ((engineStatus as EngineStatus).status === 'starting' || (engineStatus as EngineStatus).status === 'error') return
       setEngineStatus(ok ? { status: 'ready' } : { status: 'offline', error: 'Model backend unreachable' })
     } finally {
       probing = false
