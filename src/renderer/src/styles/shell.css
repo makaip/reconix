@@ -113,6 +113,8 @@
   .viewport__slot.view-slot--agent-active {
     animation: none;
   }
+}
+
 /* splash screen, covering the page slot while no tabs are open */
 .splash {
   position: absolute;
