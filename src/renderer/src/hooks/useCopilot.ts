@@ -9,7 +9,16 @@ import { createThrottledWriter } from './throttledWriter'
 export type NodeRef = { nodeId: number; label: string; selector: string }
 
 /** A source/sitemap file being dragged into Copilot. */
-export type ResourceRef = { url: string; label: string; frameId?: string }
+export type ResourceRef = {
+  url: string
+  label: string
+  frameId?: string
+  // Eagerly captured at drag/drop time so the agent gets the bytes, not just a URL.
+  content?: string
+  contentTruncated?: boolean
+  contentType?: string
+  capturedAt?: number
+}
 
 /** A captured network request being dragged into Copilot (snapshot taken at drag time). */
 export type RequestRef = CapturedRequest & { label: string }
@@ -74,8 +83,8 @@ export type Copilot = {
   busy: boolean
   /** Attach DOM nodes (fetches outerHTML/styles for each); de-duped by selector. */
   attachNodes: (nodes: NodeRef[]) => Promise<void>
-  /** Attach source/sitemap files; de-duped by URL. */
-  attachResources: (resources: ResourceRef[]) => void
+  /** Attach source/sitemap files; de-duped by URL. Captures body content eagerly. */
+  attachResources: (resources: ResourceRef[]) => Promise<void>
   /** Attach captured network requests; de-duped by request id. */
   attachRequests: (requests: RequestRef[]) => void
   detach: (id: number) => void
@@ -420,15 +429,43 @@ export function useCopilot(): Copilot {
     }
   }, [])
 
-  const attachResources = useCallback((resources: ResourceRef[]) => {
-    setAttachments((current) => {
-      const next = [...current]
-      for (const resource of resources) {
-        if (next.some((a) => a.kind === 'resource' && a.url === resource.url)) continue
-        next.push({ kind: 'resource', id: nextId.current++, ...resource })
+  const attachResources = useCallback(async (resources: ResourceRef[]) => {
+    for (const resource of resources) {
+      // Eagerly capture body content so the agent gets the bytes, not just a URL.
+      let content: string | undefined
+      let contentTruncated = false
+      let contentType: string | undefined
+      if (resource.frameId) {
+        try {
+          const result = await window.reconix.devtools.getResourceContent({
+            frameId: resource.frameId,
+            url: resource.url
+          })
+          if (result && !result.binary && result.content) {
+            content = result.content
+            contentTruncated = result.truncated
+            contentType = undefined
+          }
+        } catch {
+          // Degrade to label-only on failure.
+        }
       }
-      return next
-    })
+      setAttachments((current) => {
+        if (current.some((a) => a.kind === 'resource' && a.url === resource.url)) return current
+        return [
+          ...current,
+          {
+            kind: 'resource',
+            id: nextId.current++,
+            ...resource,
+            content,
+            contentTruncated,
+            contentType,
+            capturedAt: Date.now()
+          }
+        ]
+      })
+    }
   }, [])
 
   const attachRequests = useCallback((requests: RequestRef[]) => {
@@ -461,7 +498,15 @@ export function useCopilot(): Copilot {
         {
           id: messageId,
           role: 'user',
-          context: [targetLabel, ...attachments.map((a) => a.label)].filter((label): label is string => Boolean(label)),
+          context: [
+            targetLabel,
+            ...attachments.map((a) => {
+              if (a.kind !== 'resource' || !a.content) return a.label
+              const preview = a.content.slice(0, 4000)
+              const suffix = a.contentTruncated ? '\n…[truncated; full body available via resource URL]' : ''
+              return `${a.label}\n\`\`\`\n${preview}${suffix}\n\`\`\``
+            })
+          ].filter((label): label is string => Boolean(label)),
           text,
           status: isQueued ? 'queued' : 'sent'
         }

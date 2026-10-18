@@ -410,7 +410,7 @@ function CopilotPanel({
           const resourceData = event.dataTransfer.getData(RESOURCE_DRAG_TYPE)
           if (nodeData) void attachNodes(readDragItems<NodeDragItem>(nodeData))
           const requestData = event.dataTransfer.getData(REQUEST_DRAG_TYPE)
-          if (resourceData) attachResources(readDragItems<ResourceDragItem>(resourceData))
+          if (resourceData) void attachResources(readDragItems<ResourceDragItem>(resourceData))
           if (requestData) attachRequests(readDragItems<RequestDragItem>(requestData))
           setOver(false)
           onDrop()
