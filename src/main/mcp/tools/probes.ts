@@ -322,10 +322,63 @@ const run_tool = defineTool<{ binary: string; args?: string[]; timeoutMs?: numbe
   }
 })
 
+// ── compare_roles ─────────────────────────────────────────────────────────────
+// Replay the same request with two different session tokens and report the
+// differences — the core primitive for IDOR/BAC detection.
+const compare_roles = defineTool<
+  { base: HttpRequestSpec; roleA: string; roleB: string; headerName?: string },
+  unknown
+>({
+  name: 'compare_roles',
+  description: 'Replay one request as two roles (different auth tokens) and diff the responses (IDOR/BAC).',
+  riskTier: 'M',
+  inputSchema: {
+    type: 'object',
+    required: ['base', 'roleA', 'roleB'],
+    properties: {
+      base: { type: 'object', required: ['url'], properties: { url: { type: 'string' }, method: { type: 'string' }, headers: { type: 'object' }, body: { type: 'string' } } },
+      roleA: { type: 'string', minLength: 1 },
+      roleB: { type: 'string', minLength: 1 },
+      headerName: { type: 'string' }
+    },
+    additionalProperties: false
+  },
+  outputSchema: { type: 'object' },
+  parse: (raw) => {
+    const headerName = optStr(raw, 'headerName') ?? 'Cookie'
+    return {
+      base: parseRequestSpec(raw, 'base'),
+      roleA: str(raw, 'roleA'),
+      roleB: str(raw, 'roleB'),
+      headerName
+    }
+  },
+  target: (i) => i.base.url,
+  execute: async (i, ctx) => {
+    const send = async (token: string) => {
+      const hn = i.headerName ?? 'Cookie'
+      const spec = { ...i.base, headers: { ...(i.base.headers ?? {}), [hn]: token } }
+      if (!ctx.scope.isInScope(spec.url)) throw new ToolExecError('target out of scope — not sent')
+      const r = await ctx.cdp.sendRequest(spec)
+      const ref = await ctx.traces.save('reqresp', JSON.stringify({ request: spec, response: r, role: token }))
+      return { status: r.status, statusText: r.statusText, bodyBytes: r.bodyBytes, durationMs: r.durationMs, bodyPreview: clampString(r.body, 200), bodyRef: ref }
+    }
+    const [a, b] = await Promise.all([send(i.roleA), send(i.roleB)])
+    return {
+      roleA: a,
+      roleB: b,
+      statusChanged: a.status !== b.status,
+      bodyBytesChanged: a.bodyBytes !== b.bodyBytes,
+      anomalous: a.status !== b.status || a.bodyBytes !== b.bodyBytes
+    }
+  }
+})
+
 export const probeTools: Tool[] = [
   submitForm as Tool,
   probe_reflection as Tool,
   vary_parameter as Tool,
+  compare_roles as Tool,
   run_tool as Tool
 ]
 
