@@ -38,7 +38,10 @@ export interface NetworkReader {
 }
 
 export interface ToolContext {
-  engagementId: EngagementId
+  /** The loaded engagement's id, or null when no scope.json is configured —
+   *  the tools still run against the active tab, but there's no engagement to
+   *  attribute to. */
+  engagementId: EngagementId | null
   scope: ScopeEnforcer
   policy: Policy
   cdp: CdpDriver

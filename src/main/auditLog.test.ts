@@ -47,6 +47,15 @@ describe('createAuditLogger', () => {
     expect(row.error).toBe('boom')
   })
 
+  it('stores a null engagement id when no scope is loaded', async () => {
+    const db = openDatabase()
+    const audit = createAuditLogger(db)
+    await audit.recordIntent({ engagementId: null, tool: 'navigate', params: {}, riskTier: 'R' })
+
+    const row = db.get('SELECT engagement_id FROM tool_calls') as Record<string, unknown>
+    expect(row.engagement_id).toBeNull()
+  })
+
   it('continues the id sequence across restarts', async () => {
     const file = tempFile()
     const firstDb = openDatabase(file)

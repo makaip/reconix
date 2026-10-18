@@ -5,7 +5,8 @@
 import type { EngagementId, RiskTier, ToolCallId } from '../../shared/contracts'
 
 export interface AuditIntent {
-  engagementId: EngagementId
+  /** Null when no engagement scope is loaded; the call is still logged. */
+  engagementId: EngagementId | null
   tool: string
   params: unknown
   target?: string

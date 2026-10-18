@@ -586,8 +586,9 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
   const scope = new ActiveTabScope(() => cdp.pageContext()?.url ?? null)
   const networkReader = new ActiveTabNetworkReader(getNetwork)
   // The §6.4 engagement store: one SQLite DB shared by findings, traces, and the
-  // tool-call audit log, so everything survives a restart. Findings also stay
-  // observable (record_finding broadcasts to the renderer's panel).
+  // tool-call audit log, so everything survives a restart. The engagement id is
+  // the real scope.json id (or null when none is loaded) — the same value the
+  // tool context and audit log attribute rows to, so nothing diverges.
   const db = openDatabase(join(app.getPath('userData'), 'reconix.db'))
   const engagementId = loadScopeConfig()?.engagementId ?? null
   const findingsStore = createFindingsStore(db, win, { engagementId })
@@ -725,7 +726,7 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
     if (mcpStarting) return mcpStarting
     mcpStarting = (async () => {
       const context: ToolContext = {
-        engagementId: 'eng_dev',
+        engagementId,
         scope,
         policy: POLICY,
         cdp,
