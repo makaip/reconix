@@ -94,32 +94,6 @@ const MAX_CODES = 4096
 const MAX_NOTES = 200
 const TRUNCATION_MARK = '\u2026'
 
-/** Kinds whose payload is generated source (as opposed to a decoded value). */
-export function isCodeBearing(kind: DynamicHookKind): boolean {
-  return (
-    kind === 'eval' ||
-    kind === 'function' ||
-    kind === 'document.write' ||
-    kind === 'document.writeln' ||
-    kind === 'setTimeout' ||
-    kind === 'setInterval'
-  )
-}
-
-/** Kinds that turn an encoded input into a decoded output. */
-export function isDecoder(kind: DynamicHookKind): boolean {
-  return (
-    kind === 'atob' ||
-    kind === 'btoa' ||
-    kind === 'unescape' ||
-    kind === 'escape' ||
-    kind === 'decodeURIComponent' ||
-    kind === 'encodeURIComponent' ||
-    kind === 'String.fromCharCode' ||
-    kind === 'String.fromCodePoint'
-  )
-}
-
 export function classifyRecord(record: DynamicTraceRecord): DynamicRecordClass {
   switch (record.kind) {
     case 'eval':

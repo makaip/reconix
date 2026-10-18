@@ -165,7 +165,7 @@ export type Replayer = (raw: unknown) => Promise<ReplayResult>
  * — scope via the SAME ScopeChecker the proxy compiles from, so verdicts never
  * diverge (§6.5). Keeping ONE replayer means every host-side send is gated identically.
  */
-export function createReplayer(
+function createReplayer(
   scopeChecker: ScopeChecker,
   rate: RateConfig = DEFAULT_RATE
 ): Replayer {

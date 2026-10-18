@@ -16,9 +16,6 @@ export interface ToolAccess {
   enabled: boolean
 }
 
-export const AUTO_TIERS: ReadonlySet<RiskTier> = new Set<RiskTier>(['R', 'P'])
-export const GATED_TIERS: ReadonlySet<RiskTier> = new Set<RiskTier>(['M', 'D'])
-
 // ─── Scope config (§6.5) — one object, two enforcement layers ─────────────────
 export interface ScopeConfig {
   allowed_hosts: string[] // exact or leading-wildcard, e.g. "*.example.com"

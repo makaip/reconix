@@ -39,7 +39,7 @@ export type DeobfuscateTechnique =
   | 'rename'
   | 'dead-code'
 
-export const DEOBFUSCATE_TECHNIQUES: readonly DeobfuscateTechnique[] = [
+const DEOBFUSCATE_TECHNIQUES: readonly DeobfuscateTechnique[] = [
   'constant-fold',
   'string-array-unpack',
   'decoder-chain',
