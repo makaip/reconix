@@ -17,11 +17,11 @@ export function useRuntimeStatus(): RuntimeStatus {
 
   useEffect(() => {
     let live = true
-    void Promise.all([window.reconix.proxy.getStatus(), window.reconix.engagement.get()]).then(
-      ([proxy, engagement]) => {
+    void Promise.all([window.reconix.proxy.getStatus(), window.reconix.engagement.get()])
+      .then(([proxy, engagement]) => {
         if (live) setStatus({ proxy: proxy ?? EMPTY.proxy, engagement: engagement ?? null })
-      }
-    )
+      })
+      .catch(() => undefined)
     return () => {
       live = false
     }

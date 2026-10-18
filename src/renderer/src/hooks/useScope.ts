@@ -11,9 +11,12 @@ export function useScope(): ScopeStatus {
 
   useEffect(() => {
     let live = true
-    void window.reconix.scope.get().then((initial) => {
-      if (live && initial) setScope(initial)
-    })
+    void window.reconix.scope
+      .get()
+      .then((initial) => {
+        if (live && initial) setScope(initial)
+      })
+      .catch(() => undefined)
     return () => {
       live = false
     }
