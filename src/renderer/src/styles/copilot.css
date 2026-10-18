@@ -449,6 +449,28 @@
   border-color: var(--color-border);
 }
 
+.question-card__option--selected,
+.question-card__option[aria-pressed='true'] {
+  background: var(--color-bg-raised);
+  border-color: var(--color-accent);
+}
+
+.question-card__submit {
+  width: 100%;
+  padding: 8px 9px;
+  color: var(--color-text);
+  background: var(--color-bg-panel);
+  border: 1px solid var(--color-accent);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.question-card__submit:disabled {
+  color: var(--color-text-muted);
+  border-color: var(--color-border-subtle);
+  cursor: default;
+}
+
 .question-card__label {
   font-size: var(--text-xs);
   font-weight: 600;

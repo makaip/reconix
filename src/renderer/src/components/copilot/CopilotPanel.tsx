@@ -87,6 +87,14 @@ function CopilotPanel({
   const [restrictionsOpen, setRestrictionsOpen] = useState(false)
   const [restrictionsDraft, setRestrictionsDraft] = useState(restrictions)
   const listRef = useRef<HTMLDivElement>(null)
+  // Selection for a multi-select question; reset whenever the question changes.
+  const [questionSelection, setQuestionSelection] = useState<Set<string>>(() => new Set())
+  // First focusable control in the pending question card, so the keyboard lands
+  // on the answer instead of the composer (which would queue a steer on Enter).
+  const questionFocusRef = useRef<HTMLElement | null>(null)
+  const focusFirstOption = useCallback((node: HTMLElement | null): void => {
+    if (node) questionFocusRef.current = node
+  }, [])
   // Whether the transcript should keep following new output. Stays true while
   // the user is at the bottom; flipping to false once they scroll up so a
   // streaming response can't yank the view back down mid-read.
@@ -106,6 +114,13 @@ function CopilotPanel({
     const list = listRef.current
     if (list && stickToBottom.current) list.scrollTop = list.scrollHeight
   }, [messages, thinking])
+
+  // A fresh question clears any prior selection and takes focus, so the user can
+  // answer with the keyboard instead of typing into the composer underneath.
+  useEffect(() => {
+    setQuestionSelection(new Set())
+    if (pendingQuestion) questionFocusRef.current?.focus()
+  }, [pendingQuestion])
 
   // Re-pin when the user returns to (or near) the bottom, unpin as soon as they
   // scroll away. The programmatic scroll above lands here as "at bottom".
@@ -441,20 +456,57 @@ function CopilotPanel({
           <p className="question-card__eyebrow">{pendingQuestion.header}</p>
           <p className="question-card__prompt">{pendingQuestion.question}</p>
           {pendingQuestion.options && pendingQuestion.options.length > 0 ? (
-            <div className="question-card__options">
-              {pendingQuestion.options.map((opt) => (
+            pendingQuestion.multiple ? (
+              <div className="question-card__options">
+                {pendingQuestion.options.map((opt, index) => {
+                  const selected = questionSelection.has(opt)
+                  return (
+                    <button
+                      key={opt}
+                      ref={index === 0 ? focusFirstOption : undefined}
+                      type="button"
+                      className={`question-card__option${selected ? ' question-card__option--selected' : ''}`}
+                      aria-pressed={selected}
+                      onClick={() =>
+                        setQuestionSelection((current) => {
+                          const next = new Set(current)
+                          if (next.has(opt)) next.delete(opt)
+                          else next.add(opt)
+                          return next
+                        })
+                      }
+                    >
+                      <span className="question-card__label">{opt}</span>
+                    </button>
+                  )
+                })}
                 <button
-                  key={opt}
                   type="button"
-                  className="question-card__option"
-                  onClick={() => respondQuestion(pendingQuestion.questionId, pendingQuestion.multiple ? [opt] : opt)}
+                  className="question-card__submit"
+                  disabled={questionSelection.size === 0}
+                  onClick={() => respondQuestion(pendingQuestion.questionId, Array.from(questionSelection))}
                 >
-                  <span className="question-card__label">{opt}</span>
+                  Submit{questionSelection.size > 0 ? ` (${questionSelection.size})` : ''}
                 </button>
-              ))}
-            </div>
+              </div>
+            ) : (
+              <div className="question-card__options">
+                {pendingQuestion.options.map((opt, index) => (
+                  <button
+                    key={opt}
+                    ref={index === 0 ? focusFirstOption : undefined}
+                    type="button"
+                    className="question-card__option"
+                    onClick={() => respondQuestion(pendingQuestion.questionId, opt)}
+                  >
+                    <span className="question-card__label">{opt}</span>
+                  </button>
+                ))}
+              </div>
+            )
           ) : (
             <input
+              ref={focusFirstOption}
               type="text"
               className="question-card__option"
               placeholder="Type your answer…"
@@ -463,7 +515,7 @@ function CopilotPanel({
               }}
             />
           )}
-          <button type="button" className="question-card__option" onClick={() => respondQuestion(pendingQuestion.questionId, '')}>
+          <button type="button" className="question-card__option" onClick={() => respondQuestion(pendingQuestion.questionId, null)}>
             <span className="question-card__label">Cancel</span>
           </button>
         </div>

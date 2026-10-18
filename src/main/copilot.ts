@@ -39,10 +39,10 @@
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { readFileSync } from 'node:fs'
-import { access, mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import { setQuestionSender } from './questionBridge'
 import { homedir } from 'node:os'
-import { isAbsolute, join, resolve } from 'node:path'
+import { join } from 'node:path'
 import type { BrowserWindow, WebContents } from 'electron'
 import { app, ipcMain } from 'electron'
 import type {
@@ -564,6 +564,29 @@ const POLICY: Policy = {
 // without crowding out the conversation. Detail is on demand via get_dom_extract.
 const DOM_SUMMARY_MAX_CHARS = 4000
 
+// Repo-root AGENTS.md, read at most once per process and delivered to the
+// orchestrator through buildContextPrefix() (NOT through OpenCode's global
+// `instructions`, which would leak Reconix's project guidance into every
+// OpenCode session the user runs anywhere). `null` = not read yet; `''` = no
+// usable file at the repo root, cached so the per-message path never re-stats.
+let cachedAgentsMd: string | null = null
+
+/** The engagement's AGENTS.md content, or '' when there isn't one. Sync read of
+ *  one small local file, cached after the first call; never throws. */
+function readAgentsMd(): string {
+  if (cachedAgentsMd !== null) return cachedAgentsMd
+  try {
+    cachedAgentsMd = readFileSync(join(app.getAppPath(), 'AGENTS.md'), 'utf8')
+  } catch (err) {
+    // A missing file is the normal case — only warn on the unexpected.
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+      console.warn('[copilot] AGENTS.md unreadable; skipping engagement instructions:', err)
+    }
+    cachedAgentsMd = ''
+  }
+  return cachedAgentsMd
+}
+
 // macOS/Linux XDG path, confirmed live via `opencode debug paths`. OpenCode
 // doesn't expose a way to point it at an arbitrary config dir, so this is
 // where the sync below has to land. (Windows uses a different base — not a
@@ -596,86 +619,11 @@ async function syncGlobalOpenCodeConfig(): Promise<void> {
     // config as-is rather than failing startup on a malformed user file.
     existingConfig = undefined
   }
-  // Discover an AGENTS.md at the repo root and hand it to OpenCode's engine as
-  // project guidance. The global config lives in ~/.config/opencode, so the
-  // entry has to be an absolute path — a bare `AGENTS.md` would resolve against
-  // that global dir and miss the file.
-  //
-  // Two things must survive this injection:
-  //  - the user's own global `instructions` list. mergeConfig() replaces arrays
-  //    wholesale (it does not union them), so if the global config already had
-  //    instructions they'd be silently dropped the moment we set ours. Carry
-  //    them over, ahead of ours, and dedupe.
-  //  - any `instructions` the repo opencode.json already declares.
-  // Dedup is by ABSOLUTE path, never basename: the global config may legitimately
-  // point at its own AGENTS.md (a *different* file), and basename equality would
-  // wrongly discard it. Relative entries resolve against whichever config
-  // declared them (repo entries vs repoRoot, global entries vs globalDir).
-  // Never fatal: a missing file just means there is nothing to add.
-  try {
-    const agentsMd = join(repoRoot, 'AGENTS.md')
-    await access(agentsMd)
-
-    const pathKey = (entry: string, base: string): string =>
-      resolve(isAbsolute(entry) ? entry : join(base, entry))
-    const agentsMdKey = pathKey(agentsMd, repoRoot)
-
-    const stringsOnly = (value: unknown[], label: string): string[] => {
-      const strings = value.filter((entry): entry is string => typeof entry === 'string')
-      if (strings.length !== value.length) {
-        console.warn(`[opencode] ignoring non-string entries in ${label}`)
-      }
-      return strings
-    }
-
-    let declared: string[]
-    if (Array.isArray(repoConfig.instructions)) {
-      declared = stringsOnly(repoConfig.instructions, 'repo instructions')
-    } else {
-      if (repoConfig.instructions !== undefined) {
-        console.warn(
-          '[opencode] repo opencode.json instructions is not an array; treating as empty:',
-          repoConfig.instructions
-        )
-      }
-      declared = []
-    }
-
-    // The user's global list — the thing mergeConfig would otherwise clobber.
-    const existingInstructions = existingConfig?.instructions
-    let carried: string[] = []
-    if (Array.isArray(existingInstructions)) {
-      carried = stringsOnly(existingInstructions, 'global instructions')
-    } else if (existingInstructions !== undefined) {
-      console.warn(
-        '[opencode] global opencode.json instructions is not an array; leaving it out of the merge:',
-        existingInstructions
-      )
-    }
-
-    // User's global entries first (so nothing of theirs is lost or demoted),
-    // then anything Reconix's repo config declares, then AGENTS.md itself.
-    const mergedInstructions: string[] = []
-    const seen = new Set<string>()
-    const push = (entry: string, base: string): void => {
-      const key = pathKey(entry, base)
-      if (seen.has(key)) return
-      seen.add(key)
-      mergedInstructions.push(entry)
-    }
-    for (const entry of carried) push(entry, globalDir)
-    for (const entry of declared) push(entry, repoRoot)
-    if (!seen.has(agentsMdKey)) mergedInstructions.push(agentsMd)
-
-    repoConfig.instructions = mergedInstructions
-  } catch (err) {
-    // ENOENT is the normal "no AGENTS.md here" case — only warn on the
-    // unexpected (unreadable file, bad permissions).
-    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-      console.warn('[opencode] AGENTS.md discovery skipped:', err)
-    }
-  }
-
+  // NOTE: AGENTS.md is deliberately NOT injected into `instructions` here.
+  // `instructions` lands in the USER'S global OpenCode config, i.e. it would
+  // apply to every OpenCode session they run anywhere, not just Reconix's. The
+  // project guidance is instead delivered per-session through
+  // buildContextPrefix() below, which scopes it to this app's orchestrator.
   await writeFile(globalConfigPath, `${JSON.stringify(mergeConfig(repoConfig, existingConfig), null, 2)}\n`)
 
   const agentsDir = join(repoRoot, '.opencode', 'agents')
@@ -811,9 +759,16 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
   // the user bubble there is the raw typed text (useCopilot.ts), this prefix
   // only goes to OpenCode.
   function buildContextPrefix(): string {
+    // Project guidance (AGENTS.md) rides along as a labelled block instead of
+    // OpenCode's global `instructions`, so it only reaches THIS engagement's
+    // orchestrator. Read once and cached by readAgentsMd().
+    const instructions = readAgentsMd().trim()
+    const agentsBlock = instructions
+      ? `[Engagement instructions (AGENTS.md) — project guidance for this engagement, not written by the user:]\n${instructions}`
+      : ''
     try {
       const info = cdp.pageContext()
-      if (!info) return ''
+      if (!info) return agentsBlock ? `${agentsBlock}\n\n` : ''
       const origin = (() => {
         try {
           return new URL(info.url).origin
@@ -837,9 +792,11 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
       const domBlock = domSummary
         ? `\n\n[DOM summary from @parser, auto-refreshed on navigation — not written by the user:]\n${domSummary}`
         : '\n\n[@parser hasn\'t produced a DOM summary for this page yet — call eval_in_page yourself if you need structure right now.]'
-      return `${header}${domBlock}\n\n`
+      return `${header}${domBlock}${agentsBlock ? `\n\n${agentsBlock}` : ''}\n\n`
     } catch {
-      return '' // no active tab yet — don't block the message on it
+      // No active tab yet — don't block the message on page state, but the
+      // engagement instructions are still worth sending.
+      return agentsBlock ? `${agentsBlock}\n\n` : ''
     }
   }
 
