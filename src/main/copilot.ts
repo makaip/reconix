@@ -932,14 +932,20 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
   // Reflects the probe into EngineStatus, governing ONLY the ready <-> offline
   // pair — it never overrides the one-time boot states ('starting' / boot
   // 'error'), and bails if the endpoint isn't configured.
+  // A function call (not an inline check) so TS doesn't carry the narrowing
+  // across the await below — engineStatus can change while the probe runs.
+  function inBootState(): boolean {
+    return engineStatus.status === 'starting' || engineStatus.status === 'error'
+  }
+
   async function refreshProviderHealth(): Promise<void> {
     if (probing) return
-    if (engineStatus.status === 'starting' || engineStatus.status === 'error') return
+    if (inBootState()) return
     probing = true
     try {
       const ok = await probeProvider()
       if (ok === null) return
-      if (engineStatus.status === 'starting' || engineStatus.status === 'error') return
+      if (inBootState()) return
       setEngineStatus(ok ? { status: 'ready' } : { status: 'offline', error: 'Model backend unreachable' })
     } finally {
       probing = false
