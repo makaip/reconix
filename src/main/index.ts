@@ -1,4 +1,4 @@
-import { app, shell, BrowserWindow, ipcMain, session } from 'electron'
+import { app, shell, BrowserWindow, ipcMain, Menu, session, type MenuItemConstructorOptions } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { createBodyStore } from './bodies'
@@ -57,6 +57,55 @@ async function shutdown(): Promise<void> {
   await bridge?.stop().catch(() => undefined)
 }
 
+// Application menu. The only custom entry is File ▸ Preferences, which tells the
+// renderer to open the (docked) settings panel; the standard edit/view/window roles
+// are kept so the usual OS shortcuts (copy/paste, zoom, close) still work. Built per
+// platform: macOS wants the leading app menu, others start at File.
+function buildAppMenu(mainWindow: BrowserWindow): void {
+  const isMac = process.platform === 'darwin'
+  const openPreferences = (): void => {
+    mainWindow.webContents.send('menu:open-settings')
+  }
+  const preferencesItem: MenuItemConstructorOptions = {
+    label: 'Preferences…',
+    accelerator: 'CmdOrCtrl+,',
+    click: openPreferences
+  }
+
+  const template: MenuItemConstructorOptions[] = [
+    ...(isMac
+      ? [
+          {
+            label: app.name,
+            submenu: [
+              { role: 'about' as const },
+              preferencesItem,
+              { type: 'separator' as const },
+              { role: 'services' as const },
+              { type: 'separator' as const },
+              { role: 'hide' as const },
+              { role: 'hideOthers' as const },
+              { role: 'unhide' as const },
+              { type: 'separator' as const },
+              { role: 'quit' as const }
+            ]
+          } as MenuItemConstructorOptions
+        ]
+      : []),
+    {
+      label: 'File',
+      submenu: isMac
+        ? [{ label: 'Preferences…', click: openPreferences }, { type: 'separator' as const }, { role: 'close' as const }]
+        : [preferencesItem, { type: 'separator' as const }, { role: 'quit' as const }]
+    },
+    { role: 'editMenu' },
+    { role: 'viewMenu' },
+    { role: 'windowMenu' }
+  ]
+
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template))
+}
+
 function createWindow(): void {
   const mainWindow = new BrowserWindow({
     width: 1440,
@@ -111,6 +160,8 @@ function createWindow(): void {
       })
     })
   }
+
+  buildAppMenu(mainWindow)
 
   mainWindow.on('ready-to-show', () => {
     mainWindow.show()

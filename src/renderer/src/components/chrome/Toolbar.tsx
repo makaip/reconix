@@ -2,7 +2,6 @@ import navLeft from '../../assets/icons/nav-left.svg'
 import navReload from '../../assets/icons/nav-reload.svg'
 import navRight from '../../assets/icons/nav-right.svg'
 import toolbarChat from '../../assets/icons/toolbar-chat.svg'
-import toolbarSettings from '../../assets/icons/toolbar-settings.svg'
 import toolbarSidebar from '../../assets/icons/toolbar-sidebar.svg'
 import UrlBar from './UrlBar'
 
@@ -19,7 +18,6 @@ type ToolbarProps = {
    *  engine's ready, so disable the controls rather than let the user
    *  think a click did nothing. */
   navDisabled?: boolean
-  onOpenSettings: () => void
 }
 
 type NavButtonProps = {
@@ -46,10 +44,8 @@ function Toolbar({
   onToggleSidebar,
   copilotOpen,
   onToggleCopilot,
-  navDisabled,
-  onOpenSettings
+  navDisabled
 }: ToolbarProps): JSX.Element {
-  const settingsHint = window.reconix.platform === 'darwin' ? '⌘,' : 'Ctrl+,'
   const { target } = window.reconix
 
   return (
@@ -83,23 +79,6 @@ function Toolbar({
 
       <UrlBar url={url} disabled={navDisabled} />
 
-      {/* interception and recording aren't built yet, so these are inert */}
-      <button type="button" className="toolbar-button" title="Not implemented yet">
-        Intercept
-      </button>
-      <button type="button" className="toolbar-button" title="Not implemented yet">
-        Recorder
-      </button>
-      <span className="toolbar__divider" />
-      <button
-        type="button"
-        className="toolbar-button"
-        aria-label="Settings"
-        title={`Settings (${settingsHint})`}
-        onClick={onOpenSettings}
-      >
-        <img src={toolbarSettings} width={14} height={14} alt="" />
-      </button>
       <button
         type="button"
         className="toolbar-button"

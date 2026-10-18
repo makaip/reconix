@@ -69,8 +69,15 @@ function subscribe<T>(channel: string, callback: (payload: T) => void): () => vo
 const api = {
   ping: (): Promise<string> => ipcRenderer.invoke('ping'),
   platform: process.platform,
+  menu: {
+    // Fired when the user picks File ▸ Preferences from the native app menu.
+    onOpenSettings: (callback: () => void): (() => void) => subscribe('menu:open-settings', callback)
+  },
   target: {
     setBounds: (bounds: Bounds): Promise<void> => ipcRenderer.invoke('target:set-bounds', bounds),
+    // Hides every native target view while a renderer overlay (settings modal) is up,
+    // so the HTML modal isn't painted behind the page.
+    setOverlay: (active: boolean): Promise<void> => ipcRenderer.invoke('target:set-overlay', active),
     // navigates the active tab
     navigate: (url: string): Promise<NavigateResult> => ipcRenderer.invoke('tabs:navigate', url),
     back: (): Promise<void> => ipcRenderer.invoke('tabs:back'),

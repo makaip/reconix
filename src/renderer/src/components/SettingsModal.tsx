@@ -38,8 +38,15 @@ function SettingsModal({ settings, onClose }: SettingsModalProps): JSX.Element {
   }, [onClose])
 
   return (
-    <div className="dock__panel" role="dialog" aria-label="Settings">
-      <header className="settings__header">
+    <div className="modal-backdrop" onMouseDown={onClose}>
+      <div
+        className="modal settings"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Settings"
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        <header className="settings__header">
         <h2 className="settings__title">Settings</h2>
         <button type="button" className="settings__close" aria-label="Close settings" onClick={onClose}>
           ×
@@ -62,6 +69,7 @@ function SettingsModal({ settings, onClose }: SettingsModalProps): JSX.Element {
             onChange={(v) => set('openCopilotOnLaunch', v)}
           />
         </section>
+        </div>
       </div>
     </div>
   )
