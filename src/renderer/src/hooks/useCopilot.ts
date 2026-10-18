@@ -521,7 +521,15 @@ export function useCopilot(): Copilot {
       setThinking(true)
       setBusy(true)
       setActivityLabel('Preparing response')
-      window.reconix.copilot.send(text).catch((err: unknown) => {
+      const contextEntries = [targetLabel, ...attachments.map((a) => {
+        if (a.kind !== 'resource' || !a.content) return a.label
+        const preview = a.content.slice(0, 4000)
+        const suffix = a.contentTruncated ? '\n…[truncated; full body available via the resource URL above]' : ''
+        return `Attached source file "${a.label}" (content already provided below — do NOT try to read it from disk):\n\`\`\`\n${preview}${suffix}\n\`\`\``
+      })].filter((label): label is string => Boolean(label))
+      const contextBlock = contextEntries.join('\n\n')
+      const agentText = contextBlock ? `${contextBlock}\n\n${text}` : text
+      window.reconix.copilot.send(agentText).catch((err: unknown) => {
         busyRef.current = false
         setThinking(false)
         setBusy(false)
