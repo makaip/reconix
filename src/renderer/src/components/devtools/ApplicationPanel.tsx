@@ -5,6 +5,7 @@ import { useResizable } from '../../hooks/useResizable'
 import {
   analyzeCookieSecurity,
   COOKIE_SEVERITY_ORDER,
+  isActionableSeverity,
   type CookieSecurityFinding
 } from '../../lib/cookieSecurity'
 import ResizeHandle from '../chrome/ResizeHandle'
@@ -88,9 +89,15 @@ function CookieSecurityTable({
   const sorted = [...findings].sort(
     (a, b) => COOKIE_SEVERITY_ORDER[a.severity] - COOKIE_SEVERITY_ORDER[b.severity]
   )
+  const hasActionable = sorted.some((finding) => isActionableSeverity(finding.severity))
 
   return (
     <div className="dt-table-wrap">
+      {!hasActionable && (
+        <p className="dt-network__detail-empty dt-muted">
+          No actionable cookie security issues — advisory notes only.
+        </p>
+      )}
       <table className="dt-table">
         <thead>
           <tr>
@@ -219,6 +226,12 @@ function ApplicationPanel({ application }: ApplicationPanelProps): JSX.Element {
     () => analyzeCookieSecurity(application.cookies),
     [application.cookies]
   )
+  const actionableCookieFindings = useMemo(
+    // `info` rows are advisory ("SameSite=Strict is good"), not weaknesses, so
+    // they must not inflate the finding count shown in the sidebar badge.
+    () => cookieFindings.filter((finding) => isActionableSeverity(finding.severity)),
+    [cookieFindings]
+  )
 
   return (
     <div className="dt-application">
@@ -242,7 +255,7 @@ function ApplicationPanel({ application }: ApplicationPanelProps): JSX.Element {
           onClick={() => setSection('cookieSecurity')}
         >
           <span className="dt-sources__row-name">Cookie Security</span>
-          <span className="dt-sources__row-type dt-muted">{cookieFindings.length}</span>
+          <span className="dt-sources__row-type dt-muted">{actionableCookieFindings.length}</span>
         </button>
         <button
           type="button"

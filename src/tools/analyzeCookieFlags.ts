@@ -5,6 +5,8 @@
 // security attributes (Secure, HttpOnly, SameSite) and obvious response-header
 // weaknesses (CSP, CORS, HSTS). No network, filesystem, or process I/O.
 
+import type { CookieFinding, CookieSeverity } from '../shared/cookieSecurity'
+import { analyzeCookie } from '../shared/cookieSecurity'
 import type { CapabilityTool, ValidationResult } from '../shared/tools'
 import { arrOf, bool, enumOf, nullable, obj, objOf, str } from './schema'
 
@@ -15,12 +17,9 @@ export type AnalyzeCookieFlagsInput = {
   responseHeaders?: Record<string, string>
 }
 
-export type Severity = 'info' | 'low' | 'medium' | 'high'
+export type Severity = CookieSeverity
 
-export type CookieFinding = {
-  severity: Severity
-  message: string
-}
+export type { CookieFinding }
 
 export type CookieResult = {
   name: string
@@ -136,65 +135,25 @@ function getHeader(headers: Record<string, string> | undefined, name: string): s
   return null
 }
 
-function analyzeCookie(raw: string): CookieResult {
+/**
+ * Parse one raw Set-Cookie value and delegate the per-cookie rules to
+ * `../shared/cookieSecurity` so the agent tool and the renderer UI cannot drift.
+ */
+function analyzeRawSetCookie(raw: string): CookieResult {
   const parsed = parseSetCookie(raw)
   const secure = parsed.attributes.has('secure')
   const httpOnly = parsed.attributes.has('httponly')
 
   const sameSiteRaw = parsed.attributes.get('samesite')
   const sameSite = typeof sameSiteRaw === 'string' ? sameSiteRaw : null
-  const sameSiteLower = sameSite ? sameSite.toLowerCase() : null
 
-  const findings: CookieFinding[] = []
-
-  if (!secure) {
-    findings.push({
-      severity: 'medium',
-      message: 'Missing Secure flag: cookie may be sent over plaintext HTTP.'
-    })
+  return {
+    name: parsed.name,
+    secure,
+    httpOnly,
+    sameSite,
+    findings: analyzeCookie({ secure, httpOnly, sameSite })
   }
-  if (!httpOnly) {
-    findings.push({
-      severity: 'medium',
-      message: 'Missing HttpOnly flag: cookie is readable by client-side JavaScript (XSS theft risk).'
-    })
-  }
-
-  if (sameSiteLower === null) {
-    findings.push({
-      severity: 'low',
-      message: 'Missing SameSite attribute: cookie defaults are browser-dependent (CSRF exposure).'
-    })
-  } else if (sameSiteLower === 'none') {
-    if (!secure) {
-      findings.push({
-        severity: 'high',
-        message: 'SameSite=None without Secure: browsers reject this and it weakens CSRF protection.'
-      })
-    } else {
-      findings.push({
-        severity: 'info',
-        message: 'SameSite=None: cookie is sent cross-site; ensure this is intentional.'
-      })
-    }
-  } else if (sameSiteLower === 'lax') {
-    findings.push({
-      severity: 'info',
-      message: 'SameSite=Lax: reasonable default for most cookies.'
-    })
-  } else if (sameSiteLower === 'strict') {
-    findings.push({
-      severity: 'info',
-      message: 'SameSite=Strict: strongest CSRF protection.'
-    })
-  } else {
-    findings.push({
-      severity: 'low',
-      message: `Unrecognized SameSite value "${sameSite}".`
-    })
-  }
-
-  return { name: parsed.name, secure, httpOnly, sameSite, findings }
 }
 
 function analyzeHeaders(headers: Record<string, string> | undefined): HeaderFinding[] {
@@ -274,7 +233,7 @@ function analyzeHeaders(headers: Record<string, string> | undefined): HeaderFind
 }
 
 function analyze(input: AnalyzeCookieFlagsInput): AnalyzeCookieFlagsOutput {
-  const cookies = input.setCookieHeaders.map(analyzeCookie)
+  const cookies = input.setCookieHeaders.map(analyzeRawSetCookie)
   const headerFindings = analyzeHeaders(input.responseHeaders)
   return { cookies, headerFindings }
 }
