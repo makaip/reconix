@@ -21,7 +21,7 @@ export const allTools: Tool[] = [
   ...findingTools,
   ...evidenceTools,
   ...customTools,
-  ...capabilityTools.filter((t) => !customTools.some((c) => c.name === t.name))
+  ...capabilityTools
 ]
 
 // The MVP subset the doc's Appendix names — what the spine turns on first.
