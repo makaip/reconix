@@ -7,6 +7,10 @@ import ContextChip from './ContextChip'
 const STATUS_ICON: Record<ToolPartStatus, string> = { pending: '◌', ok: '✓', error: '✗' }
 
 function formatParams(params: unknown): string {
+  if (params === null || params === undefined) return '(no arguments)'
+  if (typeof params === 'object' && !Array.isArray(params) && Object.keys(params).length === 0) {
+    return '(no arguments)'
+  }
   try {
     return JSON.stringify(params, null, 2)
   } catch {
@@ -36,8 +40,15 @@ function ToolBlock({ part, onApproval }: { part: ToolPart; onApproval: (id: stri
       </button>
       {open && (
         <div className="tool-block__body">
+          <p className="tool-block__body-label">Arguments</p>
           <pre className="tool-block__params">{formatParams(part.params)}</pre>
           {part.status === 'error' && part.error && <p className="tool-block__error">{part.error}</p>}
+          {part.output && (
+            <>
+              <p className="tool-block__body-label">Output</p>
+              <pre className="tool-block__output">{part.output}</pre>
+            </>
+          )}
         </div>
       )}
       {part.approval?.status === 'pending' && (

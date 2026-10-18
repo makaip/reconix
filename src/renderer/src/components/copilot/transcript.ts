@@ -18,6 +18,9 @@ export interface ToolPart {
   target?: string
   status: ToolPartStatus
   error?: string
+  /** Flattened tool output (stdout, file text, fetched page …), set from the
+   *  matching tool.result. Absent while pending or when there was none. */
+  output?: string
   /** Heuristic: OpenCode's own subagent delegation (orchestrator -> @evaluator
    *  etc.) surfaces as a tool call by name (e.g. "task"/"agent") rather than
    *  a distinct event type — no dedicated subagent-spawn event exists on the

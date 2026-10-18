@@ -56,7 +56,7 @@ type AgentEvent =
   | { kind: "message.delta";   messageId: string; role: "assistant"; text: string }
   | { kind: "reasoning.delta"; messageId: string; text: string }
   | { kind: "tool.call";       callId: string; tool: string; params: object; riskTier: "R"|"P"|"M"|"D"; target?: string }
-  | { kind: "tool.result";     callId: string; ok: boolean; resultRef?: string; error?: string }
+  | { kind: "tool.result";     callId: string; ok: boolean; resultRef?: string; error?: string; output?: string }
   | { kind: "approval.request"; approvalId: string; callId: string; tool: string; params: object; riskTier: "M"|"D"; target?: string }
   | { kind: "approval.resolved"; approvalId: string; decision: "approve"|"deny"|"edit" }
   | { kind: "turn.done";       messageId: string }

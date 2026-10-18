@@ -1,7 +1,7 @@
 // Shared main-process contracts. Mirrors ARCHITECTURE.md §6 and API.md §1/§3.
 // Changing a type here is a §6 contract change — version it (CONTRACTS_VERSION).
 
-export const CONTRACTS_VERSION = '0.3.0'
+export const CONTRACTS_VERSION = '0.6.0'
 
 // ─── Risk tiers (API.md §3 / ARCHITECTURE §5.C) ───────────────────────────────
 // R read-only (auto) · P page-mutating, sandbox-only (auto)
@@ -16,9 +16,6 @@ export interface ToolAccess {
   enabled: boolean
 }
 
-export const AUTO_TIERS: ReadonlySet<RiskTier> = new Set<RiskTier>(['R', 'P'])
-export const GATED_TIERS: ReadonlySet<RiskTier> = new Set<RiskTier>(['M', 'D'])
-
 // ─── Scope config (§6.5) — one object, two enforcement layers ─────────────────
 export interface ScopeConfig {
   allowed_hosts: string[] // exact or leading-wildcard, e.g. "*.example.com"
@@ -31,6 +28,38 @@ export interface Policy {
   autoApprove: RiskTier[] // tiers that never raise a permission request
   redactCookies: boolean
   maxToolCallsPerTurn: number
+}
+
+// ─── Scope status (renderer-facing projection of §6.5) ────────────────────────
+// Read-only view of the engagement's authorized scope, for the URL bar's
+// "In scope" badge and the status bar's scope summary. Derived from the same
+// scope.json the replays/proxy enforce, so the badge can't disagree with what
+// the agent is actually allowed to reach.
+export interface ScopeStatus {
+  /** Allowed host patterns (exact or leading-wildcard, e.g. "*.example.com"). */
+  hosts: string[]
+  /** Human-readable one-liner for the status bar. "none" when no scope is loaded. */
+  summary: string
+}
+
+/** True iff `hostname` matches any allowed host pattern. Mirrors the main-process
+ *  ScopeChecker's wildcard matching so the badge and enforcement never diverge. */
+export function hostInScope(hostname: string, patterns: readonly string[]): boolean {
+  return patterns.some((pattern) => {
+    if (pattern.startsWith('*.')) {
+      const suffix = pattern.slice(1) // ".example.com"
+      return hostname === pattern.slice(2) || hostname.endsWith(suffix)
+    }
+    return hostname === pattern
+  })
+}
+
+// ─── Egress proxy status (renderer-facing) ────────────────────────────────────
+// The container egress proxy (5.D) isn't managed by the app, so there is no
+// runtime health surface to report — only the configured address, if any.
+export interface ProxyStatus {
+  /** host:port the agent's egress is routed through; null when unconfigured. */
+  address: string | null
 }
 
 // ─── IDs (Main-issued, correlate IPC ↔ store rows, API.md §4) ─────────────────
@@ -51,7 +80,17 @@ export type AgentEvent =
       riskTier: RiskTier
       target?: string
     }
-  | { kind: 'tool.result'; callId: ToolCallId; ok: boolean; resultRef?: string; error?: string }
+  | {
+      kind: 'tool.result'
+      callId: ToolCallId
+      ok: boolean
+      resultRef?: string
+      error?: string
+      /** Flattened tool output (stdout, file text, fetched page …) for the
+       *  transcript. Absent when the tool produced no textual output; may be
+       *  truncated for very large results. */
+      output?: string
+    }
   | {
       kind: 'approval.request'
       approvalId: ApprovalId

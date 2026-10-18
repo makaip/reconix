@@ -46,6 +46,8 @@ import type {
   AgentEvent as CopilotAgentEvent,
   ApprovalDecision as CopilotApprovalDecision,
   EngineStatus,
+  ProxyStatus,
+  ScopeStatus,
   ServerStatus,
   ToolAccess,
   UsageSnapshot
@@ -69,8 +71,15 @@ function subscribe<T>(channel: string, callback: (payload: T) => void): () => vo
 const api = {
   ping: (): Promise<string> => ipcRenderer.invoke('ping'),
   platform: process.platform,
+  menu: {
+    // Fired when the user picks File ▸ Preferences from the native app menu.
+    onOpenSettings: (callback: () => void): (() => void) => subscribe('menu:open-settings', callback)
+  },
   target: {
     setBounds: (bounds: Bounds): Promise<void> => ipcRenderer.invoke('target:set-bounds', bounds),
+    // Hides every native target view while a renderer overlay (settings modal) is up,
+    // so the HTML modal isn't painted behind the page.
+    setOverlay: (active: boolean): Promise<void> => ipcRenderer.invoke('target:set-overlay', active),
     // navigates the active tab
     navigate: (url: string): Promise<NavigateResult> => ipcRenderer.invoke('tabs:navigate', url),
     back: (): Promise<void> => ipcRenderer.invoke('tabs:back'),
@@ -106,6 +115,27 @@ const api = {
     list: (): Promise<WsConnection[]> => ipcRenderer.invoke('websocket:list'),
     onChanged: (callback: (conns: WsConnection[]) => void): (() => void) =>
       subscribe('websocket:changed', callback)
+  },
+  findings: {
+    // Agent-recorded findings (record_finding), newest last. `list` is the
+    // mount-time readback; the push fires whenever one is recorded.
+    list: (): Promise<Finding[]> => ipcRenderer.invoke('findings:list'),
+    onChanged: (callback: (findings: Finding[]) => void): (() => void) =>
+      subscribe('findings:changed', callback)
+  },
+  scope: {
+    // Read-only view of the engagement's authorized scope, for the URL-bar
+    // badge and status-bar summary. Static per run (scope.json is read at boot).
+    get: (): Promise<ScopeStatus> => ipcRenderer.invoke('scope:get')
+  },
+  proxy: {
+    // Configured egress proxy address (RECONIX_PROXY_ADDR), or null. The app
+    // doesn't manage the container proxy, so there's no live health to report.
+    getStatus: (): Promise<ProxyStatus> => ipcRenderer.invoke('proxy:get-status')
+  },
+  engagement: {
+    // Authorized engagement id from the loaded scope.json, or null.
+    get: (): Promise<string | null> => ipcRenderer.invoke('engagement:get')
   },
   crawler: {
     // Deterministic scope-aware spider. Drives the gated replayer; no new egress.

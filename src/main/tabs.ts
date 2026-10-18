@@ -114,12 +114,16 @@ export function createTabManager(win: BrowserWindow, hooks: TabHooks): TabManage
     for (const tab of tabs.values()) tab.view.setBounds(scaled)
   }
 
+  // While a renderer overlay (e.g. the settings modal) is up, every target view is
+  // hidden so the HTML modal isn't painted behind the native page view.
+  let overlay = false
+
   // A blank tab hides its view so the renderer's new-tab splash screen shows
   // through. Only the active tab's view is ever visible.
   const syncVisibility = (): void => {
     for (const tab of tabs.values()) {
       const url = tab.view.webContents.getURL()
-      tab.view.setVisible(tab.id === activeId && url !== '' && url !== BLANK)
+      tab.view.setVisible(!overlay && tab.id === activeId && url !== '' && url !== BLANK)
     }
   }
 
@@ -258,6 +262,10 @@ export function createTabManager(win: BrowserWindow, hooks: TabHooks): TabManage
     bounds = value
     applyBounds()
   })
+  handle('target:set-overlay', (active) => {
+    overlay = active === true
+    syncVisibility()
+  })
   handle('tabs:get-state', () => getState())
   handle('tabs:create', (url) => create(typeof url === 'string' ? (parseAddress(url)?.href ?? undefined) : undefined))
   handle('tabs:close', (id) => {
@@ -296,6 +304,7 @@ export function createTabManager(win: BrowserWindow, hooks: TabHooks): TabManage
   win.on('closed', () => {
     for (const channel of [
       'target:set-bounds',
+      'target:set-overlay',
       'tabs:get-state',
       'tabs:create',
       'tabs:close',

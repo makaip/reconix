@@ -11,10 +11,31 @@ type ComposerProps = {
   requestCount: number
   busy: boolean
   onStop: () => void
+  /** Tab the Copilot acts on. Shown in the context line so it isn't a separate banner. */
+  targetTitle: string
+  targetHost: string
+  targetUrl?: string
+  /** True when the user is viewing a different tab than the one in context. */
+  viewingDifferentTab: boolean
+  onUseViewedTab: () => void
 }
 
-function Composer({ attachments, onDetach, onSend, requestCount, busy, onStop }: ComposerProps): JSX.Element {
+function Composer({
+  attachments,
+  onDetach,
+  onSend,
+  requestCount,
+  busy,
+  onStop,
+  targetTitle,
+  targetHost,
+  targetUrl,
+  viewingDifferentTab,
+  onUseViewedTab
+}: ComposerProps): JSX.Element {
   const [text, setText] = useState('')
+  const target = targetHost || targetTitle
+  const requestLabel = `${requestCount} ${requestCount === 1 ? 'request' : 'requests'}`
 
   return (
     <form
@@ -26,7 +47,16 @@ function Composer({ attachments, onDetach, onSend, requestCount, busy, onStop }:
         setText('')
       }}
     >
-      <p className="composer__context">Context: current tab · {requestCount} requests · scope</p>
+      <div className="composer__context">
+        <span className="composer__context-target" title={targetUrl}>{target || 'No active tab'}</span>
+        <span className="composer__context-sep" aria-hidden="true">·</span>
+        <span className="composer__context-meta">{requestLabel}</span>
+        {viewingDifferentTab && (
+          <button type="button" className="composer__retarget" onClick={onUseViewedTab}>
+            Use current tab
+          </button>
+        )}
+      </div>
       {attachments.length > 0 && (
         <div className="composer__attachments">
           {attachments.map((attachment) => (

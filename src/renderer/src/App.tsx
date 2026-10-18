@@ -49,6 +49,14 @@ function App(): JSX.Element {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [])
+
+  // File ▸ Preferences in the native app menu opens the settings panel.
+  useEffect(() => {
+    return window.reconix.menu.onOpenSettings(() => {
+      setUsageOpen(false)
+      setSettingsOpen(true)
+    })
+  }, [])
   // Set when a sitemap file is double-clicked, so DevTools opens it in Sources. The counter
   // forces a re-open even when the same file is double-clicked twice in a row.
   const [openSource, setOpenSource] = useState<{ target: string; nonce: number } | null>(null)
@@ -81,7 +89,14 @@ function App(): JSX.Element {
   const copilotTargetTab = tabs.tabs.find((tab) => tab.id === copilotTargetId)
   const copilotRequestCount = copilotTargetId === null ? 0 : (network.perTab[copilotTargetId] ?? 0)
   // The dock borrows the Copilot's slot on the right, so only one right column shows.
-  const dockOpen = usageOpen || settingsOpen
+  // Settings is a centered modal, not a dock column, so only usage docks here.
+  const dockOpen = usageOpen
+
+  // Hide the native target views while the settings modal is up: the page view is a
+  // native layer that would otherwise paint over the HTML modal.
+  useEffect(() => {
+    void window.reconix.target.setOverlay(settingsOpen)
+  }, [settingsOpen])
 
   useEffect(() => {
     void window.reconix.copilot.getTargetTab().then(setCopilotTargetId)
@@ -115,10 +130,6 @@ function App(): JSX.Element {
         copilotOpen={copilotOpen}
         onToggleCopilot={() => setCopilotOpen((open) => !open)}
         navDisabled={engineStatus.status === 'starting'}
-        onOpenSettings={() => {
-          setUsageOpen(false)
-          setSettingsOpen(true)
-        }}
       />
 
       <div className="shell">
@@ -197,7 +208,6 @@ function App(): JSX.Element {
             />
             <aside className="dock" style={{ flexBasis: dockResize.size }}>
               {usageOpen && <UsagePanel usage={usage} onClose={() => setUsageOpen(false)} />}
-              {settingsOpen && <SettingsModal settings={settings} onClose={() => setSettingsOpen(false)} />}
             </aside>
           </>
         )}
@@ -211,6 +221,8 @@ function App(): JSX.Element {
           setUsageOpen((open) => !open)
         }}
       />
+
+      {settingsOpen && <SettingsModal settings={settings} onClose={() => setSettingsOpen(false)} />}
     </div>
   )
 }

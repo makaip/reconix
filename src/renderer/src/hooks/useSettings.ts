@@ -8,7 +8,7 @@ export type Settings = {
   openCopilotOnLaunch: boolean
 }
 
-export const DEFAULT_SETTINGS: Settings = {
+const DEFAULT_SETTINGS: Settings = {
   openSidebarOnLaunch: true,
   openCopilotOnLaunch: true
 }

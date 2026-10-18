@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react'
 import plus from '../../assets/icons/plus.svg'
-import { findings } from '../../mock/data'
+import { useFindings } from '../../hooks/useFindings'
 import { useSitemap } from '../../hooks/useSitemap'
 import type { ResourceDragItem } from '../../lib/dragTypes'
 import { nextSelection, type SelectMods } from '../../lib/selection'
@@ -23,6 +23,7 @@ const toDragItem = (node: SitemapNode): ResourceDragItem => ({ url: node.id, lab
 
 function Sidebar({ style, onDragStart, onDragEnd, onOpenSource }: SidebarProps): JSX.Element {
   const sitemap = useSitemap()
+  const findings = useFindings()
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [anchor, setAnchor] = useState<string | null>(null)
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())

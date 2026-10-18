@@ -133,6 +133,14 @@
   font-weight: 600;
 }
 
+.finding-card__severity--critical {
+  color: var(--color-sev-critical);
+}
+
+.finding-card__severity--high {
+  color: var(--color-sev-high);
+}
+
 .finding-card__severity--medium {
   color: var(--color-sev-medium);
 }

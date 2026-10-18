@@ -2,7 +2,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
-import { createActiveOriginScopeChecker, loadScopeChecker } from './engagement'
+import { createActiveOriginScopeChecker, loadScopeChecker, loadScopeConfig, toScopeStatus } from './engagement'
 
 const dir = mkdtempSync(join(tmpdir(), 'reconix-scope-'))
 const write = (name: string, contents: string): string => {
@@ -56,5 +56,31 @@ describe('createActiveOriginScopeChecker', () => {
     expect(checker.isAllowed('http://example.com:9090/get_config', 'GET')).toBe(false)
     active = null
     expect(checker.isAllowed('http://localhost:9090/get_config', 'GET')).toBe(false)
+  })
+})
+
+describe('loadScopeConfig + toScopeStatus', () => {
+  it('returns null when no path is set or the shape is wrong', () => {
+    expect(loadScopeConfig(undefined)).toBeNull()
+    expect(loadScopeConfig(write('bad-shape.json', JSON.stringify({ engagementId: 'e' })))).toBeNull()
+  })
+
+  it('projects a valid config to host patterns + a summary', () => {
+    const p = write(
+      'status.json',
+      JSON.stringify({
+        engagementId: 'e',
+        infra: [{ host: 'model.internal' }],
+        targets: [{ host: 'app.local' }, { host: '*.app.local' }, { cidr: '10.0.0.0/24' }]
+      })
+    )
+    expect(toScopeStatus(loadScopeConfig(p))).toEqual({
+      hosts: ['app.local', '*.app.local'],
+      summary: '2 hosts · 3 rules'
+    })
+  })
+
+  it('shows none when no scope is loaded', () => {
+    expect(toScopeStatus(null)).toEqual({ hosts: [], summary: 'none' })
   })
 })

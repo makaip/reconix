@@ -137,11 +137,7 @@ export type AgentEvent =
   | ToolResultEvent
   | ApprovalRequestEvent
 
-export type FindingSeverity = 'info' | 'low' | 'medium' | 'high'
-
-export type Finding = {
-  id: string
-  title: string
-  severity: FindingSeverity
-  taskId: string
-}
+// The canonical finding type lives in ./findings (shared by the MCP-recorded
+// findings panel and this legacy session manager). Re-exported here so existing
+// `import { Finding } from '../shared/agent'` call sites keep resolving.
+export type { Finding, FindingSeverity } from './findings'

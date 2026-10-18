@@ -50,6 +50,36 @@ function data(raw: RawEvent): Record<string, unknown> {
   return (raw.data ?? {}) as Record<string, unknown>
 }
 
+// `session.tool.success` / `.failed` carry the tool's rendered output in a
+// `content` array of parts (OpenCode's Tool.Content union: text | text-page |
+// file) plus tool-specific `metadata`. We flatten that to one string for the
+// transcript. Shape read from the opencode v2 bundle, not guessed.
+function textFromContent(content: unknown): string {
+  if (!Array.isArray(content)) return ''
+  const chunks: string[] = []
+  for (const item of content) {
+    if (!item || typeof item !== 'object') continue
+    const rec = item as Record<string, unknown>
+    if (typeof rec.text === 'string' && rec.text) chunks.push(rec.text)
+    else if (typeof rec.content === 'string' && rec.content) chunks.push(rec.content) // text-page part
+    else if (rec.type === 'file') {
+      const name = typeof rec.name === 'string' ? rec.name : typeof rec.uri === 'string' ? rec.uri : ''
+      chunks.push(`[file] ${name}`.trim())
+    }
+  }
+  return chunks.join('\n').trim()
+}
+
+// Keep the transcript (and the IPC hop) lean: tool results can be megabytes.
+const MAX_TOOL_OUTPUT = 8000
+
+function toolOutput(d: Record<string, unknown>): string | undefined {
+  const metadata = (d.metadata ?? {}) as Record<string, unknown>
+  const raw = textFromContent(d.content) || (typeof metadata.output === 'string' ? metadata.output.trim() : '')
+  if (!raw) return undefined
+  return raw.length > MAX_TOOL_OUTPUT ? `${raw.slice(0, MAX_TOOL_OUTPUT)}\n… (output truncated)` : raw
+}
+
 // OpenCode's tool-call lifecycle is split across events that don't each
 // carry everything we need: "session.tool.input.started" has the tool
 // *name* but not its input; "session.tool.called" has the resolved input
@@ -89,10 +119,11 @@ export function normalize(raw: RawEvent): AgentEvent | null {
       // a "success" event (the *mechanism* succeeded; the command may not
       // have). Surface a nonzero exit as a failed tool.result.
       const exit = typeof metadata.exit === 'number' ? metadata.exit : undefined
+      const output = toolOutput(d)
       if (exit !== undefined && exit !== 0) {
-        return { kind: 'tool.result', callId, ok: false, error: `exited with code ${exit}` }
+        return { kind: 'tool.result', callId, ok: false, error: `exited with code ${exit}`, ...(output ? { output } : {}) }
       }
-      return { kind: 'tool.result', callId, ok: true }
+      return { kind: 'tool.result', callId, ok: true, ...(output ? { output } : {}) }
     }
 
     // Not yet observed live (never hit a genuine tool-level exception while
@@ -103,7 +134,14 @@ export function normalize(raw: RawEvent): AgentEvent | null {
     case 'session.tool.failed': {
       const callId = s(d.id)
       pendingToolNames.delete(callId)
-      return { kind: 'tool.result', callId, ok: false, error: s(d.error ?? d.message, 'tool error') }
+      const output = toolOutput(d)
+      return {
+        kind: 'tool.result',
+        callId,
+        ok: false,
+        error: s(d.error ?? d.message, 'tool error'),
+        ...(output ? { output } : {})
+      }
     }
 
     case 'session.text.delta':
