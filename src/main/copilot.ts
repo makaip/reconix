@@ -448,6 +448,10 @@ class DomSummaryWatcher {
         return null
       })
       if (!info) return
+      // Only real web pages are worth summarizing. A blank/new tab (about:blank)
+      // or a browser-internal page has no DOM to parse and would just burn a
+      // parser call — the navigation that follows will schedule its own run.
+      if (!/^https?:/i.test(info.url)) return
       const raw = await cdp
         .evaluate('document.documentElement.outerHTML.slice(0, 20000)')
         .catch((err) => {
@@ -476,7 +480,8 @@ class DomSummaryWatcher {
       if (summary && stillInfo && stillInfo.url === info.url) {
         this.latest = { url: info.url, summary }
       } else if (summary && stillInfo && stillInfo.url !== info.url) {
-        console.error(
+        // Expected during navigation, not a failure — info-level, not an error.
+        console.info(
           `[copilot] DomSummaryWatcher: discarding stale summary — navigated from ${info.url} to ${stillInfo.url} mid-run`
         )
       }
