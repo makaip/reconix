@@ -33,6 +33,8 @@ const MVP_NAMES = new Set([
   'eval_in_page',
   'click',
   'fill',
+  'upload_files',
+  'submit_form',
   'query_log',
   'record_finding',
   'probe_reflection',

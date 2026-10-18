@@ -5,6 +5,7 @@
 // exists.
 import { defineTool, type Tool } from '../tool'
 import { ToolExecError } from '../errors'
+import { submitForm } from './submitForm'
 
 function pending(name: string, description: string, tier: 'R' | 'M' | 'D'): Tool {
   return defineTool<Record<string, never>, never>({
@@ -21,7 +22,7 @@ function pending(name: string, description: string, tier: 'R' | 'M' | 'D'): Tool
 }
 
 export const probeTools: Tool[] = [
-  pending('submit_form', 'Submit a form by ref with values. Mutating.', 'M'),
+  submitForm as Tool,
   pending('probe_reflection', 'Benign-marker reflection probe (detection only).', 'M'),
   pending('vary_parameter', 'Differential over a param set (IDOR/BAC/fuzz). Rate-limited.', 'M'),
   pending('run_tool', 'Brokered external binary (nmap/nuclei/sqlmap). POST-MVP, §8.6.', 'D')

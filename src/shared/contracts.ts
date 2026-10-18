@@ -28,6 +28,7 @@ export interface Policy {
   autoApprove: RiskTier[] // tiers that never raise a permission request
   redactCookies: boolean
   maxToolCallsPerTurn: number
+  maxReplayBatch: number // max variants per reconix_replay_batch call (sweep size cap)
 }
 
 // ─── Scope status (renderer-facing projection of §6.5) ────────────────────────
@@ -104,7 +105,10 @@ export type AgentEvent =
   | { kind: 'turn.done'; messageId: string }
   | { kind: 'error'; scope: 'session' | 'tool' | 'model'; message: string }
 
-export type ApprovalDecision = 'approve' | 'deny' | 'edit'
+// 'approve' authorizes this one call; 'approve_always' authorizes every future
+// call of the same (action, resource) type for the rest of the session (maps to
+// OpenCode's "always" reply — the server stops asking); 'deny' rejects this one.
+export type ApprovalDecision = 'approve' | 'approve_always' | 'deny' | 'edit'
 
 export interface ServerStatus {
   state: 'starting' | 'ready' | 'reconnecting' | 'down'

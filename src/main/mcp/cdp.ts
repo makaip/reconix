@@ -4,6 +4,7 @@
 // the UI's webContents, which would be a path out of the sandbox.
 
 import type { WebContents } from 'electron'
+import { net } from 'electron'
 import { ToolExecError } from './errors'
 
 export interface CookieRecord {
@@ -25,9 +26,29 @@ export interface EmulationOptions {
   reset?: boolean
 }
 
+/** A single request spec for the replay_request send primitive. */
+export interface HttpRequestSpec {
+  url: string
+  method?: string
+  headers?: Record<string, string>
+  body?: string
+}
+
+/** Result of replay_request's send primitive. The body is returned in full to
+ *  the caller (the tool handler), which clamps the inline copy and stashes the
+ *  complete request/response pair in the trace store as evidence. */
+export interface HttpReplayResult {
+  status: number
+  statusText: string
+  headers: Record<string, string>
+  body: string
+  bodyBytes: number
+  durationMs: number
+}
+
 // The surface the tool handlers are allowed to use. Anything not here cannot be
-// expressed. Scope-critical operations (navigate) are still gated by the
-// pipeline's scope check before they reach this driver.
+// expressed. Scope-critical operations (navigate, sendRequest) are still gated
+// by the pipeline's scope check before they reach this driver.
 export interface CdpDriver {
   navigate(url: string): Promise<{ status: number; finalUrl: string }>
   pageInfo(): Promise<{ url: string; title: string; readyState: string }>
@@ -36,6 +57,11 @@ export interface CdpDriver {
   cookies(): Promise<CookieRecord[]>
   dispatchInput(events: unknown[]): Promise<void>
   setEmulation(opts: EmulationOptions): Promise<void>
+  /** The send primitive behind replay_request. Issues one HTTP request bound to
+   *  the TARGET view's session — so it carries that session's cookies and
+   *  egresses through its proxy — with arbitrary method/headers/body. Scope is
+   *  enforced by the pipeline (via the tool's target()) before this is called. */
+  sendRequest(spec: HttpRequestSpec): Promise<HttpReplayResult>
 }
 
 export class WebContentsCdpDriver implements CdpDriver {
@@ -151,5 +177,76 @@ export class WebContentsCdpDriver implements CdpDriver {
         features: opts.features ?? []
       })
     }
+  }
+
+  // The send primitive for replay_request. We use Electron `net` bound to the
+  // target view's session rather than a page `fetch()` so the repeater has full
+  // control: arbitrary method/headers/body (incl. headers a page fetch can't
+  // set), no CORS blocking, and the target's own cookies via the session. The
+  // pipeline has already scope-checked the (post-override) URL before we get
+  // here, and this traffic egresses through whatever proxy the session carries.
+  async sendRequest(spec: HttpRequestSpec): Promise<HttpReplayResult> {
+    const method = (spec.method || 'GET').toUpperCase()
+    const hasBody = spec.body != null && method !== 'GET' && method !== 'HEAD'
+    const started = Date.now()
+
+    return new Promise<HttpReplayResult>((resolve, reject) => {
+      let request: ReturnType<typeof net.request>
+      try {
+        request = net.request({
+          url: spec.url,
+          method,
+          session: this.wc.session,
+          useSessionCookies: true,
+          redirect: 'follow'
+        })
+      } catch (err) {
+        reject(
+          new ToolExecError(
+            `replay_request: bad request spec — ${(err as Error)?.message ?? String(err)}`
+          )
+        )
+        return
+      }
+
+      for (const [name, value] of Object.entries(spec.headers ?? {})) {
+        // net rejects a few header names outright; skip the offender rather than
+        // abort the whole replay so one bad header can't wedge the tool.
+        try {
+          request.setHeader(name, value)
+        } catch {
+          /* unsettable header — ignore */
+        }
+      }
+
+      const chunks: Buffer[] = []
+      request.on('response', (response) => {
+        response.on('data', (chunk: Buffer) => chunks.push(chunk))
+        response.on('end', () => {
+          const buf = Buffer.concat(chunks)
+          const headers: Record<string, string> = {}
+          for (const [k, v] of Object.entries(response.headers)) {
+            headers[k] = Array.isArray(v) ? v.join(', ') : String(v)
+          }
+          resolve({
+            status: response.statusCode,
+            statusText: response.statusMessage ?? '',
+            headers,
+            body: buf.toString('utf8'),
+            bodyBytes: buf.length,
+            durationMs: Date.now() - started
+          })
+        })
+        response.on('error', (err: Error) =>
+          reject(new ToolExecError(`replay_request: response error — ${err.message}`, true))
+        )
+      })
+      request.on('error', (err) =>
+        reject(new ToolExecError(`replay_request: ${err.message}`, true))
+      )
+
+      if (hasBody) request.write(spec.body as string)
+      request.end()
+    })
   }
 }

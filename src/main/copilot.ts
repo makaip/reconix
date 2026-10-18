@@ -68,7 +68,9 @@ import {
   WebContentsCdpDriver,
   type CdpDriver,
   type CookieRecord,
-  type EmulationOptions
+  type EmulationOptions,
+  type HttpRequestSpec,
+  type HttpReplayResult
 } from './mcp/cdp'
 import { ScopeChecker, type ScopeEnforcer } from './mcp/scope'
 import type { NetworkReader, ToolContext } from './mcp/tool'
@@ -284,6 +286,9 @@ class ActiveTabCdpDriver implements CdpDriver {
   }
   setEmulation(opts: EmulationOptions): Promise<void> {
     return this.require().setEmulation(opts)
+  }
+  sendRequest(spec: HttpRequestSpec): Promise<HttpReplayResult> {
+    return this.require().sendRequest(spec)
   }
 }
 
@@ -543,7 +548,15 @@ class DomSummaryWatcher {
   }
 }
 
-const POLICY: Policy = { autoApprove: ['R', 'P'], redactCookies: true, maxToolCallsPerTurn: 100 }
+// maxReplayBatch caps how many variants one reconix_replay_batch call may sweep.
+// Raise it for bigger fuzz runs; the per-item scope check and the proxy rate
+// limit still apply to every request in the batch.
+const POLICY: Policy = {
+  autoApprove: ['R', 'P'],
+  redactCookies: true,
+  maxToolCallsPerTurn: 100,
+  maxReplayBatch: 20
+}
 
 // Ceiling on the per-page DOM summary injected into every orchestrator message.
 // ~4k chars ≈ ~1k tokens — enough to be useful on the 20480-token window
@@ -1004,7 +1017,7 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
     starting = (async () => {
       const { baseUrl, password } = await ensureServerInfo()
       const c = createOpenCodeConnector(
-        { baseUrl, password, agent: 'pentest-orchestrator', model: ORCHESTRATOR_MODEL },
+        { baseUrl, password, agent: 'pentest-orchestrator', model: ORCHESTRATOR_MODEL, requiredMcpServer: 'reconix' },
         {
           onAgentEvent: (ev: AgentEvent) => {
             if (responseStartedAt !== null) {

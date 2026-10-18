@@ -17,7 +17,12 @@
       },
       "models": {
         "orchestrator-model": {
-          "name": "Qwen 2.5 14B AWQ (orchestrator)",
+          "name": "Qwen3 orchestrator (remote deployment)",
+          "body": {
+            "temperature": 0.6,
+            "top_p": 0.95,
+            "chat_template_kwargs": { "enable_thinking": true }
+          },
           "limit": { "context": 32768, "output": 4096 }
         }
       }
@@ -41,12 +46,22 @@
       "effect": "ask"
     },
     {
+      "action": "reconix_replay_batch",
+      "resource": "*",
+      "effect": "ask"
+    },
+    {
       "action": "reconix_set_intercept_rule",
       "resource": "*",
       "effect": "ask"
     },
     {
       "action": "reconix_submit_form",
+      "resource": "*",
+      "effect": "ask"
+    },
+    {
+      "action": "reconix_upload_files",
       "resource": "*",
       "effect": "ask"
     },

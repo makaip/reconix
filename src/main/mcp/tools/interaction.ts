@@ -5,6 +5,7 @@
 import { defineTool, type Tool, type ToolContext } from '../tool'
 import { str, optStr } from '../validate'
 import { ToolExecError, ToolInputError } from '../errors'
+import { uploadFiles } from './upload'
 
 // cdp.evaluate hands back the page value already JSON-stringified; parse it
 // when the tool wants structure instead of text.
@@ -55,7 +56,7 @@ const click = defineTool<{ selector: string }, unknown>({
 
 const fill = defineTool<{ selector: string; value: string }, unknown>({
   name: 'fill',
-  description: 'Set the value of an input matching selector.',
+  description: 'Set the value of a text input matching selector. Cannot upload files or set a file input to a filename; an empty value can clear a file input.',
   riskTier: 'P',
   inputSchema: {
     type: 'object',
@@ -69,8 +70,11 @@ const fill = defineTool<{ selector: string; value: string }, unknown>({
     const sel = JSON.stringify(i.selector)
     const val = JSON.stringify(i.value)
     const r = await ctx.cdp.evaluate(
-      `(()=>{const el=document.querySelector(${sel});if(!el)return false;el.value=${val};el.dispatchEvent(new Event('input',{bubbles:true}));return true;})()`
+      `(()=>{const el=document.querySelector(${sel});if(!el)return false;if(el.tagName==='INPUT'&&el.type==='file'&&${val}!=='')return 'file-input';el.value=${val};el.dispatchEvent(new Event('input',{bubbles:true}));return true;})()`
     )
+    if (r === JSON.stringify('file-input')) {
+      throw new ToolInputError('fill cannot upload files or assign filenames to file inputs. Use reconix_upload_files with the selector and actual file contents, or an approved multipart request through replay_request. Do not repeat fill or click the file picker for this approach.')
+    }
     return { ok: r === 'true' }
   }
 })
@@ -237,6 +241,7 @@ export const interactionTools: Tool[] = [
   eval_in_page as Tool,
   click as Tool,
   fill as Tool,
+  uploadFiles as Tool,
   dispatch_input as Tool,
   query_dom as Tool,
   set_dom as Tool,

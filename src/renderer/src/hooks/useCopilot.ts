@@ -83,7 +83,7 @@ export type Copilot = {
   /** Interrupts the agent's current turn (OpenCode session interrupt) without
    *  killing the session — the user can send another message right after. */
   suspend: () => void
-  respondApproval: (approvalId: string, decision: 'approve' | 'deny') => void
+  respondApproval: (approvalId: string, decision: 'approve' | 'approve_always' | 'deny') => void
   history: SavedConversation[]
   viewingHistory: SavedConversation | null
   showConversation: (id: string) => void
@@ -393,7 +393,7 @@ export function useCopilot(): Copilot {
                     ...message,
                     parts: message.parts.map((part) =>
                       part.kind === 'tool' && part.approval?.id === ev.approvalId
-                        ? { ...part, approval: { ...part.approval, status: ev.decision === 'approve' ? 'approved' : 'denied' } }
+                        ? { ...part, approval: { ...part.approval, status: ev.decision === 'deny' ? 'denied' : 'approved' } }
                         : part
                     )
                   }
@@ -498,7 +498,7 @@ export function useCopilot(): Copilot {
     window.reconix.copilot.interrupt().catch(() => undefined)
   }, [])
 
-  const respondApproval = useCallback((approvalId: string, decision: 'approve' | 'deny') => {
+  const respondApproval = useCallback((approvalId: string, decision: 'approve' | 'approve_always' | 'deny') => {
     void window.reconix.copilot.respondApproval(approvalId, decision)
   }, [])
 

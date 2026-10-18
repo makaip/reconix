@@ -18,7 +18,7 @@ function formatParams(params: unknown): string {
   }
 }
 
-function ToolBlock({ part, onApproval }: { part: ToolPart; onApproval: (id: string, decision: 'approve' | 'deny') => void }): JSX.Element {
+function ToolBlock({ part, onApproval }: { part: ToolPart; onApproval: (id: string, decision: 'approve' | 'approve_always' | 'deny') => void }): JSX.Element {
   const [open, setOpen] = useState(false)
   return (
     <div className={`tool-block tool-block--${part.status}`}>
@@ -56,7 +56,15 @@ function ToolBlock({ part, onApproval }: { part: ToolPart; onApproval: (id: stri
           <span className="tool-block__approval-label"><span aria-hidden="true">●</span> Approval required</span>
           <div className="tool-block__approval-actions">
             <button type="button" onClick={() => onApproval(part.approval!.id, 'deny')}>Deny</button>
-            <button type="button" className="tool-block__approve" onClick={() => onApproval(part.approval!.id, 'approve')}>Approve</button>
+            <button type="button" onClick={() => onApproval(part.approval!.id, 'approve')}>Approve</button>
+            <button
+              type="button"
+              className="tool-block__approve"
+              title={`Approve this and every future ${part.tool} request for the rest of this session`}
+              onClick={() => onApproval(part.approval!.id, 'approve_always')}
+            >
+              Approve all {part.tool}
+            </button>
           </div>
         </div>
       )}
@@ -169,7 +177,7 @@ function Message({
 }: {
   message: CopilotMessage
   onReply: (text: string) => void
-  onApproval: (id: string, decision: 'approve' | 'deny') => void
+  onApproval: (id: string, decision: 'approve' | 'approve_always' | 'deny') => void
 }): JSX.Element {
   if (message.role === 'user') {
     return (
