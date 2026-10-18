@@ -11,8 +11,8 @@ import { execFile } from "node:child_process"
 import { existsSync } from "node:fs"
 import path from "node:path"
 
-import type { ToolDescriptor } from "../../src/tools/opencode/descriptor"
-import { num, obj, str } from "../../src/tools/schema"
+import type { ToolDescriptor } from "./descriptor"
+import { num, obj, str } from "../schema"
 
 const Z3_SCRIPT = [".opencode", "tools", "z3_string_solver.py"]
 

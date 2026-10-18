@@ -5,7 +5,7 @@ import {
   fromCapabilityTool,
   type ToolDescriptor,
 } from "../../src/tools/opencode/descriptor"
-import { createNativeDescriptors } from "./native"
+import { createNativeDescriptors } from "../../src/tools/opencode/native"
 
 /**
  * Reconix custom tools (OpenCode V2).
