@@ -224,6 +224,42 @@ const get_headers = defineTool<Record<string, never>, unknown>({
   }
 })
 
+const get_storage = defineTool<Record<string, never>, unknown>({
+  name: 'get_storage',
+  description: 'Dump localStorage, sessionStorage, and (best-effort) IndexedDB keys from the current page.',
+  riskTier: 'R',
+  inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  outputSchema: { type: 'object' },
+  parse: () => ({}),
+  execute: async (_i, ctx) => {
+    const data = await evalJson<Record<string, unknown>>(ctx, `(()=>{
+      const ls={}; for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i); ls[k]=localStorage.getItem(k);}
+      const ss={}; for(let i=0;i<sessionStorage.length;i++){const k=sessionStorage.key(i); ss[k]=sessionStorage.getItem(k);}
+      return {localStorage:ls, sessionStorage:ss};
+    })()`)
+    return data
+  }
+})
+
+const extract_js_routes = defineTool<Record<string, never>, unknown>({
+  name: 'extract_js_routes',
+  description: 'Extract candidate API routes/endpoints from inline and external script tags on the current page.',
+  riskTier: 'R',
+  inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  outputSchema: { type: 'object' },
+  parse: () => ({}),
+  execute: async (_i, ctx) => {
+    const data = await evalJson<{ routes: string[] }>(ctx, `(()=>{
+      const src = Array.from(document.querySelectorAll('script')).map(s=>s.textContent||'').join('\\n');
+      const re = /["'\`](\\/[a-zA-Z0-9_\\-./?=&%]+)["'\`]/g;
+      const set = new Set(); let m;
+      while((m=re.exec(src))!==null){ if(m[1].length>2 && m[1].length<200) set.add(m[1]); }
+      return {routes:[...set].slice(0,200)};
+    })()`)
+    return data
+  }
+})
+
 export const navigationTools: Tool[] = [
   navigate as Tool,
   get_page_info as Tool,
@@ -232,5 +268,7 @@ export const navigationTools: Tool[] = [
   get_dom_extract as Tool,
   list_forms as Tool,
   list_links as Tool,
-  get_headers as Tool
+  get_headers as Tool,
+  get_storage as Tool,
+  extract_js_routes as Tool
 ]

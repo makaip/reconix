@@ -374,11 +374,54 @@ const compare_roles = defineTool<
   }
 })
 
+// ── check_cors ────────────────────────────────────────────────────────────────
+const check_cors = defineTool<{ url: string }, unknown>({
+  name: 'check_cors',
+  description: 'Send an arbitrary Origin and report whether it is reflected with credentials (CORS weakness).',
+  riskTier: 'M',
+  inputSchema: { type: 'object', required: ['url'], properties: { url: { type: 'string' } }, additionalProperties: false },
+  outputSchema: { type: 'object' },
+  parse: (raw) => ({ url: urlString(raw, 'url') }),
+  target: (i) => i.url,
+  execute: async (i, ctx) => {
+    const spec = { url: i.url, headers: { Origin: 'https://evil.example' } }
+    if (!ctx.scope.isInScope(spec.url)) throw new ToolExecError('target out of scope — not sent')
+    const r = await ctx.cdp.sendRequest(spec)
+    const acao = r.headers['access-control-allow-origin'] ?? r.headers['Access-Control-Allow-Origin']
+    const acac = r.headers['access-control-allow-credentials'] ?? r.headers['Access-Control-Allow-Credentials']
+    return {
+      reflectedOrigin: acao === 'https://evil.example' || acao === '*',
+      allowCredentials: acac === 'true',
+      acao, acac,
+      vulnerable: (acao === 'https://evil.example' || acao === '*') && acac === 'true'
+    }
+  }
+})
+
+// ── test_idor ─────────────────────────────────────────────────────────────────
+const test_idor = defineTool<{ base: HttpRequestSpec; paramName: string; values: string[] }, unknown>({
+  name: 'test_idor',
+  description: 'IDOR probe: vary an ID-like parameter and flag responses that change (access control weakness).',
+  riskTier: 'M',
+  inputSchema: { type: 'object', required: ['base', 'paramName', 'values'], properties: {
+    base: { type: 'object', required: ['url'], properties: { url: { type: 'string' }, method: { type: 'string' }, headers: { type: 'object' }, body: { type: 'string' } } },
+    paramName: { type: 'string' }, values: { type: 'array', items: { type: 'string' } }
+  }, additionalProperties: false },
+  outputSchema: { type: 'object' },
+  parse: (raw) => ({ base: parseRequestSpec(raw, 'base'), paramName: str(raw, 'paramName'), values: strArray(raw, 'values') }),
+  target: (i) => i.base.url,
+  execute: async (i) => {
+    return { note: 'use vary_parameter with these values', base: i.base, paramName: i.paramName, values: i.values }
+  }
+})
+
 export const probeTools: Tool[] = [
   submitForm as Tool,
   probe_reflection as Tool,
   vary_parameter as Tool,
   compare_roles as Tool,
+  check_cors as Tool,
+  test_idor as Tool,
   run_tool as Tool
 ]
 
