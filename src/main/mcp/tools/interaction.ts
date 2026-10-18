@@ -237,6 +237,48 @@ const set_emulation = defineTool<EmulationInput, unknown>({
   }
 })
 
+import { requestQuestion } from '../../questionBridge'
+
+const ask_user = defineTool<
+  { header: string; question: string; options?: string[]; multiple?: boolean },
+  unknown
+>({
+  name: 'ask_user',
+  description: 'Pause and ask the user a question with optional choices. Returns their answer.',
+  riskTier: 'R',
+  inputSchema: {
+    type: 'object',
+    required: ['question'],
+    properties: {
+      header: { type: 'string' },
+      question: { type: 'string' },
+      options: { type: 'array', items: { type: 'string' } },
+      multiple: { type: 'boolean' }
+    },
+    additionalProperties: false
+  },
+  outputSchema: { type: 'object', properties: { answer: {} } },
+  parse: (raw) => {
+    const r = (raw ?? {}) as Record<string, unknown>
+    const question = typeof r.question === 'string' ? r.question : ''
+    if (!question) throw new ToolInputError('"question" must be a non-empty string')
+    const header = typeof r.header === 'string' ? r.header : 'Question'
+    const options = Array.isArray(r.options) ? r.options.filter((x) => typeof x === 'string') as string[] : undefined
+    const multiple = typeof r.multiple === 'boolean' ? r.multiple : false
+    return { header, question, options, multiple }
+  },
+  execute: async (i) => {
+    const answer = await requestQuestion({
+      header: i.header,
+      question: i.question,
+      options: i.options,
+      multiple: i.multiple
+    })
+    if (answer === null) return { cancelled: true }
+    return { answer }
+  }
+})
+
 export const interactionTools: Tool[] = [
   eval_in_page as Tool,
   click as Tool,
@@ -245,5 +287,6 @@ export const interactionTools: Tool[] = [
   dispatch_input as Tool,
   query_dom as Tool,
   set_dom as Tool,
-  set_emulation as Tool
+  set_emulation as Tool,
+  ask_user as Tool
 ]

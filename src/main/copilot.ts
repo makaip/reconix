@@ -40,6 +40,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
+import { setQuestionSender } from './questionBridge'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { BrowserWindow, WebContents } from 'electron'
@@ -620,6 +621,7 @@ async function resolveSandboxDir(): Promise<string> {
 }
 
 export function createCopilotBridge(win: BrowserWindow, getNetwork: () => NetworkCapture | undefined, getInterceptor?: () => { save(raw: unknown): InterceptRule | null; list(): InterceptRule[]; toggle(id: unknown, enabled: unknown): InterceptRule | null; remove(id: unknown): boolean } | undefined, getCrawler?: () => { start(raw: unknown): unknown; stop(): unknown; getState(): unknown } | undefined, getRepeater?: () => { list(): unknown; save(raw: unknown): unknown; remove(id: unknown): unknown; run(id: unknown): unknown; diff(raw: unknown): unknown } | undefined): CopilotBridge {
+  setQuestionSender((payload) => { if (!win.isDestroyed()) win.webContents.send('copilot:question', payload) })
   let child: ChildProcessWithoutNullStreams | null = null
   let connector: OpenCodeConnector | null = null
   let starting: Promise<OpenCodeConnector> | null = null
@@ -1130,6 +1132,12 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
     restrictionsInjected = false // new chat is a new session — restrictions re-inject
     usage.registerSession(id, 'orchestrator')
     return id
+  })
+
+  ipcMain.removeHandler('copilot:respond-question')
+  ipcMain.handle('copilot:respond-question', async (_event, questionId: string, answer: unknown) => {
+    const { resolveQuestion } = await import('./questionBridge')
+    resolveQuestion(String(questionId), (answer as string | string[] | null) ?? null)
   })
 
   ipcMain.removeHandler('copilot:respond-approval')

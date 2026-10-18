@@ -272,6 +272,10 @@ const api = {
       ipcRenderer.invoke('copilot:set-enabled-tools', names),
     respondApproval: (approvalId: string, decision: CopilotApprovalDecision): Promise<void> =>
       ipcRenderer.invoke('copilot:respond-approval', approvalId, decision),
+    respondQuestion: (questionId: string, answer: unknown): Promise<void> =>
+      ipcRenderer.invoke('copilot:respond-question', questionId, answer),
+    onQuestion: (callback: (q: { questionId: string; header: string; question: string; options?: string[]; multiple?: boolean }) => void): (() => void) =>
+      subscribe('copilot:question', callback),
     interrupt: (): Promise<void> => ipcRenderer.invoke('copilot:interrupt'),
     onEvent: (callback: (event: CopilotAgentEvent) => void): (() => void) => {
       const listener = (_event: Electron.IpcRendererEvent, payload: CopilotAgentEvent): void => callback(payload)

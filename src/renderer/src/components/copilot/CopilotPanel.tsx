@@ -70,7 +70,9 @@ function CopilotPanel({
     setAllToolsEnabled,
     attachRequests,
     restrictions,
-    saveRestrictions
+    saveRestrictions,
+    pendingQuestion,
+    respondQuestion
   } = copilot
   const engine = useEngineStatus()
   const engineLabel: Record<typeof engine.status, string> = {
@@ -434,6 +436,26 @@ function CopilotPanel({
         {dragActive && <DropZone over={over} />}
       </div>
 
+      {pendingQuestion && (
+        <div className="copilot__question" role="dialog">
+          <div className="copilot__question-header">{pendingQuestion.header}</div>
+          <div className="copilot__question-text">{pendingQuestion.question}</div>
+          {pendingQuestion.options && pendingQuestion.options.length > 0 ? (
+            <div className="copilot__question-options">
+              {pendingQuestion.options.map((opt) => (
+                <button
+                  key={opt}
+                  type="button"
+                  onClick={() => respondQuestion(pendingQuestion.questionId, pendingQuestion.multiple ? [opt] : opt)}
+                >
+                  {opt}
+                </button>
+              ))}
+            </div>
+          ) : null}
+          <button type="button" onClick={() => respondQuestion(pendingQuestion.questionId, '')}>Cancel</button>
+        </div>
+      )}
       {viewingHistory ? (
         <div className="chat-history__readonly">Saved conversation · read only</div>
       ) : (

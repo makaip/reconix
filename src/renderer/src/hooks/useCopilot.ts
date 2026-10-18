@@ -93,6 +93,8 @@ export type Copilot = {
    *  killing the session — the user can send another message right after. */
   suspend: () => void
   respondApproval: (approvalId: string, decision: 'approve' | 'approve_always' | 'deny') => void
+  pendingQuestion: { questionId: string; header: string; question: string; options?: string[]; multiple?: boolean } | null
+  respondQuestion: (questionId: string, answer: string | string[]) => void
   history: SavedConversation[]
   viewingHistory: SavedConversation | null
   showConversation: (id: string) => void
@@ -144,6 +146,7 @@ export function useCopilot(): Copilot {
   const [browserAction, setBrowserAction] = useState<string | null>(null)
   const [activityLabel, setActivityLabel] = useState<string | null>(null)
   const [attachments, setAttachments] = useState<ContextAttachment[]>([])
+  const [pendingQuestion, setPendingQuestion] = useState<{ questionId: string; header: string; question: string; options?: string[]; multiple?: boolean } | null>(null)
   const [thinking, setThinking] = useState(false)
   const [busy, setBusy] = useState(false)
   const [toolAccess, setToolAccess] = useState<ToolAccess[]>([])
@@ -197,6 +200,10 @@ export function useCopilot(): Copilot {
 
   useEffect(() => {
     void window.reconix.copilot.getRestrictions().then(setRestrictions).catch(() => undefined)
+  }, [])
+
+  useEffect(() => {
+    return window.reconix.copilot.onQuestion((q) => setPendingQuestion(q))
   }, [])
 
   useEffect(() => {
@@ -555,6 +562,11 @@ export function useCopilot(): Copilot {
     void window.reconix.copilot.respondApproval(approvalId, decision)
   }, [])
 
+  const respondQuestion = useCallback((questionId: string, answer: string | string[]) => {
+    void window.reconix.copilot.respondQuestion(questionId, answer)
+    setPendingQuestion(null)
+  }, [])
+
   const applyEnabledTools = useCallback((names: string[]) => {
     void window.reconix.copilot.setEnabledTools(names).then(setToolAccess).catch(() => undefined)
   }, [])
@@ -654,6 +666,8 @@ export function useCopilot(): Copilot {
     setAllToolsEnabled,
     attachRequests,
     restrictions,
-    saveRestrictions
+    saveRestrictions,
+    pendingQuestion,
+    respondQuestion
   }
 }
