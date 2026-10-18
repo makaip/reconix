@@ -1,14 +1,10 @@
 // Findings store (ARCHITECTURE §6.4: findings(id, engagement_id, schema_json,
-// evidence_ref, status, ts)). Backed by a real SQLite database via
-// node-sqlite3-wasm — a WebAssembly build of SQLite, so it persists to a real
-// file without a native module to recompile per platform (this repo deliberately
-// ships with none; see electron-builder.yml). Same observable contract as before:
-// record appends, the renderer's Findings panel updates live over
-// `findings:changed`. Lives outside copilot.ts so the MCP sink and the IPC
+// evidence_ref, status, ts)). Rows live in the shared SQLite database (db.ts) —
+// see that module for the driver rationale. Same observable contract as the
+// in-memory original: record appends, the renderer's Findings panel updates live
+// over `findings:changed`. Lives outside copilot.ts so the MCP sink and the IPC
 // surface share one source of truth instead of a closure-private array.
-import { mkdirSync } from 'node:fs'
-import { dirname } from 'node:path'
-import { Database } from 'node-sqlite3-wasm'
+import type { Database } from 'node-sqlite3-wasm'
 import { ipcMain, type BrowserWindow } from 'electron'
 import type { Finding, FindingSeverity } from '../shared/findings'
 import type { FindingSink } from './mcp/tool'
@@ -28,12 +24,11 @@ export interface FindingsStore {
   list(): StoredFinding[]
   /** Renderer-facing summary rows. */
   summary(): Finding[]
+  /** Detach the IPC handler + window listener. Does NOT close the shared DB. */
   close(): void
 }
 
 export interface FindingsStoreOptions {
-  /** SQLite file to persist to. Omit for an in-memory DB (unit tests). */
-  dbPath?: string
   /** Engagement these findings belong to; null when no scope is loaded. */
   engagementId?: string | null
 }
@@ -62,11 +57,12 @@ function asTitle(schema: unknown, id: string): string {
   return `Finding ${id}`
 }
 
-const summarize = (rows: readonly StoredFinding[]): Finding[] =>
-  rows.map((r) => {
-    const schema = (r.schema ?? {}) as Record<string, unknown>
-    return { id: r.id, title: asTitle(r.schema, r.id), severity: asSeverity(schema.severity) }
-  })
+/** StoredFinding -> display row. Exported so the history reader renders findings
+ *  identically (one definition of title/severity). */
+export function findingSummary(row: StoredFinding): Finding {
+  const schema = (row.schema ?? {}) as Record<string, unknown>
+  return { id: row.id, title: asTitle(row.schema, row.id), severity: asSeverity(schema.severity) }
+}
 
 /** Ids are `finding_<n>`; recover the sequence so restored ids never collide. */
 function idSeq(id: string): number {
@@ -93,26 +89,12 @@ function toStored(row: Record<string, unknown>): StoredFinding {
   }
 }
 
-const SCHEMA = `
-  CREATE TABLE IF NOT EXISTS findings (
-    id            TEXT PRIMARY KEY,
-    engagement_id TEXT,
-    schema_json   TEXT NOT NULL,
-    evidence_ref  TEXT NOT NULL,
-    status        TEXT NOT NULL DEFAULT 'open',
-    ts            INTEGER NOT NULL
-  )
-`
-
 export function createFindingsStore(
+  db: Database,
   win: BrowserWindow,
   options: FindingsStoreOptions = {}
 ): FindingsStore {
-  const { dbPath, engagementId = null } = options
-  if (dbPath) mkdirSync(dirname(dbPath), { recursive: true })
-  // ':memory:' for tests — same code path, no file left behind.
-  const db = new Database(dbPath ?? ':memory:')
-  db.exec(SCHEMA)
+  const { engagementId = null } = options
 
   // Restore the id sequence so a restart continues it instead of colliding with
   // an existing PRIMARY KEY.
@@ -128,7 +110,7 @@ export function createFindingsStore(
 
   const broadcast = (): void => {
     if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
-      win.webContents.send('findings:changed', summarize(readAll()))
+      win.webContents.send('findings:changed', readAll().map(findingSummary))
     }
   }
 
@@ -146,16 +128,14 @@ export function createFindingsStore(
 
   ipcMain.removeHandler('findings:list')
   ipcMain.handle('findings:list', (event) =>
-    event.sender === win.webContents ? summarize(readAll()) : []
+    event.sender === win.webContents ? readAll().map(findingSummary) : []
   )
 
-  // Called from stop() and again when the window closes; both paths land here,
-  // so guard the close (node-sqlite3-wasm leaks if a Database is never closed).
+  // Called from stop() and again when the window closes; both paths land here.
   const close = (): void => {
     ipcMain.removeHandler('findings:list')
-    if (db.isOpen) db.close()
   }
   win.on('closed', close)
 
-  return { sink, list: readAll, summary: () => summarize(readAll()), close }
+  return { sink, list: readAll, summary: () => readAll().map(findingSummary), close }
 }

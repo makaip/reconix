@@ -62,13 +62,16 @@ import {
 } from './opencode'
 import { parseModel, type RawEvent } from './opencode/transport'
 import { buildMcpServer } from './mcp'
-import { InMemoryAuditLogger } from './mcp/audit'
 import { startMcpHttpServer, type McpHttpServer } from './mcp/server'
 import { WebContentsCdpDriver, type CdpDriver, type CookieRecord } from './mcp/cdp'
 import { ScopeChecker, type ScopeEnforcer } from './mcp/scope'
-import type { FindingSink, HistoryReader, NetworkReader, ToolContext, TraceStore } from './mcp/tool'
+import type { NetworkReader, ToolContext } from './mcp/tool'
+import { openDatabase } from './db'
 import { loadScopeConfig } from './engagement'
-import { createFindingsStore, type FindingsStore } from './findings'
+import { createFindingsStore } from './findings'
+import { createTraceStore } from './traces'
+import { createAuditLogger } from './auditLog'
+import { createHistoryReader } from './history'
 
 const HOST = '127.0.0.1'
 const OPENCODE_PORT = 4097
@@ -498,24 +501,6 @@ class DomSummaryWatcher {
   }
 }
 
-// In-memory stand-ins for traces/history (ARCHITECTURE §6.4) — the real store
-// only backs findings so far, so traces/history don't survive a restart.
-// Findings are the exception: they live in createFindingsStore, which persists
-// to a SQLite DB (and stays observable, so the renderer's panel reflects
-// recorded findings live). (Same stopgap pattern as smoke.ts's InMemoryAuditLogger.)
-function createInMemorySinks(findingsStore: FindingsStore): { traces: TraceStore; findings: FindingSink; history: HistoryReader } {
-  let traceSeq = 0
-  return {
-    traces: {
-      save: async () => `trace_${++traceSeq}`
-    },
-    findings: findingsStore.sink,
-    history: {
-      query: async () => findingsStore.list()
-    }
-  }
-}
-
 const POLICY: Policy = { autoApprove: ['R', 'P'], redactCookies: true, maxToolCallsPerTurn: 100 }
 
 // macOS/Linux XDG path, confirmed live via `opencode debug paths`. OpenCode
@@ -600,13 +585,14 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
   const cdp = new ActiveTabCdpDriver((wc) => wc.id === win.webContents.id)
   const scope = new ActiveTabScope(() => cdp.pageContext()?.url ?? null)
   const networkReader = new ActiveTabNetworkReader(getNetwork)
-  // Findings persist to a SQLite DB under userData so they survive a restart;
-  // record_finding also broadcasts to the renderer's panel. Registered here so
-  // the store owns its IPC handler + cleanup.
-  const findingsStore = createFindingsStore(win, {
-    dbPath: join(app.getPath('userData'), 'reconix.db'),
-    engagementId: loadScopeConfig()?.engagementId ?? null
-  })
+  // The §6.4 engagement store: one SQLite DB shared by findings, traces, and the
+  // tool-call audit log, so everything survives a restart. Findings also stay
+  // observable (record_finding broadcasts to the renderer's panel).
+  const db = openDatabase(join(app.getPath('userData'), 'reconix.db'))
+  const engagementId = loadScopeConfig()?.engagementId ?? null
+  const findingsStore = createFindingsStore(db, win, { engagementId })
+  const traces = createTraceStore(db, { engagementId })
+  const history = createHistoryReader(db, findingsStore)
 
   // Cost/latency meter. Fed by the connector's persist (all sessions, incl.
   // subagents + the ambient DOM parser) and onAgentEvent (orchestrator turn
@@ -738,16 +724,17 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
     if (mcpServer) return mcpServer
     if (mcpStarting) return mcpStarting
     mcpStarting = (async () => {
-      const sinks = createInMemorySinks(findingsStore)
       const context: ToolContext = {
         engagementId: 'eng_dev',
         scope,
         policy: POLICY,
         cdp,
         network: networkReader,
-        ...sinks
+        traces,
+        findings: findingsStore.sink,
+        history
       }
-      const audit = new InMemoryAuditLogger()
+      const audit = createAuditLogger(db)
       const registry = buildMcpServer({ audit, context, surface: 'all' })
       try {
         const saved = JSON.parse(await readFile(toolAccessPath, 'utf8'))
@@ -1031,6 +1018,8 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
       findingsStore.close()
       await connector?.stop().catch(() => undefined)
       await mcpServer?.stop().catch(() => undefined)
+      // Findings.store close only detaches IPC; the shared DB is ours to close.
+      if (db.isOpen) db.close()
       const proc = child
       child = null
       if (proc) await terminateServer(proc)

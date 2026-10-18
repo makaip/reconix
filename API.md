@@ -173,6 +173,10 @@ run_tool({ tool, argv[], caps }): { exitCode, stdoutRef, stderrRef }      // D â
 ```ts
 reproduce({ interactionRef }): { matched: boolean, traceRef }
 collect_evidence({ include: ("screenshot"|"reqresp"|"trace")[] }): { traceRef }
+get_trace({ ref: string }): { ref, kind, ts, bytes, encoding: "utf8"|"base64"|null, data: string|null, truncated: boolean }
+// get_trace resolves a traceRef into its stored contents â€” text as-is, binary
+// (screenshots) base64. Over the inline cap it returns metadata only (data:null,
+// truncated:true) so a full-page capture can't flood the context.
 ```
 
 ### 3.7 Findings & history

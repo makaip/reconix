@@ -2,7 +2,6 @@ import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { Database } from 'node-sqlite3-wasm'
 import type { BrowserWindow } from 'electron'
 
 // ipcMain.handle/removeHandler fire at store construction; capture handlers so
@@ -24,6 +23,7 @@ vi.mock('electron', () => ({
   }
 }))
 
+import { openDatabase } from './db'
 import { createFindingsStore } from './findings'
 
 const makeWin = (): BrowserWindow =>
@@ -36,7 +36,7 @@ beforeEach(() => {
 
 describe('createFindingsStore', () => {
   it('summarizes a recorded finding and broadcasts the change', async () => {
-    const store = createFindingsStore(makeWin())
+    const store = createFindingsStore(openDatabase(), makeWin())
     const id = await store.sink.record({ title: 'Reflected XSS', severity: 'high' }, 'trace_1')
 
     expect(id).toBe('finding_1')
@@ -48,7 +48,7 @@ describe('createFindingsStore', () => {
   })
 
   it('keeps the raw schema + evidence ref for query_log/history', async () => {
-    const store = createFindingsStore(makeWin())
+    const store = createFindingsStore(openDatabase(), makeWin())
     await store.sink.record({ title: 'x', severity: 'low' }, 'trace_9')
 
     expect(store.list()).toMatchObject([
@@ -57,14 +57,14 @@ describe('createFindingsStore', () => {
   })
 
   it('degrades an unknown severity to info and falls back on the title', async () => {
-    const store = createFindingsStore(makeWin())
+    const store = createFindingsStore(openDatabase(), makeWin())
     await store.sink.record({ severity: 'urgent' }, 'trace_2')
 
     expect(store.summary()).toEqual([{ id: 'finding_1', title: 'Finding finding_1', severity: 'info' }])
   })
 
   it('serves findings:list to the owning window', async () => {
-    const store = createFindingsStore(makeWin())
+    const store = createFindingsStore(openDatabase(), makeWin())
     await store.sink.record({ title: 'a', severity: 'critical' }, 't')
 
     expect(handlers.get('findings:list')!()).toEqual([
@@ -74,15 +74,18 @@ describe('createFindingsStore', () => {
 })
 
 describe('createFindingsStore persistence', () => {
-  const tempFile = (): string => join(mkdtempSync(join(tmpdir(), 'reconix-findings-')), 'reconix.db')
+  const tempFile = (): string =>
+    join(mkdtempSync(join(tmpdir(), 'reconix-findings-')), 'reconix.db')
 
   it('restores persisted rows and continues the id sequence across restarts', async () => {
     const file = tempFile()
-    const first = createFindingsStore(makeWin(), { dbPath: file })
+    const firstDb = openDatabase(file)
+    const first = createFindingsStore(firstDb, makeWin())
     await first.sink.record({ title: 'Reflected XSS', severity: 'high' }, 'trace_1')
-    first.close()
+    firstDb.close()
 
-    const second = createFindingsStore(makeWin(), { dbPath: file })
+    const secondDb = openDatabase(file)
+    const second = createFindingsStore(secondDb, makeWin())
     expect(second.summary()).toEqual([
       { id: 'finding_1', title: 'Reflected XSS', severity: 'high' }
     ])
@@ -92,16 +95,14 @@ describe('createFindingsStore persistence', () => {
     expect(await second.sink.record({ title: 'SSRF', severity: 'medium' }, 'trace_2')).toBe(
       'finding_2'
     )
-    second.close()
+    secondDb.close()
   })
 
   it('stamps the engagement id and default status from the §6.4 schema', async () => {
-    const file = tempFile()
-    const store = createFindingsStore(makeWin(), { dbPath: file, engagementId: 'eng_42' })
+    const db = openDatabase(tempFile())
+    const store = createFindingsStore(db, makeWin(), { engagementId: 'eng_42' })
     await store.sink.record({ title: 'x', severity: 'low' }, 't')
-    store.close()
 
-    const db = new Database(file)
     const row = db.get('SELECT engagement_id, status FROM findings') as {
       engagement_id: string
       status: string
@@ -109,12 +110,5 @@ describe('createFindingsStore persistence', () => {
     expect(row.engagement_id).toBe('eng_42')
     expect(row.status).toBe('open')
     db.close()
-  })
-
-  it('runs in memory (no file) when no dbPath is given', async () => {
-    const store = createFindingsStore(makeWin())
-    await store.sink.record({ title: 'ephemeral', severity: 'low' }, 't')
-    expect(store.summary()).toHaveLength(1)
-    store.close()
   })
 })

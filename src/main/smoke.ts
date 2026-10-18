@@ -37,7 +37,7 @@ function buildServer(wc: Electron.WebContents, audit: InMemoryAuditLogger): Retu
     scope: new ScopeChecker(SCOPE),
     policy: POLICY,
     cdp: new WebContentsCdpDriver(wc, () => false /* not the UI */),
-    traces: { save: async () => 'trace_mock' },
+    traces: { save: async () => 'trace_mock', get: () => null },
     findings: { record: async () => 'find_mock' },
     history: { query: async () => [] },
     network: { list: () => [], get: () => undefined }

@@ -9,8 +9,19 @@ import type { ScopeEnforcer } from './scope'
 
 // Sinks the handlers need, beyond the driver. Audit is NOT here — the pipeline
 // owns audit so a handler can never skip it.
+export type TraceKind = 'screenshot' | 'reqresp' | 'trace'
+/** A stored trace, read back for the agent via get_trace. `data` is the raw
+ *  bytes (text traces decode as UTF-8, screenshots as PNG, etc.). */
+export interface TraceRecord {
+  ref: string
+  kind: TraceKind
+  ts: number
+  data: Uint8Array
+}
 export interface TraceStore {
-  save(kind: 'screenshot' | 'reqresp' | 'trace', data: Buffer | string): Promise<TraceRef>
+  save(kind: TraceKind, data: Buffer | string): Promise<TraceRef>
+  /** Resolve a ref produced by save(); null when it isn't in the store. */
+  get(ref: TraceRef): TraceRecord | null
 }
 export interface FindingSink {
   record(schema: unknown, evidenceRef: string): Promise<string> // -> findingId (findings table)

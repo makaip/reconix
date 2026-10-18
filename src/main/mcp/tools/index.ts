@@ -5,6 +5,7 @@ import { interactionTools } from './interaction'
 import { networkTools } from './network'
 import { probeTools, verifyTools } from './probes'
 import { findingTools } from './findings'
+import { evidenceTools } from './evidence'
 import { customTools } from './custom'
 
 // Full catalog (API.md §3). Dev 1's customTools (§3.8) sit in the same list and
@@ -17,6 +18,7 @@ export const allTools: Tool[] = [
   ...probeTools,
   ...verifyTools,
   ...findingTools,
+  ...evidenceTools,
   ...customTools
 ]
 
