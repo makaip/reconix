@@ -43,4 +43,22 @@ const query_log = defineTool<{ filter: unknown }, unknown>({
   execute: async (i, ctx) => ctx.history.query(i.filter)
 })
 
-export const findingTools: Tool[] = [record_finding as Tool, query_log as Tool]
+const export_report = defineTool<{ filter?: unknown }, unknown>({
+  name: 'export_report',
+  description: 'Export engagement findings as a Markdown report.',
+  riskTier: 'R',
+  inputSchema: { type: 'object', properties: { filter: { type: 'object' } }, additionalProperties: false },
+  outputSchema: { type: 'object' },
+  parse: (raw) => {
+    const r = raw as { filter?: unknown }
+    return { filter: r?.filter ?? {} }
+  },
+  execute: async (i, ctx) => {
+    const rows = await ctx.history.query(i.filter)
+    const lines = ['# Findings Report', '', `Total: ${rows.length}`, '']
+    for (const r of rows as any[]) lines.push(`- ${JSON.stringify(r)}`)
+    return { markdown: lines.join('\\n'), count: rows.length }
+  }
+})
+
+export const findingTools: Tool[] = [record_finding as Tool, query_log as Tool, export_report as Tool]

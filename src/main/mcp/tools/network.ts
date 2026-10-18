@@ -319,20 +319,6 @@ const replay_batch = defineTool<{ base: RequestSpec; variants: RequestOverrides[
   }
 })
 
-function pending(name: string, description: string, tier: 'R' | 'M'): Tool {
-  return defineTool<Record<string, never>, never>({
-    name,
-    description,
-    riskTier: tier,
-    inputSchema: { type: 'object', additionalProperties: true },
-    outputSchema: { type: 'object' },
-    parse: () => ({}),
-    execute: async () => {
-      throw new ToolExecError(`${name}: not implemented in Phase 1`)
-    }
-  }) as Tool
-}
-
 // A compact log row. The full header maps are deliberately NOT here — on a real
 // page they are the bulk of the payload and would overflow the orchestrator's
 // context in one call. The agent pulls headers/detail for a specific row via
@@ -426,10 +412,45 @@ const get_request = defineTool<{ id: string }, unknown>({
   }
 })
 
+const get_websocket_messages = defineTool<Record<string, never>, unknown>({
+  name: 'get_websocket_messages',
+  description: 'Best-effort: list WebSocket URLs observed on the current page.',
+  riskTier: 'R',
+  inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  outputSchema: { type: 'object' },
+  parse: () => ({}),
+  execute: async (_i, ctx) => {
+    const evalFn = (ctx.cdp as unknown as { eval?: (expr: string) => Promise<unknown> }).eval
+    if (typeof evalFn !== 'function') return { urls: [] }
+    try {
+      const res = await evalFn('(()=>[...new Set(performance.getEntriesByType("resource").filter(e=>String(e.name).startsWith("ws")).map(e=>e.name))])()')
+      return { urls: Array.isArray(res) ? res : [] }
+    } catch {
+      return { urls: [] }
+    }
+  }
+})
+
 export const networkTools: Tool[] = [
   replay_request as Tool,
   replay_batch as Tool,
   get_network_log as Tool,
   get_request as Tool,
-  pending('set_intercept_rule', 'CDP Fetch rewrite rule. Gated — it is the scope boundary.', 'M')
+  get_websocket_messages as Tool,
+  defineTool<{ raw: unknown }, unknown>({
+    name: 'set_intercept_rule',
+    description: 'Create a match/replace intercept rule (CDP Fetch). Gated.',
+    riskTier: 'M',
+    inputSchema: { type: 'object', required: ['raw'], properties: { raw: { type: 'object' } }, additionalProperties: false },
+    outputSchema: { type: 'object' },
+    parse: (raw) => {
+      const r = raw as { raw?: unknown }
+      return { raw: r?.raw }
+    },
+    execute: async (i, ctx) => {
+      if (!ctx.interceptor) throw new ToolExecError('interceptor not available')
+      const rule = ctx.interceptor.save(i.raw)
+      return { rule }
+    }
+  }) as Tool
 ]
