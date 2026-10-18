@@ -7,6 +7,7 @@ import { probeTools, verifyTools } from './probes'
 import { findingTools } from './findings'
 import { evidenceTools } from './evidence'
 import { customTools } from './custom'
+import { capabilityTools } from './capabilities'
 
 // Full catalog (API.md §3). Dev 1's customTools (§3.8) sit in the same list and
 // go through the same pipeline as Dev 3's own tools.
@@ -19,7 +20,8 @@ export const allTools: Tool[] = [
   ...verifyTools,
   ...findingTools,
   ...evidenceTools,
-  ...customTools
+  ...customTools,
+  ...capabilityTools.filter((t) => !customTools.some((c) => c.name === t.name))
 ]
 
 // The MVP subset the doc's Appendix names — what the spine turns on first.
