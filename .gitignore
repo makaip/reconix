@@ -40,3 +40,8 @@ CLAUDE.md
 reconix.env
 
 CLAUDE.md
+
+# marketing site (built/deployed by .github/workflows/pages.yml)
+site/node_modules
+site/.next
+site/out

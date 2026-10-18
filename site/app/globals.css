@@ -1,0 +1,41 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+  html {
+    background: #0b0b0c;
+    color: #b7b7be;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+  body {
+    margin: 0;
+    font-family: var(--font-sans), system-ui, sans-serif;
+    overflow-x: hidden;
+  }
+  ::selection {
+    background: #2c4a6e;
+    color: #f2f2f3;
+  }
+  a {
+    color: inherit;
+    text-decoration: none;
+  }
+}
+
+/* The 3D canvas is fixed behind the page and never takes pointer events. */
+.scene-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+.content-layer {
+  position: relative;
+  z-index: 1;
+}
