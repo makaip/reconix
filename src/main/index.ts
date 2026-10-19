@@ -139,6 +139,13 @@ function createWindow(): void {
     }
   })
 
+  // Every main-process subsystem (tabs, network, inspector, replay, crawler,
+  // findings, ...) registers one 'closed' cleanup listener on the window. That
+  // is intentional one-per-module wiring, not a leak, but it exceeds Node's
+  // default limit of 10 — raise it so the "possible EventEmitter memory leak"
+  // warning doesn't drown out real ones.
+  mainWindow.setMaxListeners(32)
+
   // Strict CSP backstop for the UI window (default-src 'self', no 'unsafe-inline').
   // CSP split dev vs prod: the electron-vite dev server injects inline scripts/styles
   // and talks over ws: for HMR, which a no-'unsafe-inline' policy would break — so in

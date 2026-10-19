@@ -40,7 +40,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
-import { setQuestionSender } from './questionBridge'
+import { resolveQuestion, setQuestionSender } from './questionBridge'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { BrowserWindow, WebContents } from 'electron'
@@ -1240,7 +1240,6 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
 
   ipcMain.removeHandler('copilot:respond-question')
   ipcMain.handle('copilot:respond-question', async (_event, questionId: string, answer: unknown) => {
-    const { resolveQuestion } = await import('./questionBridge')
     resolveQuestion(String(questionId), (answer as string | string[] | null) ?? null)
   })
 
