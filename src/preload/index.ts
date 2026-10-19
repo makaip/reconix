@@ -21,6 +21,7 @@ import type {
   ResourceRef,
   StorageArea,
   StorageEntry,
+  StorageState,
   StyleRule
 } from '../shared/devtools'
 import type {
@@ -219,6 +220,11 @@ const api = {
       ipcRenderer.invoke('devtools:delete-storage-item', payload),
     clearStorage: (area: StorageArea): Promise<boolean | null> =>
       ipcRenderer.invoke('devtools:clear-storage', area),
+    // Playwright-style storageState snapshot of the active tab (cookies + localStorage)
+    exportStorageState: (): Promise<StorageState | null> =>
+      ipcRenderer.invoke('devtools:export-storage-state'),
+    importStorageState: (state: StorageState): Promise<boolean | null> =>
+      ipcRenderer.invoke('devtools:import-storage-state', state),
     // subscribes to devtools DOM events
     // aso returns an unsubscribe function to stop listening to events
     onEvent: (callback: (event: DevToolsEvent) => void): (() => void) => {

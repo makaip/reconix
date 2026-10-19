@@ -11,6 +11,7 @@ import type {
   ResourceRef,
   StorageArea,
   StorageEntry,
+  StorageState,
   StyleRule
 } from '../shared/devtools'
 
@@ -167,6 +168,41 @@ const isStorageItemRef = (value: unknown): value is { area: StorageArea; key: st
 const isStorageSetPayload = (value: unknown): value is { area: StorageArea; key: string; value: string } =>
   isStorageItemRef(value) && typeof (value as Record<string, unknown>).value === 'string'
 const isCookieName = (value: unknown): value is string => typeof value === 'string' && value.length > 0
+const isStorageEntry = (value: unknown): value is StorageEntry => {
+  if (typeof value !== 'object' || value === null) return false
+  const v = value as Record<string, unknown>
+  return typeof v.key === 'string' && typeof v.value === 'string'
+}
+// Imported JSON is untrusted, so validate only the fields we actually apply.
+const isStorageState = (value: unknown): value is StorageState => {
+  if (typeof value !== 'object' || value === null) return false
+  const v = value as Record<string, unknown>
+  if (!Array.isArray(v.cookies) || !Array.isArray(v.origins)) return false
+  const cookiesOk = v.cookies.every((raw) => {
+    if (typeof raw !== 'object' || raw === null) return false
+    const cookie = raw as Record<string, unknown>
+    return (
+      isNonEmptyString(cookie.name) &&
+      typeof cookie.value === 'string' &&
+      typeof cookie.domain === 'string'
+    )
+  })
+  const originsOk = v.origins.every((raw) => {
+    if (typeof raw !== 'object' || raw === null) return false
+    const origin = raw as Record<string, unknown>
+    return isNonEmptyString(origin.origin) && Array.isArray(origin.localStorage) && origin.localStorage.every(isStorageEntry)
+  })
+  return cookiesOk && originsOk
+}
+
+/** Origin of a page URL; empty string when the URL has an opaque origin (about:blank, data:). */
+function originOf(url: string): string {
+  try {
+    return new URL(url).origin
+  } catch {
+    return ''
+  }
+}
 
 function toProperties(style: CssStyle): StyleRule['properties'] {
   // note that declared properties carry implicit: false
@@ -551,7 +587,8 @@ export function attachInspector(
 
   // --- Application: cookies + storage -----------------------------------------
 
-  handle('devtools:get-cookies', async (): Promise<CookieInfo[]> => {
+  // Shared by the Application panel handlers and storageState export/import.
+  const readCookies = async (): Promise<CookieInfo[]> => {
     // Every tab shares TARGET_PARTITION's session, so an unscoped query would leak
     // other tabs' cookies into this page's panel — always scope to the current URL.
     const url = current?.getURL()
@@ -567,7 +604,29 @@ export function attachInspector(
       secure: cookie.secure,
       sameSite: cookie.sameSite
     }))
-  })
+  }
+
+  const readStorageEntries = async (area: StorageArea): Promise<StorageEntry[]> => {
+    if (contextId === null) return []
+    const { result } = await send<{ result: RemoteObject }>('Runtime.evaluate', {
+      expression: `Object.entries(${storageExpression(area)})`,
+      contextId,
+      returnByValue: true
+    })
+    const entries = Array.isArray(result.value) ? (result.value as [string, string][]) : []
+    return entries.map(([key, value]) => ({ key, value: String(value) }))
+  }
+
+  const writeStorageEntry = async (area: StorageArea, key: string, value: string): Promise<void> => {
+    if (contextId === null) return
+    // JSON.stringify both sides so the key/value are safely embedded as string literals
+    await send('Runtime.evaluate', {
+      expression: `${storageExpression(area)}.setItem(${JSON.stringify(key)}, ${JSON.stringify(value)})`,
+      contextId
+    })
+  }
+
+  handle('devtools:get-cookies', readCookies)
 
   handle('devtools:delete-cookie', async (name) => {
     if (!isCookieName(name)) return null
@@ -580,25 +639,13 @@ export function attachInspector(
 
   handle('devtools:get-storage', async (area): Promise<StorageEntry[] | null> => {
     if (!isStorageArea(area)) return null
-    if (contextId === null) return []
-    const { result } = await send<{ result: RemoteObject }>('Runtime.evaluate', {
-      expression: `Object.entries(${storageExpression(area)})`,
-      contextId,
-      returnByValue: true
-    })
-    const entries = Array.isArray(result.value) ? (result.value as [string, string][]) : []
-    return entries.map(([key, value]) => ({ key, value: String(value) }))
+    return readStorageEntries(area)
   })
 
   handle('devtools:set-storage-item', async (payload) => {
     if (!isStorageSetPayload(payload)) return null
     if (contextId === null) return null
-    const { area, key, value } = payload
-    // JSON.stringify both sides so the key/value are safely embedded as string literals
-    await send('Runtime.evaluate', {
-      expression: `${storageExpression(area)}.setItem(${JSON.stringify(key)}, ${JSON.stringify(value)})`,
-      contextId
-    })
+    await writeStorageEntry(payload.area, payload.key, payload.value)
     return true
   })
 
@@ -619,6 +666,62 @@ export function attachInspector(
     return true
   })
 
+  // --- Application: storageState (Playwright-compatible auth snapshot) ---------
+
+  handle('devtools:export-storage-state', async (): Promise<StorageState | null> => {
+    const url = current?.getURL()
+    if (!url) return null
+    const cookies = await readCookies()
+    const localStorage = await readStorageEntries('local')
+    // sessionStorage is omitted on purpose: Playwright's storageState only carries localStorage.
+    return { cookies, origins: [{ origin: originOf(url), localStorage }] }
+  })
+
+  handle('devtools:import-storage-state', async (state) => {
+    if (!isStorageState(state)) return null
+    const url = current?.getURL()
+    if (!url) return null
+
+    const fallbackHost = originOf(url).replace(/^[a-z]+:\/\//, '')
+    for (const cookie of state.cookies) {
+      const domain = cookie.domain || ''
+      const host = domain.replace(/^\./, '') || fallbackHost
+      // A cookie with no usable host can't be scoped to a URL; skip it instead of failing the import.
+      if (!host || host === 'null') continue
+      const secure = Boolean(cookie.secure)
+      const path = cookie.path || '/'
+      const params: Record<string, unknown> = {
+        name: cookie.name,
+        value: cookie.value,
+        url: `${secure ? 'https' : 'http'}://${host}${path}`,
+        path,
+        secure,
+        httpOnly: Boolean(cookie.httpOnly)
+      }
+      // Domain cookies (leading dot) keep their scope; host-only ones are recreated from
+      // `url` so they don't silently widen to the whole domain.
+      if (domain.startsWith('.')) params.domain = domain
+      if (typeof cookie.expires === 'number' && cookie.expires >= 0) params.expires = cookie.expires
+      if (cookie.sameSite === 'Strict' || cookie.sameSite === 'Lax' || cookie.sameSite === 'None') {
+        params.sameSite = cookie.sameSite
+      }
+      try {
+        await send('Network.setCookie', params)
+      } catch {
+        // One malformed cookie shouldn't abort the rest of the snapshot.
+      }
+    }
+
+    // CDP can only touch the current frame's localStorage, so entries for other origins
+    // are skipped rather than written into the wrong origin.
+    const currentOrigin = originOf(url)
+    for (const origin of state.origins) {
+      if (origin.origin !== currentOrigin) continue
+      for (const entry of origin.localStorage) await writeStorageEntry('local', entry.key, entry.value)
+    }
+    return true
+  })
+
   win.on('closed', () => {
     for (const channel of [
       'devtools:get-document',
@@ -635,7 +738,9 @@ export function attachInspector(
       'devtools:get-storage',
       'devtools:set-storage-item',
       'devtools:delete-storage-item',
-      'devtools:clear-storage'
+      'devtools:clear-storage',
+      'devtools:export-storage-state',
+      'devtools:import-storage-state'
     ]) {
       ipcMain.removeHandler(channel)
     }

@@ -11,13 +11,61 @@ import type { CapturedRequest } from '../../../shared/tabs'
 
 type RequestSpec = HttpRequestSpec
 
+/** A forged/edited token set as an auth header in one step — the common case
+ *  after a JWT is decoded and re-signed (e.g. alg:none / tampered claim probes).
+ *  `scheme: null` writes the bare token with no prefix. */
+interface JwtOverride {
+  headerName: string
+  scheme: string | null
+  token: string
+}
+
 /** Overrides merged onto `base`. A header value of null REMOVES that header (so
- *  you can strip an auth/cookie header); body null drops the body. */
+ *  you can strip an auth/cookie header); body null drops the body. `jwt` is a
+ *  convenience that sets one auth header from a raw token. */
 interface RequestOverrides {
   url?: string
   method?: string
   headers?: Record<string, string | null>
   body?: string | null
+  jwt?: JwtOverride
+}
+
+// RFC 7230 token — header name must be a bare field-name (also blocks CR/LF).
+const HEADER_NAME_RE = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/
+
+function parseJwtOverride(value: unknown): JwtOverride {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new ToolExecError('"overrides.jwt" must be an object: { token, headerName?, scheme? }')
+  }
+  const j = value as Record<string, unknown>
+
+  if (typeof j.token !== 'string' || j.token.trim().length === 0) {
+    throw new ToolExecError('"overrides.jwt.token" must be a non-empty string')
+  }
+  // The token is pasted verbatim into a header value; CR/LF would split it into
+  // an extra header (request smuggling), so reject rather than sanitize.
+  if (/[\r\n]/.test(j.token)) {
+    throw new ToolExecError('"overrides.jwt.token" must not contain CR/LF')
+  }
+
+  const headerName = j.headerName === undefined ? 'Authorization' : j.headerName
+  if (typeof headerName !== 'string' || !HEADER_NAME_RE.test(headerName)) {
+    throw new ToolExecError('"overrides.jwt.headerName" must be a valid HTTP header name')
+  }
+
+  let scheme: string | null
+  if (j.scheme === undefined) scheme = 'Bearer'
+  else if (j.scheme === null) scheme = null
+  else if (typeof j.scheme !== 'string') {
+    throw new ToolExecError('"overrides.jwt.scheme" must be a string, or null/empty for a bare token')
+  } else {
+    if (/[\r\n]/.test(j.scheme)) throw new ToolExecError('"overrides.jwt.scheme" must not contain CR/LF')
+    const trimmed = j.scheme.trim()
+    scheme = trimmed.length === 0 ? null : trimmed
+  }
+
+  return { headerName, scheme, token: j.token }
 }
 
 function parseHeaderMap(obj: Record<string, unknown>, key: string): Record<string, string> | undefined {
@@ -75,7 +123,17 @@ function parseOverrides(raw: unknown): RequestOverrides | undefined {
     }
     out.body = ov.body as string | null
   }
+  if (ov.jwt !== undefined) out.jwt = parseJwtOverride(ov.jwt)
   return out
+}
+
+/** Header names are case-insensitive, so a jwt override replaces any existing
+ *  casing of the same header instead of sending both. */
+function deleteHeaderCI(headers: Record<string, string>, name: string): void {
+  const lower = name.toLowerCase()
+  for (const k of Object.keys(headers)) {
+    if (k.toLowerCase() === lower) delete headers[k]
+  }
 }
 
 function applyOverrides(base: RequestSpec, ov?: RequestOverrides): RequestSpec {
@@ -86,6 +144,13 @@ function applyOverrides(base: RequestSpec, ov?: RequestOverrides): RequestSpec {
       if (v === null) delete headers[k]
       else headers[k] = v
     }
+  }
+  // Applied last so an explicit token wins over any header override.
+  if (ov.jwt) {
+    deleteHeaderCI(headers, ov.jwt.headerName)
+    headers[ov.jwt.headerName] = ov.jwt.scheme
+      ? `${ov.jwt.scheme} ${ov.jwt.token}`
+      : ov.jwt.token
   }
   const body = ov.body === null ? undefined : ov.body ?? base.body
   return {
@@ -101,7 +166,12 @@ const replay_request = defineTool<{ base: RequestSpec; overrides?: RequestOverri
   description:
     'Re-issue an HTTP request, optionally mutated via `overrides` (change url/method/headers/body; ' +
     'a header value of null removes it, e.g. to strip auth). Runs through the target session so it ' +
-    'carries that session\'s cookies. Scope-checked and gated (tier M).',
+    'carries that session\'s cookies. Scope-checked and gated (tier M).\n' +
+    'To replay with a forged/edited JWT, pass `overrides.jwt: { token, headerName?, scheme? }` — it sets ' +
+    '`headerName` (default "Authorization") to `scheme + " " + token` (scheme defaults to "Bearer"; pass ' +
+    'null or "" for a bare token). This is equivalent to setting the header yourself but avoids hand-building ' +
+    'the value, so a token from a JWT decode/re-sign step can be dropped straight in. If `overrides.headers` ' +
+    'also targets that header (any casing), the jwt token wins.',
   riskTier: 'M',
   inputSchema: {
     type: 'object',
@@ -123,7 +193,25 @@ const replay_request = defineTool<{ base: RequestSpec; overrides?: RequestOverri
           url: { type: 'string' },
           method: { type: 'string' },
           headers: { type: 'object' },
-          body: { type: ['string', 'null'] }
+          body: { type: ['string', 'null'] },
+          jwt: {
+            type: 'object',
+            required: ['token'],
+            description:
+              'Convenience auth header: sets headerName (default "Authorization") to "[scheme ]token".',
+            properties: {
+              token: { type: 'string', description: 'Raw token value (e.g. a forged JWT).' },
+              headerName: {
+                type: 'string',
+                description: 'Header to write. Default "Authorization".'
+              },
+              scheme: {
+                type: ['string', 'null'],
+                description:
+                  'Prefix before the token. Default "Bearer"; null or "" writes the token alone.'
+              }
+            }
+          }
         }
       }
     }
@@ -250,7 +338,18 @@ const replay_batch = defineTool<{ base: RequestSpec; variants: RequestOverrides[
             url: { type: 'string' },
             method: { type: 'string' },
             headers: { type: 'object' },
-            body: { type: ['string', 'null'] }
+            body: { type: ['string', 'null'] },
+            jwt: {
+              type: 'object',
+              required: ['token'],
+              description:
+                'Same as replay_request: sets an auth header to "[scheme ]token" for this variant.',
+              properties: {
+                token: { type: 'string' },
+                headerName: { type: 'string' },
+                scheme: { type: ['string', 'null'] }
+              }
+            }
           }
         }
       }

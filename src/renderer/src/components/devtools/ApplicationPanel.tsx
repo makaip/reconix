@@ -1,5 +1,5 @@
-import { useMemo, useState } from 'react'
-import type { CookieInfo, StorageArea, StorageEntry } from '../../../../shared/devtools'
+import { useMemo, useRef, useState, type ChangeEvent } from 'react'
+import type { CookieInfo, StorageArea, StorageEntry, StorageState } from '../../../../shared/devtools'
 import type { ApplicationApi } from '../../hooks/useApplication'
 import { useResizable } from '../../hooks/useResizable'
 import {
@@ -222,6 +222,8 @@ function StorageTable({
 function ApplicationPanel({ application }: ApplicationPanelProps): JSX.Element {
   const listResize = useResizable({ axis: 'x', initial: 220, min: 140, max: 600, storageKey: 'application.list' })
   const [section, setSection] = useState<Section>('cookies')
+  const [storageNotice, setStorageNotice] = useState<string | null>(null)
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
   const cookieFindings = useMemo(
     () => analyzeCookieSecurity(application.cookies),
     [application.cookies]
@@ -232,6 +234,53 @@ function ApplicationPanel({ application }: ApplicationPanelProps): JSX.Element {
     () => cookieFindings.filter((finding) => isActionableSeverity(finding.severity)),
     [cookieFindings]
   )
+
+  const exportStorageState = async (): Promise<void> => {
+    const state = await application.exportStorageState()
+    if (!state) {
+      setStorageNotice('Could not read storage state for this page.')
+      return
+    }
+    const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = `storage-state-${new Date().toISOString().slice(0, 19).replace(/:/g, '')}.json`
+    anchor.click()
+    URL.revokeObjectURL(url)
+    setStorageNotice(
+      `Exported ${state.cookies.length} cookies and ${state.origins[0]?.localStorage.length ?? 0} localStorage entries.`
+    )
+  }
+
+  const importStorageState = async (event: ChangeEvent<HTMLInputElement>): Promise<void> => {
+    const file = event.target.files?.[0]
+    // Reset so re-selecting the same file fires change again.
+    event.target.value = ''
+    if (!file) return
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(await file.text())
+    } catch {
+      setStorageNotice('Import failed: file is not valid JSON.')
+      return
+    }
+    // Shape is re-validated in main, but reject obvious junk here for a clearer message.
+    const state = parsed as Partial<StorageState> | null
+    if (!state || !Array.isArray(state.cookies) || !Array.isArray(state.origins)) {
+      setStorageNotice('Import failed: not a storage state file.')
+      return
+    }
+    const ok = await application.importStorageState(state as StorageState)
+    setStorageNotice(
+      ok
+        ? `Imported ${state.cookies.length} cookies and ${state.origins.reduce(
+            (total, origin) => total + origin.localStorage.length,
+            0
+          )} localStorage entries.`
+        : 'Import failed: no page to apply the state to.'
+    )
+  }
 
   return (
     <div className="dt-application">
@@ -281,6 +330,29 @@ function ApplicationPanel({ application }: ApplicationPanelProps): JSX.Element {
         onPointerDown={listResize.onHandlePointerDown}
       />
       <div className="dt-application__detail">
+        <div className="dt-storage__toolbar" style={{ alignItems: 'center', gap: 8 }}>
+          <span className="dt-muted" role="status" style={{ marginRight: 'auto' }}>
+            {storageNotice}
+          </span>
+          <button type="button" className="dt-text-button" onClick={() => void exportStorageState()}>
+            Export storage state
+          </button>
+          <button
+            type="button"
+            className="dt-text-button"
+            onClick={() => fileInputRef.current?.click()}
+          >
+            Import storage state
+          </button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="application/json,.json"
+            hidden
+            onChange={(event) => void importStorageState(event)}
+            aria-label="Import storage state file"
+          />
+        </div>
         {section === 'cookies' && <CookiesTable cookies={application.cookies} onDelete={application.deleteCookie} />}
         {section === 'cookieSecurity' && (
           <CookieSecurityTable findings={cookieFindings} cookieCount={application.cookies.length} />

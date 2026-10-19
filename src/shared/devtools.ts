@@ -85,6 +85,15 @@ export type StorageArea = 'local' | 'session'
 
 export type StorageEntry = { key: string; value: string }
 
+/** localStorage snapshot for one origin — mirrors Playwright's storageState `origins[]` entry. */
+export type StorageOriginState = { origin: string; localStorage: StorageEntry[] }
+
+/**
+ * Playwright-compatible auth snapshot: cookies plus per-origin localStorage.
+ * sessionStorage is intentionally not included (Playwright's storageState omits it too).
+ */
+export type StorageState = { cookies: CookieInfo[]; origins: StorageOriginState[] }
+
 export type DevToolsEvent =
   | { method: 'DOM.documentUpdated'; params: Record<string, never> }
   | { method: 'DOM.setChildNodes'; params: { parentId: number; nodes: CdpNode[] } }
