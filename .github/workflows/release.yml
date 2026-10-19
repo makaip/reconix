@@ -1,102 +1,49 @@
 name: Release
 
-# Push a tag like v0.1.0 (matching package.json's version) to build installers
-# for every OS and attach them to a draft GitHub release.
+# Builds and publishes a GitHub Release (with auto-update metadata) whenever a
+# version tag is pushed. Each OS runner produces its own installer; electron-
+# builder uploads them all to the same release, so the in-app auto-updater
+# (electron-updater) can pick the right artifact per platform.
+#
+# Usage:
+#   git tag v0.0.2 && git push origin v0.0.2
+#
+# The version comes from package.json — bump it before tagging.
+
 on:
   push:
-    tags: ["v*"]
+    tags:
+      - 'v*'
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  check-version:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Tag must match package.json version
-        run: |
-          version="$(node -p "require('./package.json').version")"
-          if [ "v$version" != "${GITHUB_REF_NAME}" ]; then
-            echo "Tag ${GITHUB_REF_NAME} does not match package.json version v$version" >&2
-            exit 1
-          fi
-
   build:
-    name: Build ${{ matrix.name }}
-    needs: check-version
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 40
+    name: Build & publish (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - { name: Linux, os: ubuntu-latest }
-          - { name: macOS, os: macos-latest }
-          - { name: Windows, os: windows-latest }
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 20
           cache: npm
 
-      - run: npm ci
+      - name: Install dependencies
+        run: npm ci
 
-      - name: Typecheck
-        run: npm run typecheck
+      - name: Preflight
+        run: node scripts/preflight.mjs
 
-      - name: Build
-        run: npm run build
-
-      # Signing is optional: without the secrets below electron-builder produces unsigned
-      # installers. macOS notarization needs the APPLE_* variables as well.
-      - name: Package (Linux)
-        if: runner.os == 'Linux'
-        run: npx electron-builder --linux --publish never
-
-      - name: Package (macOS)
-        if: runner.os == 'macOS'
-        run: npx electron-builder --mac --publish never
+      - name: Build & publish
         env:
-          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-
-      - name: Package (Windows)
-        if: runner.os == 'Windows'
-        run: npx electron-builder --win --publish never
-        env:
-          CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: installers-${{ matrix.name }}
-          path: |
-            release/*.dmg
-            release/*.zip
-            release/*.exe
-            release/*.AppImage
-          if-no-files-found: error
-
-  publish:
-    needs: build
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-          merge-multiple: true
-
-      - uses: softprops/action-gh-release@v2
-        with:
-          draft: true
-          generate_release_notes: true
-          files: artifacts/*
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm run dist -- --publish always

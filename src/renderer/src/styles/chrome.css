@@ -434,3 +434,26 @@
   }
 }
 
+/* update-ready banner (auto-updater downloaded a new release) */
+.update-banner {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  font-size: var(--text-xs);
+  color: var(--color-text);
+  background: var(--color-bg-subtle, #222);
+  border-bottom: 1px solid var(--color-border, #333);
+}
+
+.update-banner__action {
+  padding: 2px 8px;
+  font-size: var(--text-xs);
+  color: var(--color-bg-deep, #18181a);
+  background: var(--color-accent);
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+

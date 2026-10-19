@@ -15,6 +15,7 @@ import { proxyStatus } from './runtime'
 import { createSessionManager } from './session'
 import { runSmoke } from './smoke'
 import { createTabManager } from './tabs'
+import { checkForUpdatesOnStartup, initAutoUpdater } from './updates'
 import type { Interceptor } from './intercept'
 
 // keep in sync with --tabbar-height and --color-bg-deep in tokens.css
@@ -270,6 +271,10 @@ function createWindow(): void {
   createCrawler(mainWindow, replayer, crawlCore)
   createSessionManager(mainWindow)
 
+  // Auto-update (electron-updater): background download, install on quit, plus
+  // the app:check-for-updates / app:quit-and-install IPC surface for the UI.
+  initAutoUpdater(mainWindow)
+
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
   } else {
@@ -295,6 +300,10 @@ app.whenReady().then(async () => {
   ipcMain.handle('ping', () => 'pong')
 
   createWindow()
+
+  // Non-fatal: checks for a new release in the background (autoDownload is on).
+  // In dev / offline this rejects and is logged, never surfaced.
+  checkForUpdatesOnStartup()
 
   app.on('activate', () => {
     // While shutting down (e.g. the last tab just closed), don't reopen a
