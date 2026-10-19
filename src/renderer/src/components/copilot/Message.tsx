@@ -18,7 +18,7 @@ function formatParams(params: unknown): string {
   }
 }
 
-function ToolBlock({ part, onApproval }: { part: ToolPart; onApproval: (id: string, decision: 'approve' | 'approve_always' | 'deny') => void }): JSX.Element {
+const ToolBlock = memo(function ToolBlock({ part, onApproval }: { part: ToolPart; onApproval: (id: string, decision: 'approve' | 'approve_always' | 'deny') => void }): JSX.Element {
   const [open, setOpen] = useState(false)
   return (
     <div className={`tool-block tool-block--${part.status}`}>
@@ -75,7 +75,7 @@ function ToolBlock({ part, onApproval }: { part: ToolPart; onApproval: (id: stri
       )}
     </div>
   )
-}
+})
 
 export interface EmbeddedQuestion {
   header: string
