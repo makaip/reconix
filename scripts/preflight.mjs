@@ -17,6 +17,7 @@ import { resolve, join } from 'node:path'
 
 const execFileAsync = promisify(execFile)
 const repoRoot = resolve(import.meta.dirname, '..')
+const isWindows = process.platform === 'win32'
 
 const failures = []
 const warnings = []
@@ -39,13 +40,81 @@ async function portFree(port) {
   })
 }
 
-async function pidsOnPort(port) {
+// Windows has no lsof, so try netstat -ano first (always present) and fall back
+// to PowerShell's Get-NetTCPConnection. Returns [] if nothing is listening or if
+// the tooling is unavailable.
+async function pidsOnPortWindows(port) {
+  const wanted = String(port)
   try {
-    const { stdout } = await execFileAsync('lsof', ['-ti', `:${port}`])
+    const { stdout } = await execFileAsync('netstat', ['-ano'], { windowsHide: true })
+    const pids = new Set()
+    for (const line of stdout.split(/\r?\n/)) {
+      // e.g. "  TCP    0.0.0.0:4097    0.0.0.0:0    LISTENING    12345"
+      if (!/LISTENING/i.test(line)) continue
+      const cols = line.trim().split(/\s+/)
+      const local = cols[1] ?? ''
+      const pid = cols[cols.length - 1] ?? ''
+      if (!/^\d+$/.test(pid)) continue
+      if (local.slice(local.lastIndexOf(':') + 1) === wanted) pids.add(pid)
+    }
+    return [...pids] // netstat worked; empty means nothing is listening
+  } catch {
+    // fall through to PowerShell
+  }
+  try {
+    const { stdout } = await execFileAsync(
+      'powershell',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        `(Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction SilentlyContinue).OwningProcess`,
+      ],
+      { windowsHide: true }
+    )
+    return [...new Set(stdout.split(/\r?\n/).map((s) => s.trim()).filter((s) => /^\d+$/.test(s)))]
+  } catch {
+    return []
+  }
+}
+
+async function pidsOnPort(port) {
+  if (isWindows) return pidsOnPortWindows(port)
+  try {
+    const { stdout } = await execFileAsync('lsof', ['-ti', `:${port}`], { windowsHide: true })
     return stdout.split('\n').map((s) => s.trim()).filter(Boolean)
   } catch {
     return [] // lsof exits 1 with empty stdout when nothing's listening
   }
+}
+
+// Windows ships npm CLI shims (`opencode.cmd`) as well as native binaries
+// (`opencode.exe`), and the bare name only resolves through cmd.exe, hence
+// shell:true on win32. On Unix a single `opencode` lookup is enough.
+async function findOpencode() {
+  const candidates = isWindows ? ['opencode', 'opencode.cmd', 'opencode.exe'] : ['opencode']
+  const opts = isWindows ? { windowsHide: true, shell: true } : { windowsHide: true }
+  const tried = []
+  for (const bin of candidates) {
+    try {
+      const { stdout } = await execFileAsync(bin, ['--version'], opts)
+      return { bin, version: stdout.trim() }
+    } catch (e) {
+      tried.push(`${bin} (${e?.code ?? 'failed'})`)
+    }
+  }
+  return { bin: null, tried }
+}
+
+function killHint(pids, port) {
+  if (isWindows) {
+    return pids.length
+      ? `${pids.map((p) => `taskkill /PID ${p} /F`).join(' && ')}   # or: taskkill /IM opencode.exe /F`
+      : `netstat -ano | findstr :${port}   # then: taskkill /PID <pid> /F`
+  }
+  return pids.length
+    ? `kill ${pids.join(' ')}   # or: pkill -f "opencode serve"`
+    : `lsof -ti :${port} | xargs kill`
 }
 
 // --- 1. ports the Copilot bridge binds (copilot.ts: OPENCODE_PORT / MCP_PORT) ---
@@ -56,20 +125,20 @@ for (const port of [4097, 4101]) {
   }
   const pids = await pidsOnPort(port)
   const detail = pids.length ? `held by pid ${pids.join(', ')}` : 'held by an unknown process'
-  fail(
-    `port ${port} is already in use (${detail})`,
-    pids.length
-      ? `kill ${pids.join(' ')}   # or: pkill -f "opencode serve"`
-      : `lsof -ti :${port} | xargs kill`
-  )
+  fail(`port ${port} is already in use (${detail})`, killHint(pids, port))
 }
 
 // --- 2. opencode CLI present and runnable ---
-try {
-  const { stdout } = await execFileAsync('opencode', ['--version'])
-  ok(`opencode CLI found (${stdout.trim()})`)
-} catch {
-  fail('opencode CLI not found on PATH', 'install it — https://opencode.ai — or fix PATH for this shell')
+const opencode = await findOpencode()
+if (opencode.bin) {
+  ok(`opencode CLI found (${opencode.version})`)
+} else {
+  fail(
+    'opencode CLI not found on PATH',
+    isWindows
+      ? `install it — https://opencode.ai — then check it with: where opencode  (fix PATH for this shell; tried: ${opencode.tried.join(', ')})`
+      : 'install it — https://opencode.ai — or fix PATH for this shell'
+  )
 }
 
 // --- 3. API key available (copilot.ts spawns opencode serve expecting this in env) ---

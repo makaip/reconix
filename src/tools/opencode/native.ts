@@ -16,16 +16,42 @@ import { num, obj, str } from "../schema"
 
 const Z3_SCRIPT = [".opencode", "tools", "z3_string_solver.py"]
 
+/** True when a bare command (e.g. `python`) is resolvable on `PATH`. */
+function commandOnPath(command: string): boolean {
+  const searchPath = process.env.PATH ?? process.env.Path ?? ""
+  const extensions =
+    process.platform === "win32" ? (process.env.PATHEXT ?? ".EXE;.CMD;.BAT").split(";") : [""]
+
+  return searchPath
+    .split(path.delimiter)
+    .some(
+      (dir) =>
+        dir.length > 0 &&
+        extensions.some((ext) => existsSync(path.join(dir, `${command}${ext}`))),
+    )
+}
+
 function resolvePython(directory: string): string {
+  // Explicit override always wins.
+  const override = process.env.RECONIX_PYTHON
+  if (typeof override === "string" && override.length > 0) return override
+
+  // Project-local virtualenvs, Unix first then Windows, so `.venv/bin/python`
+  // keeps precedence on POSIX hosts.
   const candidates = [
-    process.env.RECONIX_PYTHON,
     path.join(directory, ".venv", "bin", "python"),
     path.join(directory, ".venv", "bin", "python3"),
-    "python3",
-  ].filter((value): value is string => typeof value === "string" && value.length > 0)
+    path.join(directory, ".venv", "Scripts", "python.exe"),
+    path.join(directory, ".venv", "Scripts", "python"),
+  ]
 
   for (const candidate of candidates) {
-    if (candidate === "python3" || existsSync(candidate)) return candidate
+    if (existsSync(candidate)) return candidate
+  }
+
+  // Interpreter names on `PATH`; `python`/`py` cover Windows launchers.
+  for (const command of ["python", "py", "python3"]) {
+    if (commandOnPath(command)) return command
   }
   return "python3"
 }
