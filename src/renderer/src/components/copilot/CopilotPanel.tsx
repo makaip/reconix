@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent } from 'react'
+import { useVirtualizer } from '@tanstack/react-virtual'
 import chat from '../../assets/icons/chat.svg'
 import close from '../../assets/icons/close.svg'
 import clock from '../../assets/icons/clock.svg'
@@ -34,6 +35,16 @@ type CopilotPanelProps = {
   onUseViewedTab: () => void
   style?: CSSProperties
 }
+
+/** Below this many messages, render the transcript normally: virtualization's
+ * dynamic-height measurement is unnecessary overhead for short chats and
+ * keeping every node mounted preserves find-in-page and screen-reader access. */
+const VIRTUALIZE_THRESHOLD = 40
+/** Rough pre-measurement row height, in px. Corrected by ResizeObserver. */
+const ESTIMATED_ROW_HEIGHT = 120
+/** Must match the `gap` on `.copilot__messages` so virtual rows space like
+ * normal flex children. */
+const MESSAGE_GAP = 18
 
 function CopilotPanel({
   copilot,
@@ -99,6 +110,22 @@ function CopilotPanel({
   // the user is at the bottom; flipping to false once they scroll up so a
   // streaming response can't yank the view back down mid-read.
   const stickToBottom = useRef(true)
+  // Virtualize only once the transcript is long enough to matter. Rows have
+  // dynamic heights (markdown, expandable tool blocks), so measurement is done
+  // by ResizeObserver via the virtualizer's ref callback.
+  const virtualize = messages.length > VIRTUALIZE_THRESHOLD
+  const virtualizer = useVirtualizer({
+    count: messages.length,
+    getScrollElement: () => listRef.current,
+    estimateSize: () => ESTIMATED_ROW_HEIGHT,
+    overscan: 8,
+    gap: MESSAGE_GAP
+  })
+  // Before the scroll element is measured the virtualizer can report an empty
+  // range for a frame; render normally then so crossing the threshold never
+  // blanks the transcript.
+  const virtualItems = virtualizer.getVirtualItems()
+  const showVirtual = virtualize && virtualItems.length > 0
 
   useEffect(() => {
     if (!dragActive) setOver(false)
@@ -111,8 +138,17 @@ function CopilotPanel({
   }, [restrictions, restrictionsOpen])
 
   useEffect(() => {
+    if (!stickToBottom.current) return
     const list = listRef.current
-    if (list && stickToBottom.current) list.scrollTop = list.scrollHeight
+    if (!list) return
+    // Pin to the bottom now, then once more after the browser has laid out the
+    // new/updated rows (virtualized rows are measured after paint, which changes
+    // the total scroll height).
+    list.scrollTop = list.scrollHeight
+    const frame = requestAnimationFrame(() => {
+      if (stickToBottom.current) list.scrollTop = list.scrollHeight
+    })
+    return () => cancelAnimationFrame(frame)
   }, [messages, thinking])
 
   // A fresh question clears any prior selection and takes focus, so the user can
@@ -433,9 +469,37 @@ function CopilotPanel({
           onDrop()
         }}
       >
-        {messages.map((message) => (
-          <Message key={message.id} message={message} onReply={sendToActiveTab} onApproval={respondApproval} />
-        ))}
+        {showVirtual ? (
+          <div
+            className="copilot__virtual"
+            style={{ position: 'relative', flex: 'none', height: virtualizer.getTotalSize() }}
+          >
+            {virtualItems.map((item) => {
+              const message = messages[item.index]
+              return (
+                <div
+                  key={message.id}
+                  data-index={item.index}
+                  ref={virtualizer.measureElement}
+                  className="copilot__virtual-row"
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    width: '100%',
+                    transform: `translateY(${item.start}px)`
+                  }}
+                >
+                  <Message message={message} onReply={sendToActiveTab} onApproval={respondApproval} />
+                </div>
+              )
+            })}
+          </div>
+        ) : (
+          messages.map((message) => (
+            <Message key={message.id} message={message} onReply={sendToActiveTab} onApproval={respondApproval} />
+          ))
+        )}
         {busy && (
           <div className="thinking" role="status" aria-live="polite" aria-label={activityLabel ?? 'Copilot is working'}>
             <span className="thinking__author">Copilot</span>
