@@ -172,7 +172,9 @@ for (const name of requiredAgents) {
     fail(`.opencode/agents/${name}.md is missing`, 'this agent id is referenced by copilot.ts / opencode.json')
     continue
   }
-  const body = readFileSync(path, 'utf8')
+  // Normalize CRLF (Windows checkout) so the frontmatter check is line-ending
+  // agnostic; the agent files are committed with LF endings.
+  const body = readFileSync(path, 'utf8').replace(/\r\n/g, '\n')
   const hasFrontmatter = body.startsWith('---\n') && body.indexOf('\n---', 4) !== -1
   if (!hasFrontmatter) {
     fail(`.opencode/agents/${name}.md has no frontmatter block`)
