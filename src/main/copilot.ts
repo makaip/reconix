@@ -123,6 +123,22 @@ let exitHookInstalled = false
  */
 function signalGroup(proc: ChildProcessWithoutNullStreams, signal: NodeJS.Signals): void {
   if (proc.pid === undefined) return
+  if (process.platform === 'win32') {
+    // Windows has no POSIX process groups: `detached` doesn't create one and a
+    // negative pid means nothing to process.kill. taskkill /T walks the child
+    // tree for us (and /F is the only termination it does), so the requested
+    // signal can't be honoured — a forced kill of the tree is the equivalent.
+    try {
+      spawn('taskkill', ['/pid', String(proc.pid), '/T', '/F'], { stdio: 'ignore' })
+    } catch {
+      try {
+        proc.kill(signal)
+      } catch {
+        // Already gone — nothing to signal.
+      }
+    }
+    return
+  }
   try {
     process.kill(-proc.pid, signal)
   } catch {
@@ -169,26 +185,46 @@ function terminateServer(proc: ChildProcessWithoutNullStreams, graceMs = 2_000):
   })
 }
 
+// Parses reconix.env into a plain env object. We do it ourselves — resolving
+// `${VAR}`/`$VAR` from previously defined vars, then process.env — rather than
+// Node's loadEnvFile, which SIGTRAPs (uncatchable) on this file's `export` +
+// shell interpolation syntax; see index.ts's header comment. Nor do we source
+// it in a shell: parsing in Node keeps `opencode serve`'s spawn free of bash
+// and therefore portable to Windows. Best-effort: unparseable lines are skipped.
+export function parseReconixEnv(
+  text: string,
+  fallback: NodeJS.ProcessEnv = process.env
+): Record<string, string> {
+  const vars: Record<string, string> = {}
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim()
+    if (!line || line.startsWith('#')) continue
+    const match = line.replace(/^export\s+/, '').match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/)
+    if (!match) continue
+    let value = match[2].trim()
+    // Strip one layer of matching outer quotes; the shell would have done the
+    // same, and it keeps a quoted "$VAR" from keeping its literal quotes.
+    const quoted = value.match(/^(['"])([\s\S]*)\1$/)
+    if (quoted) value = quoted[2]
+    value = value.replace(
+      /\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)/g,
+      (_, braced: string | undefined, bare: string | undefined) => {
+        const name = braced || bare || ''
+        return vars[name] ?? fallback[name] ?? ''
+      }
+    )
+    vars[match[1]] = value
+  }
+  return vars
+}
+
 // Reads ORCHESTRATOR_BASE_URL / ORCHESTRATOR_API_KEY out of reconix.env for the
-// provider health probe below. We parse it ourselves — resolving ${VAR} and
-// $VAR — rather than Node's loadEnvFile, which SIGTRAPs (uncatchable) on this
-// file's `export` + shell interpolation syntax; see index.ts's header comment.
-// Best-effort: missing file or keys yield nulls and the probe becomes a no-op.
+// provider health probe below. Missing file or keys yield nulls and the probe
+// becomes a no-op.
 function readOrchestratorEndpoint(): { baseUrl: string | null; apiKey: string | null } {
   try {
     const text = readFileSync(join(app.getAppPath(), 'reconix.env'), 'utf8')
-    const vars: Record<string, string> = {}
-    for (const raw of text.split('\n')) {
-      const line = raw.trim()
-      if (!line || line.startsWith('#')) continue
-      const match = line.replace(/^export\s+/, '').match(/^([A-Za-z0-9_]+)=(.*)$/)
-      if (!match) continue
-      const value = match[2]
-        .trim()
-        .replace(/^["']|["']$/g, '')
-        .replace(/\$\{([A-Za-z0-9_]+)\}|\$([A-Za-z0-9_]+)/g, (_, braced, bare) => vars[braced || bare] ?? '')
-      vars[match[1]] = value
-    }
+    const vars = parseReconixEnv(text)
     return { baseUrl: vars.ORCHESTRATOR_BASE_URL || null, apiKey: vars.ORCHESTRATOR_API_KEY || null }
   } catch {
     return { baseUrl: null, apiKey: null }
@@ -832,29 +868,44 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
   async function spawnServer(): Promise<{ baseUrl: string; password: string }> {
     await syncGlobalOpenCodeConfig()
     const sandboxDir = await resolveSandboxDir()
+    // reconix.env carries the remote-vLLM connection. Parse it in Node and hand
+    // the result to the child as its env — no shell sourcing, so this works
+    // identically on Windows (which may have no bash at all).
+    const envFromFile: Record<string, string> = {}
+    try {
+      Object.assign(
+        envFromFile,
+        parseReconixEnv(readFileSync(join(app.getAppPath(), 'reconix.env'), 'utf8'))
+      )
+    } catch {
+      // No reconix.env: the inherited env alone is all we have.
+    }
+    // serve must PRINT a generated password (parsed below) and bind OUR port,
+    // not reconix.env's. GOOGLE_* and the rest of process.env (incl. the .env
+    // load) are inherited.
+    delete envFromFile.OPENCODE_SERVER_PASSWORD
+    delete envFromFile.OPENCODE_PORT
     return new Promise((resolve, reject) => {
-      // Source reconix.env (the remote-vLLM connection) in a shell before exec'ing
-      // serve, so bash — not us — handles its `export` + "${VAR}" interpolation.
-      // We unset OPENCODE_SERVER_PASSWORD/PORT from it: serve must PRINT a
-      // generated password (parsed below) and bind OUR port, not reconix.env's.
-      // GOOGLE_* and the rest of process.env (incl. the .env load) are inherited.
-      const reconixEnv = join(app.getAppPath(), 'reconix.env')
-      const script =
-        'if [ -f "$RECONIX_ENV" ]; then set -a; . "$RECONIX_ENV"; set +a; ' +
-        'unset OPENCODE_SERVER_PASSWORD OPENCODE_PORT; fi; ' +
-        'exec opencode serve --hostname "$1" --port "$2"'
-      const proc = spawn('bash', ['-c', script, 'bash', HOST, String(OPENCODE_PORT)], {
-        // The scratch sandbox, NOT app.getAppPath() (the Reconix repo) and
-        // NOT process.cwd() (wherever the OS launched Electron from).
-        // Reconix's own agents/mcp config reach the server regardless, via
-        // syncGlobalOpenCodeConfig() above — see the file-header comment.
-        cwd: sandboxDir,
-        env: { ...process.env, RECONIX_ENV: reconixEnv },
-        stdio: 'pipe',
-        // Own process group so we can tear down serve AND anything it forks
-        // (see signalGroup); without this a clean quit can leave it dangling.
-        detached: process.platform !== 'win32'
-      })
+      const proc = spawn(
+        'opencode',
+        ['serve', '--hostname', HOST, '--port', String(OPENCODE_PORT)],
+        {
+          // The scratch sandbox, NOT app.getAppPath() (the Reconix repo) and
+          // NOT process.cwd() (wherever the OS launched Electron from).
+          // Reconix's own agents/mcp config reach the server regardless, via
+          // syncGlobalOpenCodeConfig() above — see the file-header comment.
+          cwd: sandboxDir,
+          env: { ...process.env, ...envFromFile },
+          stdio: 'pipe',
+          // Own process group so we can tear down serve AND anything it forks
+          // (see signalGroup); without this a clean quit can leave it dangling.
+          // Windows has no such concept, hence the platform guard.
+          detached: process.platform !== 'win32',
+          // Windows only finds `opencode` via its npm .cmd shim through the
+          // shell; on POSIX the executable is resolved from PATH directly.
+          shell: process.platform === 'win32'
+        }
+      )
       child = proc
       liveServers.add(proc)
       ensureExitHook()

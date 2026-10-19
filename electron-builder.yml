@@ -6,7 +6,21 @@ directories:
 files:
   - out/**/*
   - package.json
+  # Runtime config/assets read via app.getAppPath() at runtime. glob patterns
+  # (no leading ./) so electron-builder resolves them from the project root on
+  # every platform.
+  - opencode.json
+  - .opencode/agents/*.md
+  - .opencode/tools/z3_string_solver.py
+  # Engagement instructions (optional; copilot.ts tolerates its absence).
+  - AGENTS.md
+  # NOTE: reconix.env is intentionally NOT bundled — it is user-specific
+  # (remote vLLM URL + key). copyEnv-style readers already handle its absence.
 asar: true
+# The z3 solver is handed to an external `python` process, which cannot read
+# inside an asar archive, so keep a real file on disk.
+asarUnpack:
+  - .opencode/tools/z3_string_solver.py
 # no native modules, so there is nothing to rebuild
 npmRebuild: false
 artifactName: ${productName}-${version}-${os}-${arch}.${ext}
