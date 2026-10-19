@@ -1,0 +1,16 @@
+# Enforce LF line endings for all text files so Windows checkouts (core.autocrlf)
+# don't convert to CRLF and break frontmatter parsing / tooling.
+* text=auto eol=lf
+
+# Explicitly pin source/config files that must stay LF even if marked binary-ish.
+*.md text eol=lf
+*.ts text eol=lf
+*.tsx text eol=lf
+*.js text eol=lf
+*.mjs text eol=lf
+*.json text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.py text eol=lf
+*.css text eol=lf
+*.html text eol=lf
