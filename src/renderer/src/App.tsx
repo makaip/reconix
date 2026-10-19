@@ -7,6 +7,7 @@ import ResizeHandle from './components/chrome/ResizeHandle'
 import StatusBar from './components/chrome/StatusBar'
 import TabBar from './components/chrome/TabBar'
 import Toolbar from './components/chrome/Toolbar'
+import UpdateBanner from './components/chrome/UpdateBanner'
 import { useCopilot } from './hooks/useCopilot'
 import { useEngineStatus } from './hooks/useEngineStatus'
 import { useNetworkStats } from './hooks/useNetworkStats'
@@ -42,6 +43,13 @@ function App(): JSX.Element {
   // Launch-time panel visibility comes from settings; the user can still toggle at runtime.
   const [copilotOpen, setCopilotOpen] = useState(settings.settings.openCopilotOnLaunch)
   const [sidebarOpen, setSidebarOpen] = useState(settings.settings.openSidebarOnLaunch)
+  // Set when main reports a background update finished downloading; drives the
+  // restart banner below. Null while no update is staged.
+  const [updateReady, setUpdateReady] = useState<string | null>(null)
+
+  useEffect(() => {
+    return window.reconix.app.onUpdateDownloaded(({ version }) => setUpdateReady(version))
+  }, [])
 
   // Cmd+, on macOS, Ctrl+, elsewhere — the OS-standard "open preferences" shortcut.
   useEffect(() => {
@@ -130,6 +138,12 @@ function App(): JSX.Element {
         agentActiveId={copilot.browserActive ? copilotTargetId : null}
       />
       <EngineStatusBanner status={engineStatus} />
+      {updateReady && (
+        <UpdateBanner
+          version={updateReady}
+          onRestart={() => void window.reconix.app.quitAndInstall()}
+        />
+      )}
       <Toolbar
         url={activeTab?.url ?? ''}
         canGoBack={tabs.canGoBack}

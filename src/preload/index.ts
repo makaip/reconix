@@ -60,6 +60,26 @@ import type { TraceDetail, TraceSummary } from '../shared/traces'
 // typed surface is exposed to renderer but renderer never accesses ipcRenderer directly
 export type Bounds = { x: number; y: number; width: number; height: number }
 
+// Result of an update check requested from the UI: `ok` + the version found
+// available (absent = already current), or `error` when the check failed.
+export type UpdateCheckResult = {
+  ok: boolean
+  version?: string
+  error?: string
+}
+
+// Reads the app version from main synchronously at preload time so the Settings
+// panel renders it without a placeholder flash. Falls back to '' if the channel
+// isn't up yet (the UI degrades to "unknown version").
+function readAppVersion(): string {
+  try {
+    const version = ipcRenderer.sendSync('app:get-version')
+    return typeof version === 'string' ? version : ''
+  } catch {
+    return ''
+  }
+}
+
 // subscribes to a main-process event channel and returns an unsubscribe function
 function subscribe<T>(channel: string, callback: (payload: T) => void): () => void {
   const listener = (_event: Electron.IpcRendererEvent, payload: T): void => callback(payload)
@@ -77,6 +97,18 @@ const api = {
   menu: {
     // Fired when the user picks File ▸ Preferences from the native app menu.
     onOpenSettings: (callback: () => void): (() => void) => subscribe('menu:open-settings', callback)
+  },
+  app: {
+    // App version from main (app.getVersion()), read at preload time.
+    version: readAppVersion(),
+    // Ask main to check the update feed now. Resolves { ok, version? } or
+    // { ok: false, error } — never throws, so the UI can show the failure.
+    checkForUpdates: (): Promise<UpdateCheckResult> => ipcRenderer.invoke('app:check-for-updates'),
+    // Quit and install the already-downloaded update (restarts the app).
+    quitAndInstall: (): Promise<boolean> => ipcRenderer.invoke('app:quit-and-install'),
+    // Fires once a background update finishes downloading; returns an unsubscribe.
+    onUpdateDownloaded: (callback: (payload: { version: string }) => void): (() => void) =>
+      subscribe('app:update-downloaded', callback)
   },
   target: {
     setBounds: (bounds: Bounds): Promise<void> => ipcRenderer.invoke('target:set-bounds', bounds),

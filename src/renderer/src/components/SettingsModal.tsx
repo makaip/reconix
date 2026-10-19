@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import type { UseSettings } from '../hooks/useSettings'
 
 type SettingsModalProps = {
@@ -27,6 +27,27 @@ function ToggleRow({ label, hint, checked, onChange }: ToggleRowProps): JSX.Elem
 
 function SettingsModal({ settings, onClose }: SettingsModalProps): JSX.Element {
   const { settings: values, set } = settings
+
+  // About / Updates: version comes from main (window.reconix.app.version), and
+  // the check is a plain IPC round-trip that never throws — failures come back
+  // as { ok: false, error } and are shown inline.
+  const version = window.reconix.app?.version || 'unknown'
+  const [checking, setChecking] = useState(false)
+  const [updateStatus, setUpdateStatus] = useState('')
+
+  const onCheckForUpdates = async (): Promise<void> => {
+    setChecking(true)
+    setUpdateStatus('Checking for updates…')
+    const result = await window.reconix.app.checkForUpdates()
+    setChecking(false)
+    if (!result.ok) {
+      setUpdateStatus(`Update check failed: ${result.error ?? 'unknown error'}`)
+    } else if (result.version) {
+      setUpdateStatus(`Version ${result.version} is downloading in the background.`)
+    } else {
+      setUpdateStatus('You’re on the latest version.')
+    }
+  }
 
   // Esc closes, matching the native-feel of the rest of the app.
   useEffect(() => {
@@ -68,6 +89,24 @@ function SettingsModal({ settings, onClose }: SettingsModalProps): JSX.Element {
             checked={values.openCopilotOnLaunch}
             onChange={(v) => set('openCopilotOnLaunch', v)}
           />
+        </section>
+
+        <section className="settings__section">
+          <h3 className="settings__section-title">About</h3>
+          <div className="settings__row">
+            <span className="settings__row-text">
+              <span className="settings__row-label">Reconix {version}</span>
+              {updateStatus && <span className="settings__row-hint">{updateStatus}</span>}
+            </span>
+            <button
+              type="button"
+              className="settings__button"
+              onClick={() => void onCheckForUpdates()}
+              disabled={checking}
+            >
+              {checking ? 'Checking…' : 'Check for updates'}
+            </button>
+          </div>
         </section>
         </div>
       </div>

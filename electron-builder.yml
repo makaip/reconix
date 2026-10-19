@@ -25,6 +25,17 @@ asarUnpack:
 npmRebuild: false
 artifactName: ${productName}-${version}-${os}-${arch}.${ext}
 
+# Discord-like distribution: build artifacts are uploaded as GitHub Releases.
+# Replace `owner` with the real org/user once the repo is public.
+publish:
+  provider: github
+  owner: reconix
+  repo: reconix
+  releaseType: release
+  # Never publish implicitly on `electron-builder` runs; use `--publish always`
+  # (or the dist:* scripts) explicitly to upload.
+  publishAutoUpdate: false
+
 mac:
   category: public.app-category.developer-tools
   target:
@@ -40,6 +51,8 @@ mac:
 win:
   target:
     - target: nsis
+      arch: [x64]
+    - target: portable
       arch: [x64]
 
 nsis:
