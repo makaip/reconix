@@ -29,7 +29,7 @@ artifactName: ${productName}-${version}-${os}-${arch}.${ext}
 # Replace `owner` with the real org/user once the repo is public.
 publish:
   provider: github
-  owner: reconix
+  owner: makaip
   repo: reconix
   releaseType: release
   # Never publish implicitly on `electron-builder` runs; use `--publish always`
