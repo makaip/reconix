@@ -24,6 +24,9 @@ export interface OpenCodeConfig {
   model?: string
   /** Wait for this MCP connection before admitting the session's first prompt. */
   requiredMcpServer?: string
+  /** Local URL of that MCP server, probed first so a dead/stale listener fails
+   *  fast with an actionable error instead of a 30s "did not connect" timeout. */
+  requiredMcpUrl?: string
 }
 
 export interface RawEvent {
@@ -116,8 +119,10 @@ export class HttpOpenCodeTransport implements OpenCodeTransport {
     // created; /api/mcp can be slow or empty for the first few seconds. A single
     // transient timeout used to abort the whole warm-up, so retry on
     // network/timeout errors instead of failing the session.
+    if (this.cfg.requiredMcpUrl) await this.probeLocalMcp(this.cfg.requiredMcpUrl)
     const deadline = Date.now() + 30_000
     let lastErr: unknown
+    let seen: string[] = []
     while (Date.now() < deadline) {
       let terminal: Error | null = null
       try {
@@ -126,6 +131,7 @@ export class HttpOpenCodeTransport implements OpenCodeTransport {
         const { data } = await response.json() as {
           data: { name: string; status: { status: string; error?: string } }[]
         }
+        seen = data.map((server) => `${server.name}=${server.status.status}`)
         const entry = data.find((server) => server.name === name)
         const state = entry?.status.status
         if (state === 'connected') return
@@ -141,7 +147,41 @@ export class HttpOpenCodeTransport implements OpenCodeTransport {
       if (terminal) throw terminal
       await new Promise((resolve) => setTimeout(resolve, 100))
     }
-    throw new Error(`Required MCP server ${name} did not connect within 30s: ${lastErr instanceof Error ? lastErr.message : lastErr}`)
+    throw new Error(
+      `Required MCP server ${name} did not connect within 30s ` +
+        `(OpenCode sees: ${seen.length ? seen.join(', ') : 'no MCP servers'}). ` +
+        `Last error: ${lastErr instanceof Error ? lastErr.message : lastErr}`
+    )
+  }
+
+  /**
+   * Confirm the local MCP listener actually accepts connections. Any HTTP
+   * response counts (the MCP route may answer 405 to a plain GET) — only a
+   * refused/timed-out connection is a failure. Gives the operator a precise
+   * cause (stale process on the port, firewall) instead of a generic timeout.
+   */
+  private async probeLocalMcp(url: string): Promise<void> {
+    const deadline = Date.now() + 5_000
+    let lastErr: unknown
+    while (true) {
+      try {
+        await fetch(url, { method: 'GET', signal: AbortSignal.timeout(1500) })
+        return
+      } catch (error) {
+        lastErr = error
+      }
+      if (Date.now() >= deadline) {
+        const hint = process.platform === 'win32'
+          ? 'check `netstat -ano | findstr :4102` and kill the stale PID'
+          : 'check `lsof -i :4102` and kill the stale process'
+        throw new Error(
+          `Reconix MCP server is not reachable at ${url} ` +
+            `(${lastErr instanceof Error ? lastErr.message : lastErr}). ` +
+            `The port may be held by a stale process — ${hint} — or a firewall is blocking loopback.`
+        )
+      }
+      await new Promise((resolve) => setTimeout(resolve, 200))
+    }
   }
 
   async sendMessage(sessionId: string, text: string): Promise<{ messageId: string }> {

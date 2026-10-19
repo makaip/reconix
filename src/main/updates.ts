@@ -25,6 +25,20 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
+/**
+ * electron-updater can only replace a packaged install: Windows NSIS/macOS, and
+ * on Linux ONLY an AppImage (it locates the file through $APPIMAGE). Calling a
+ * check anywhere else only produces noise ("APPIMAGE env is not defined",
+ * "downloadPromise is null") with no chance of succeeding, so skip it up front.
+ */
+function autoUpdateSupport(): { ok: boolean; reason?: string } {
+  if (!app.isPackaged) return { ok: false, reason: 'unpackaged development build' }
+  if (process.platform === 'linux' && !process.env.APPIMAGE) {
+    return { ok: false, reason: 'Linux auto-update requires running the AppImage build' }
+  }
+  return { ok: true }
+}
+
 // One updater instance exists for the whole process, but windows are recreated
 // (macOS activate). Keep a live reference instead of capturing a window in the
 // event listeners, so a stale window never receives update pushes.
@@ -90,6 +104,8 @@ export function initAutoUpdater(mainWindow: BrowserWindow): void {
   ipcMain.removeHandler('app:check-for-updates')
   ipcMain.handle('app:check-for-updates', async (event): Promise<UpdateCheckResult> => {
     if (!isMainWindow(event.sender)) return { ok: false, error: 'unauthorized' }
+    const support = autoUpdateSupport()
+    if (!support.ok) return { ok: false, error: `Auto-update unavailable: ${support.reason}` }
     try {
       // Resolves null when the app is already current.
       const result = await autoUpdater.checkForUpdates()
@@ -118,8 +134,16 @@ export function initAutoUpdater(mainWindow: BrowserWindow): void {
  * boot regardless of updater state.
  */
 export function checkForUpdatesOnStartup(): void {
+  const support = autoUpdateSupport()
+  if (!support.ok) {
+    console.log(`[updater] startup check skipped: ${support.reason}`)
+    return
+  }
   try {
-    void autoUpdater.checkForUpdatesAndNotify().catch((error) => {
+    // autoDownload is enabled in initAutoUpdater, so a plain check is enough;
+    // checkForUpdatesAndNotify() is what logs "downloadPromise is null" when
+    // there is no download in flight.
+    void autoUpdater.checkForUpdates().catch((error) => {
       console.warn(`[updater] startup check skipped: ${messageOf(error)}`)
     })
   } catch (error) {

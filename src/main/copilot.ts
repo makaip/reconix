@@ -985,6 +985,11 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
         // OpenCode can continue using that already-live MCP endpoint; do not
         // fail the entire Copilot engine just because the bind is idempotent.
         if ((err as NodeJS.ErrnoException)?.code !== 'EADDRINUSE') throw err
+        console.warn(
+          `[mcp] port ${MCP_PORT} is already in use; reusing the existing listener at ` +
+            `http://127.0.0.1:${MCP_PORT}/mcp. If tools time out, a stale run is holding ` +
+            `the port — kill it and restart.`
+        )
         s = {
           port: MCP_PORT,
           url: `http://127.0.0.1:${MCP_PORT}/mcp`,
@@ -1180,7 +1185,7 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
     starting = (async () => {
       const { baseUrl, password } = await ensureServerInfo()
       const c = createOpenCodeConnector(
-        { baseUrl, password, agent: 'pentest-orchestrator', model: ORCHESTRATOR_MODEL, requiredMcpServer: 'reconix' },
+        { baseUrl, password, agent: 'pentest-orchestrator', model: ORCHESTRATOR_MODEL, requiredMcpServer: 'reconix', requiredMcpUrl: `http://127.0.0.1:${MCP_PORT}/mcp` },
         {
           onAgentEvent: (ev: AgentEvent) => {
             if (responseStartedAt !== null) {
