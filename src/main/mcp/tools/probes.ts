@@ -663,6 +663,182 @@ const test_idor = defineTool<{ base: HttpRequestSpec; paramName: string; values:
   }
 })
 
+// ── fuzz (Intruder-style) ────────────────────────────────────────────────────
+type FuzzLocation = 'query' | 'body' | 'header' | 'path' | 'marker'
+interface FuzzInput {
+  base: HttpRequestSpec
+  injectionPoint: { location: FuzzLocation; name?: string; marker?: string }
+  payloads: string[]
+  concurrency?: number
+  includeBaseline?: boolean
+}
+
+const ERROR_MARKERS = /sql\s*error|syntax error|exception|stack trace|traceback|undefined method|fatal error|warning:/i
+
+function buildFuzzSpec(base: HttpRequestSpec, ip: FuzzInput['injectionPoint'], payload: string): HttpRequestSpec {
+  const location = ip.location
+  const marker = ip.marker ?? '§'
+  if (location === 'marker') {
+    const replace = (s: string) => s.split(marker).join(payload)
+    const headers: Record<string, string> = {}
+    for (const [k, v] of Object.entries(base.headers ?? {})) headers[k] = replace(v)
+    return { ...base, url: replace(base.url), body: base.body == null ? base.body : replace(base.body), headers }
+  }
+  if (location === 'header') {
+    const name = ip.name ?? ''
+    const headers = { ...(base.headers ?? {}) }
+    headers[name] = payload
+    return { ...base, headers }
+  }
+  if (location === 'path') {
+    return { ...base, url: setPathParam(base.url, ip.name ?? '', payload) }
+  }
+  if (location === 'body') {
+    return { ...base, body: setBodyParam(base, ip.name ?? '', payload) }
+  }
+  const u = new URL(base.url)
+  u.searchParams.set(ip.name ?? '', payload)
+  return { ...base, url: u.href }
+}
+
+const fuzz = defineTool<FuzzInput, unknown>({
+  name: 'fuzz',
+  description:
+    'Intruder-style fuzzer: send a base request with one injection point replaced by each payload, collect responses, and flag anomalies (status/length changes, error markers, timing outliers). Payloads can be hand-written or generated with reconix_gen_fuzz_payloads. Scope-checked per request; rate-limited by engagement policy.',
+  riskTier: 'M',
+  inputSchema: {
+    type: 'object',
+    required: ['base', 'injectionPoint', 'payloads'],
+    additionalProperties: false,
+    properties: {
+      base: { type: 'object', required: ['url'], properties: { url: { type: 'string' }, method: { type: 'string' }, headers: { type: 'object' }, body: { type: 'string' } } },
+      injectionPoint: {
+        type: 'object',
+        required: ['location'],
+        properties: {
+          location: { type: 'string', enum: ['query', 'body', 'header', 'path', 'marker'] },
+          name: { type: 'string' },
+          marker: { type: 'string' }
+        }
+      },
+      payloads: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 100 },
+      concurrency: { type: 'number', minimum: 1, maximum: 5 },
+      includeBaseline: { type: 'boolean' }
+    }
+  },
+  outputSchema: { type: 'object' },
+  parse: (raw) => {
+    const r = (raw ?? {}) as Record<string, unknown>
+    const base = parseRequestSpec(raw, 'base')
+    const ip = r.injectionPoint as Record<string, unknown> | undefined
+    if (typeof ip !== 'object' || ip === null) throw new ToolInputError('"injectionPoint" must be an object')
+    const location = ip.location
+    if (typeof location !== 'string' || !['query', 'body', 'header', 'path', 'marker'].includes(location)) {
+      throw new ToolInputError('"injectionPoint.location" must be query|body|header|path|marker')
+    }
+    if (location !== 'marker' && (typeof ip.name !== 'string' || !ip.name)) {
+      throw new ToolInputError('"injectionPoint.name" is required for query/body/header/path locations')
+    }
+    const marker = typeof ip.marker === 'string' ? ip.marker : undefined
+    const payloads = strArray(raw, 'payloads')
+    if (!payloads || payloads.length === 0) throw new ToolInputError('"payloads" must be a non-empty array of strings')
+    if (payloads.length > 100) throw new ToolInputError('"payloads" max 100 per call; split into batches')
+    const concurrency = typeof r.concurrency === 'number' ? Math.min(5, Math.max(1, Math.floor(r.concurrency))) : 1
+    const includeBaseline = typeof r.includeBaseline === 'boolean' ? r.includeBaseline : false
+    return { base, injectionPoint: { location: location as FuzzLocation, name: ip.name as string | undefined, marker }, payloads, concurrency, includeBaseline }
+  },
+  target: (i) => i.base.url,
+  execute: async (i, ctx) => {
+    const cap = ctx.policy?.maxReplayBatch ?? 20
+    if (i.payloads.length > cap * 5) {
+      const batches = Math.ceil(i.payloads.length / (cap * 5))
+      throw new ToolInputError(`fuzz has ${i.payloads.length} payloads; max ${cap * 5} per call. Split into ${batches} batches.`)
+    }
+    // Optional baseline request with an empty payload to establish the "normal" response.
+    const baselineSpec = i.includeBaseline ? buildFuzzSpec(i.base, i.injectionPoint, '') : null
+    const jobs: Array<{ payload: string; index: number }> = i.payloads.map((p, idx) => ({ payload: p, index: idx }))
+    const results: Array<Record<string, unknown>> = new Array(i.payloads.length)
+    const queue = [...jobs]
+    const concurrency = i.concurrency ?? 1
+    const workers = Array.from({ length: Math.min(concurrency, jobs.length) }, async () => {
+      for (;;) {
+        const job = queue.shift()
+        if (!job) return
+        const { payload, index } = job
+        const spec = buildFuzzSpec(i.base, i.injectionPoint, payload)
+        const method = (spec.method || 'GET').toUpperCase()
+        if (!ctx.scope.isInScope(spec.url)) {
+          results[index] = { index, payload, url: spec.url, method, error: 'out of scope — not sent' }
+          continue
+        }
+        try {
+          const r = await ctx.cdp.sendRequest(spec)
+          const bodyRef = await ctx.traces.save('reqresp', JSON.stringify({ request: spec, response: r }))
+          results[index] = {
+            index,
+            payload,
+            url: spec.url,
+            method,
+            status: r.status,
+            statusText: r.statusText,
+            bodyBytes: r.bodyBytes,
+            durationMs: r.durationMs,
+            bodyPreview: clampString(String(r.body ?? ''), 200),
+            errorMarker: ERROR_MARKERS.test(r.body) || undefined,
+            bodyRef
+          }
+        } catch (err) {
+          results[index] = { index, payload, url: spec.url, method, error: (err as Error)?.message ?? String(err) }
+        }
+      }
+    })
+    // Baseline first (if requested) so it anchors anomaly detection.
+    let baseline: { status: number; bodyBytes: number; durationMs: number } | null = null
+    if (baselineSpec) {
+      if (ctx.scope.isInScope(baselineSpec.url)) {
+        try {
+          const r = await ctx.cdp.sendRequest(baselineSpec)
+          baseline = { status: r.status, bodyBytes: r.bodyBytes, durationMs: r.durationMs }
+        } catch { /* ignore baseline failure */ }
+      }
+    }
+    await Promise.all(workers)
+
+    // Anomaly detection anchored on the first successful result (or baseline).
+    const anchor = baseline ?? (results.find((r) => typeof r?.status === 'number') as { status: number; bodyBytes: number } | undefined)
+    const anomalies: number[] = []
+    const statusCounts: Record<string, number> = {}
+    let errors = 0
+    let outOfScope = 0
+    for (const r of results) {
+      if (r?.error === 'out of scope — not sent') { outOfScope++; continue }
+      if (typeof r?.status !== 'number') { errors++; continue }
+      statusCounts[r.status] = (statusCounts[r.status] ?? 0) + 1
+      const isAnom =
+        (anchor && (r.status !== anchor.status || r.bodyBytes !== anchor.bodyBytes)) ||
+        Boolean(r.errorMarker)
+      if (isAnom) anomalies.push(r.index as number)
+    }
+    const sent = results.length - errors - outOfScope
+    return {
+      total: i.payloads.length,
+      sent,
+      failed: errors,
+      outOfScope,
+      baseline: baseline ?? (anchor ? { status: anchor.status, bodyBytes: anchor.bodyBytes } : null),
+      statusCounts,
+      anomalies,
+      anomalousCount: anomalies.length,
+      note: anomalies.length > 0
+        ? `${anomalies.length} of ${sent} responses differ from the baseline (status/length/error marker) — inspect those indices first.`
+        : sent > 0
+          ? 'no anomalies detected against the baseline; try different payloads or a different injection point'
+          : 'no requests were sent successfully',
+      results
+    }
+  }
+})
+
 export const probeTools: Tool[] = [
   submitForm as Tool,
   probe_reflection as Tool,
@@ -670,7 +846,8 @@ export const probeTools: Tool[] = [
   compare_roles as Tool,
   check_cors as Tool,
   test_idor as Tool,
-  run_tool as Tool
+  run_tool as Tool,
+  fuzz as Tool
 ]
 
 export const verifyTools: Tool[] = [
