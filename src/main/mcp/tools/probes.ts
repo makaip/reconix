@@ -190,7 +190,11 @@ function setBodyParam(base: HttpRequestSpec, paramName: string, value: string): 
 async function varyAcross(i: VaryInput, ctx: Parameters<Tool['execute']>[1]): Promise<unknown> {
   const cap = ctx.policy?.maxReplayBatch ?? 20
   if (i.values.length > cap) {
-    throw new ToolExecError(`vary has ${i.values.length} values; max ${cap} per call (engagement policy).`)
+    const batches = Math.ceil(i.values.length / cap)
+    throw new ToolInputError(
+      `vary has ${i.values.length} values; max ${cap} per call (engagement policy). ` +
+        `Split into ${batches} calls of up to ${cap} values each (e.g. values[0..${cap - 1}], values[${cap}..${cap * 2 - 1}], ...).`
+    )
   }
   const location = i.location ?? 'query'
   const buildSpec = (value: string): HttpRequestSpec => {

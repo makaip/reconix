@@ -25,6 +25,7 @@ async function evalJson<T>(ctx: ToolContext, expression: string): Promise<T> {
 // or an invalid one — reports 'get', exactly as submit_form will send it.
 const FORMS_EXPR = `[...document.forms].map((f,i)=>({
   index:i,
+  selector:f.id ? '#'+CSS.escape(f.id) : (f.getAttribute('name') ? 'form[name='+JSON.stringify(f.getAttribute('name'))+']' : null),
   name:f.getAttribute('name')||null,
   id:f.id||null,
   action:f.action||null,
@@ -239,7 +240,13 @@ const get_headers = defineTool<Record<string, never>, unknown>({
     // back to the newest entry carrying response headers for that URL.
     // Electron's webRequest tags the top document 'mainFrame'; CDP/other
     // sources may say 'document' — accept either.
-    const forUrl = entries.filter((e) => e.url === url && e.responseHeaders)
+    // Hash-fragment routes (`/#/login`) never reach the server, so captured
+    // request URLs omit the fragment; compare without it or every SPA route
+    // misses its own document response.
+    const pageUrl = url.split('#')[0]
+    const forUrl = entries.filter(
+      (e) => (e.url === pageUrl || e.url === url || e.url.split('#')[0] === pageUrl) && e.responseHeaders
+    )
     const match =
       [...forUrl].reverse().find((e) => /mainframe|document|main_frame/i.test(e.resourceType)) ??
       forUrl[forUrl.length - 1]

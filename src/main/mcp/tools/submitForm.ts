@@ -36,12 +36,32 @@ export const submitForm = defineTool<SubmitInput, unknown>({
     // then to ensure the form/button did not change before the actual submit.
     const setup = `
       let form,button;
+      const sel=${JSON.stringify(input.selector)};
+      const sub=${input.submitterSelector === undefined ? 'null' : JSON.stringify(input.submitterSelector)};
       try {
-        form=document.querySelector(${JSON.stringify(input.selector)});
-        button=${input.submitterSelector === undefined ? 'null' : `document.querySelector(${JSON.stringify(input.submitterSelector)})`};
+        form=document.querySelector(sel);
+        // Be forgiving: list_forms reports a ready selector, but callers also
+        // pass a bare id, a form name, or a 0-based form index. Accept those
+        // shapes rather than dead-ending on a technically-invalid selector.
+        if(!(form instanceof HTMLFormElement)){
+          const byId=document.getElementById(sel);
+          if(byId instanceof HTMLFormElement) form=byId;
+        }
+        if(!(form instanceof HTMLFormElement) && /^\\d+$/.test(sel)) form=document.forms[Number(sel)]||null;
+        if(!(form instanceof HTMLFormElement)){
+          try { const byName=document.querySelector('form[name='+JSON.stringify(sel)+']'); if(byName instanceof HTMLFormElement) form=byName; } catch {}
+        }
+        button=sub===null?null:document.querySelector(sub);
+        if(sub!==null && !button && form instanceof HTMLFormElement){
+          // Fall back to a submit button whose text/value matches, or the only
+          // submit button in the form (covers "Log in" style callers).
+          const subs=[...form.querySelectorAll('button,input[type=submit],input[type=image]')];
+          const want=String(sub).trim().toLowerCase();
+          button=subs.find(b=>String(b.textContent||b.value||'').trim().toLowerCase()===want) || (subs.length===1?subs[0]:null);
+        }
       } catch { return {error:'Invalid CSS selector. Inspect the DOM with query_dom and choose a form and optional submit button.'}; }
-      if(!(form instanceof HTMLFormElement)) return {error:'selector must match an HTML form. Use list_forms or query_dom to locate it.'};
-      if(${input.submitterSelector !== undefined} && !button) return {error:'submitterSelector did not match a submit button. Use query_dom to find input[type=submit] or button[type=submit] inside the form.'};
+      if(!(form instanceof HTMLFormElement)) return {error:'selector must match an HTML form. Call list_forms and pass one of its selector values (or an id/name), then retry.'};
+      if(${input.submitterSelector !== undefined} && !button) return {error:'submitterSelector did not match a submit button or a button label. Use query_dom to find input[type=submit] or button[type=submit] inside the form.'};
       if(button && (!((button instanceof HTMLButtonElement && button.type==='submit') || (button instanceof HTMLInputElement && ['submit','image'].includes(button.type))) || button.form!==form)) return {error:'submitterSelector must match a submit button belonging to the selected form.'};
       // Frameworks (Angular/React/Vue) often keep the submit button disabled
       // attribute stale after programmatic fills because change detection has
