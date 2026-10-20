@@ -43,7 +43,7 @@ describe('fill file input handling', () => {
     const fixture = page('text')
     await expect(fill.execute({ selector: '#name', value: 'A name' }, fixture.ctx)).resolves.toEqual({ ok: true })
     expect(fixture.input.value).toBe('A name')
-    expect(fixture.events).toEqual(['input'])
+    expect(fixture.events).toEqual(['input', 'change', 'blur'])
   })
 
   it('allows clearing a file input', async () => {

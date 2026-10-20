@@ -70,7 +70,7 @@ const fill = defineTool<{ selector: string; value: string }, unknown>({
     const sel = JSON.stringify(i.selector)
     const val = JSON.stringify(i.value)
     const r = await ctx.cdp.evaluate(
-      `(()=>{const el=document.querySelector(${sel});if(!el)return false;if(el.tagName==='INPUT'&&el.type==='file'&&${val}!=='')return 'file-input';el.value=${val};el.dispatchEvent(new Event('input',{bubbles:true}));return true;})()`
+      `(()=>{const el=document.querySelector(${sel});if(!el)return false;if(el.tagName==='INPUT'&&el.type==='file'&&${val}!=='')return 'file-input';el.value=${val};el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}));el.dispatchEvent(new Event('blur',{bubbles:true}));return true;})()`
     )
     if (r === JSON.stringify('file-input')) {
       throw new ToolInputError('fill cannot upload files or assign filenames to file inputs. Use reconix_upload_files with the selector and actual file contents, or an approved multipart request through replay_request. Do not repeat fill or click the file picker for this approach.')

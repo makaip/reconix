@@ -43,7 +43,22 @@ export const submitForm = defineTool<SubmitInput, unknown>({
       if(!(form instanceof HTMLFormElement)) return {error:'selector must match an HTML form. Use list_forms or query_dom to locate it.'};
       if(${input.submitterSelector !== undefined} && !button) return {error:'submitterSelector did not match a submit button.'};
       if(button && (!((button instanceof HTMLButtonElement && button.type==='submit') || (button instanceof HTMLInputElement && ['submit','image'].includes(button.type))) || button.form!==form)) return {error:'submitterSelector must match a submit button belonging to the selected form.'};
-      if(button && button.matches(':disabled')) return {error:'The submit button is disabled.'};
+      // Frameworks (Angular/React/Vue) often keep the submit button disabled
+      // attribute stale after programmatic fills because change detection has
+      // not flushed. Treat a disabled button as fatal only when the underlying
+      // form is also invalid; otherwise submit through the form itself (no
+      // submitter) so the action still fires. Track it so the caller knows.
+      let submitterDisabled = false
+      if (button && button.matches(':disabled')) {
+        const formValid = Object.getOwnPropertyDescriptor(proto, 'noValidate').get.call(form)
+          ? true
+          : proto.checkValidity.call(form)
+        if (!formValid) {
+          const fields = Array.from(form.elements).filter((el: any) => el.willValidate && !el.validity.valid).slice(0, 20).map((el: any) => String(el.name || el.id || el.tagName).slice(0, 100))
+          return { error: 'The submit button is disabled and the form is invalid. Correct invalid fields before retrying: ' + fields.join(', ') }
+        }
+        submitterDisabled = true
+      }
       const proto=HTMLFormElement.prototype;
       const destination=()=>({
         action:button && button.hasAttribute('formaction') ? button.formAction : Object.getOwnPropertyDescriptor(proto,'action').get.call(form),
@@ -72,10 +87,13 @@ export const submitForm = defineTool<SubmitInput, unknown>({
       let event;
       const observe=e=>{if(e.target===form)event=e};
       window.addEventListener('submit',observe,{capture:true});
-      try { proto.requestSubmit.call(form,...(button?[button]:[])); }
+      let submitError=null;
+      try { proto.requestSubmit.call(form,...(button && !submitterDisabled?[button]:[])); }
+      catch(e){ submitError=e && (e as Error).message ? (e as Error).message : String(e); }
       finally { window.removeEventListener('submit',observe,{capture:true}); }
+      if(submitError) return {error:'requestSubmit failed: '+submitError};
       if(!event) return {error:'No submit event was observed. Check form validation and page state before retrying.'};
-      return {ok:true,status:event.defaultPrevented?'handled_by_page':'submission_requested',action:target.action,method:target.method,serverResponseVerified:false};
+      return {ok:true,status:event.defaultPrevented?'handled_by_page':'submission_requested',action:target.action,method:target.method,serverResponseVerified:false,submitterDisabled};
     `)
   }
 })
