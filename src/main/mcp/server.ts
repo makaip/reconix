@@ -75,6 +75,22 @@ export async function startMcpHttpServer(
       res.writeHead(404).end()
       return
     }
+    // CORS preflight / browser probes / health checks hit this endpoint without
+    // the SSE accept header and would otherwise trip the SDK's transport error
+    // handler (noisy, harmless 406). Answer them directly and quietly.
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204, {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type, Accept, Mcp-Session-Id'
+      }).end()
+      return
+    }
+    const accept = String(req.headers['accept'] ?? '')
+    if (req.method === 'GET' && !accept.includes('text/event-stream')) {
+      res.writeHead(406, { 'Content-Type': 'text/plain' }).end('MCP endpoint requires Accept: text/event-stream')
+      return
+    }
     void (async () => {
       const sdk = buildSdkServer(reconix)
       const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined })
