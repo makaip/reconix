@@ -530,7 +530,7 @@ const compare_roles = defineTool<
   unknown
 >({
   name: 'compare_roles',
-  description: 'Replay one request as two roles (different auth tokens) and diff the responses (IDOR/BAC).',
+  description: 'Replay the SAME url as two roles (different auth tokens) and diff the responses. NOTE: this swaps the token but keeps the resource id fixed - it detects role-based response differences on one resource, NOT cross-resource IDOR. For a true IDOR test, use replay_request with user A token against user B resource id (and vice versa) and check for a 200 returning the other user data.',
   riskTier: 'M',
   inputSchema: {
     type: 'object',
