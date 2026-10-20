@@ -54,7 +54,7 @@ import type {
   ServerStatus,
   UsageSnapshot
 } from '../shared/contracts'
-import type { CapturedRequest, InterceptRule } from '../shared/tabs'
+import type { CapturedRequest, InterceptRule, WsConnection } from '../shared/tabs'
 import type { NetworkCapture } from './network'
 import {
   createOpenCodeConnector,
@@ -789,7 +789,11 @@ function isJsonObject(value: unknown): value is JsonObject {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-export function createCopilotBridge(win: BrowserWindow, getNetwork: () => NetworkCapture | undefined, getInterceptor?: () => { save(raw: unknown): InterceptRule | null; list(): InterceptRule[]; toggle(id: unknown, enabled: unknown): InterceptRule | null; remove(id: unknown): boolean } | undefined, getCrawler?: () => { start(raw: unknown): unknown; stop(): unknown; getState(): unknown } | undefined, getRepeater?: () => { list(): unknown; save(raw: unknown): unknown; remove(id: unknown): unknown; run(id: unknown): unknown; diff(raw: unknown): unknown } | undefined): CopilotBridge {
+// `getWebsockets` mirrors `getInterceptor`: a getter because the CDP frame
+// capture (main/websocket.ts) is created after the bridge, but any real tool
+// call happens long after index.ts has assigned it. Read-only — the tool only
+// lists captured frames; it can never inject one.
+export function createCopilotBridge(win: BrowserWindow, getNetwork: () => NetworkCapture | undefined, getInterceptor?: () => { save(raw: unknown): InterceptRule | null; list(): InterceptRule[]; toggle(id: unknown, enabled: unknown): InterceptRule | null; remove(id: unknown): boolean } | undefined, getCrawler?: () => { start(raw: unknown): unknown; stop(): unknown; getState(): unknown } | undefined, getRepeater?: () => { list(): unknown; save(raw: unknown): unknown; remove(id: unknown): unknown; run(id: unknown): unknown; diff(raw: unknown): unknown } | undefined, getWebsockets?: () => { list(): WsConnection[] } | undefined): CopilotBridge {
   setQuestionSender((payload) => { if (!win.isDestroyed()) win.webContents.send('copilot:question', payload) })
   let child: ChildProcessWithoutNullStreams | null = null
   let connector: OpenCodeConnector | null = null
@@ -1057,6 +1061,7 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
         findings: findingsStore.sink,
         history,
         interceptor: getInterceptor?.(),
+        websockets: getWebsockets?.(),
         crawler: getCrawler?.(),
         repeater: getRepeater?.()
       }

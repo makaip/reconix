@@ -2,7 +2,7 @@
 // one of these; a capability that is not a Tool cannot be expressed.
 
 import type { EngagementId, Policy, RiskTier, TraceRef } from '../../shared/contracts'
-import type { CapturedRequest, InterceptRule } from '../../shared/tabs'
+import type { CapturedRequest, InterceptRule, WsConnection } from '../../shared/tabs'
 import type { TraceKind } from '../../shared/traces'
 import type { CdpDriver } from './cdp'
 import type { JsonSchema } from './validate'
@@ -57,6 +57,13 @@ export interface ToolContext {
     list(): InterceptRule[]
     toggle(id: unknown, enabled: unknown): InterceptRule | null
     remove(id: unknown): boolean
+  }
+  /** CDP WebSocket frame capture (§11.1). Read-only — `list` returns the
+   *  connections captured on the inspected (active) target. Optional: absent
+   *  on surfaces with no inspector, in which case get_websocket_messages
+   *  reports that frames are unavailable instead of pretending they're empty. */
+  websockets?: {
+    list(): WsConnection[]
   }
   /** Scope-aware spider core (§11.4). Optional — present in the real app. */
   crawler?: {

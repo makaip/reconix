@@ -26,7 +26,7 @@ function makeCtx(opts: {
   network?: CapturedRequest[]
   allowedHosts?: string[]
   /** Body server for script[src] fetches. Absent = the request throws (offline). */
-  scripts?: (url: string) => { status?: number; body: string }
+  scripts?: (url: string) => { status?: number; body: string } | undefined
 }): FakeCtx {
   const calls = { emulation: [] as EmulationOptions[], input: [] as unknown[][], fetched: [] as string[] }
   const pageUrl = opts.pageUrl ?? 'https://app.example.com/dash'

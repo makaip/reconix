@@ -549,38 +549,118 @@ const get_request = defineTool<{ id: string }, unknown>({
   }
 })
 
-// WebSocket *messages* are captured over CDP (Network.webSocketFrame*) by
-// src/main/websocket.ts, but that capture is owned by the inspector and is not
-// exposed on ToolContext — so this tool cannot read frames yet. What IS
-// available is the handshake URL from the network reader (webRequest sees the
-// upgrade request as resourceType 'websocket', never the frames). Report that
-// honestly instead of pretending to return messages.
+// WebSocket frames are captured over CDP (Network.webSocketFrame*) by
+// src/main/websocket.ts — the same capture the DevTools WebSocket panel renders.
+// It is exposed on ToolContext as a read-only reader (`ctx.websockets`), so the
+// agent sees the real sent/received frames. When a surface has no capture wired
+// (ctx.websockets undefined) we say so rather than return an empty frame list
+// that would read as "no traffic".
+//
+// One call must stay within the per-result context budget, so each connection
+// echoes only its most recent MAX_LIST_ITEMS frames and every payload is
+// clamped; both cases are flagged (framesTruncated / payloadTruncated) so the
+// agent knows it is looking at a partial view.
+
+/** CDP opcode → human label (WsFrame.opcode doc). Unknown opcodes keep their
+ *  number so a newer extension opcode is never silently mislabelled. */
+const WS_OPCODE_KINDS: Record<number, string> = {
+  1: 'text',
+  2: 'binary',
+  8: 'close',
+  9: 'ping',
+  10: 'pong'
+}
+
+function opcodeLabel(opcode: number): string {
+  return WS_OPCODE_KINDS[opcode] ?? `opcode-${opcode}`
+}
+
 const get_websocket_messages = defineTool<Record<string, never>, unknown>({
   name: 'get_websocket_messages',
   description:
-    'List WebSocket handshake URLs observed in the network log. Frame/message capture is not ' +
-    'exposed to MCP tools yet — `messages` is always empty; do not infer traffic from it.',
+    'WebSocket traffic on the inspected tab: one entry per captured connection (handshake url, ' +
+    'open/closed state) with its sent/received frames — direction, opcode kind (text/binary/close/' +
+    'ping/pong), timestamp and payload. Payloads of binary frames are base64 per CDP. Each connection ' +
+    'echoes only its most recent frames and long payloads are clamped; check framesTruncated / ' +
+    'payloadTruncated before concluding a frame was never sent. If messagesSupported is false the ' +
+    'capture is not wired in this build and no frames can be read.',
   riskTier: 'R',
   inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   outputSchema: { type: 'object' },
   parse: () => ({}),
   execute: async (_i, ctx) => {
-    const handshakes = ctx.network
-      .list()
-      .filter((r) => /websocket/i.test(r.resourceType) || /^wss?:/i.test(r.url))
-    const urls = [...new Set(handshakes.map((r) => r.url))]
+    const capture = ctx.websockets
+    if (!capture) {
+      const handshakes = ctx.network
+        .list()
+        .filter((r) => /websocket/i.test(r.resourceType) || /^wss?:/i.test(r.url))
+      const urls = [...new Set(handshakes.map((r) => r.url))]
+      return {
+        urls,
+        connections: urls.length,
+        messages: [],
+        messagesSupported: false,
+        note:
+          urls.length > 0
+            ? 'urls come from the network log handshake. Frame capture is not wired to MCP tools in this surface, so messages is always empty — do not infer traffic from it.'
+            : 'No WebSocket handshakes in the network log. Frame capture is not wired to MCP tools in this surface, so messages is always empty — do not infer traffic from it.'
+      }
+    }
+
+    const conns = capture.list()
+    const urls = [...new Set(conns.map((c) => c.url).filter((u) => u.length > 0))]
+    let framesTotal = 0
+    let framesOmitted = 0
+    const connectionsList = conns.map((conn) => {
+      framesTotal += conn.frames.length
+      // Newest frames are the ones an agent is chasing; drop the oldest first.
+      const kept = conn.frames.slice(-MAX_LIST_ITEMS)
+      const omitted = conn.frames.length - kept.length
+      framesOmitted += omitted
+      return {
+        requestId: conn.requestId,
+        url: clampString(conn.url),
+        createdAt: conn.createdAt,
+        closedAt: conn.closedAt,
+        open: conn.closedAt === undefined,
+        frames: kept.map((f) => ({
+          direction: f.direction,
+          kind: opcodeLabel(f.opcode),
+          opcode: f.opcode,
+          payload: clampString(f.payload),
+          payloadTruncated: f.payloadTruncated,
+          timestamp: f.timestamp
+        })),
+        framesTruncated: conn.framesTruncated || omitted > 0
+      }
+    })
+
+    const notes: string[] = []
+    if (conns.length === 0) {
+      notes.push(
+        'No WebSocket connections captured for the inspected tab yet — capture starts when the page is loaded through Reconix, so reload the page (or trigger the socket) and retry. get_network_log still shows the handshake request.'
+      )
+    } else if (framesTotal === 0) {
+      notes.push(
+        'Connections were captured but no frames yet — the socket may be idle; interact with the page to generate traffic.'
+      )
+    }
+    if (framesOmitted > 0) {
+      notes.push(
+        `only the most recent ${MAX_LIST_ITEMS} frames per connection are included (${framesOmitted} older frame(s) omitted)`
+      )
+    }
     return {
       urls,
-      connections: urls.length,
-      messages: [],
-      messagesSupported: false,
-      note:
-        urls.length > 0
-          ? 'urls come from the network log handshake. Message/frame payloads are not implemented for MCP tools (CDP frame capture exists in the app UI only).'
-          : 'No WebSocket handshakes in the network log. Message/frame payloads are not implemented for MCP tools (CDP frame capture exists in the app UI only).'
+      connections: conns.length,
+      messagesSupported: true,
+      framesTotal,
+      connectionsList,
+      note: notes.length > 0 ? notes.join('; ') : undefined
     }
   }
 })
+
 
 export const networkTools: Tool[] = [
   replay_request as Tool,

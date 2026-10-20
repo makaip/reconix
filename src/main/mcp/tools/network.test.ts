@@ -4,7 +4,7 @@ import { invokeTool } from '../pipeline'
 import type { AuditLogger } from '../audit'
 import type { Tool, ToolContext } from '../tool'
 import type { HttpRequestSpec } from '../cdp'
-import type { CapturedRequest } from '../../../shared/tabs'
+import type { CapturedRequest, WsConnection, WsFrame } from '../../../shared/tabs'
 
 const audit: AuditLogger = {
   recordIntent: async () => 'call-1',
@@ -356,5 +356,173 @@ describe('network input validation is reported as TOOL_INPUT, not TOOL_EXEC', ()
     )
     expect(res.ok).toBe(false)
     expect(res.error?.code).toBe('TOOL_INPUT')
+  })
+})
+
+describe('get_websocket_messages reads real CDP frames', () => {
+  function wsCtx(conns: WsConnection[]): ToolContext {
+    return {
+      engagementId: 'eng-1',
+      scope: { config: {}, isInScope: () => true, assertInScope: () => {} },
+      network: { list: () => [], get: () => undefined },
+      websockets: { list: () => conns }
+    } as unknown as ToolContext
+  }
+
+  function conn(extra: Partial<WsConnection> = {}): WsConnection {
+    return {
+      requestId: 'ws-1',
+      url: 'wss://app.example.com/socket',
+      createdAt: 1_000,
+      frames: [],
+      framesTruncated: false,
+      ...extra
+    }
+  }
+
+  function frame(extra: Partial<WsFrame> = {}): WsFrame {
+    return {
+      direction: 'sent',
+      opcode: 1,
+      payload: 'hello',
+      payloadTruncated: false,
+      timestamp: 1_500,
+      ...extra
+    }
+  }
+
+  it('returns each connection with its frames, labelled by opcode kind', async () => {
+    const res = await invokeTool(
+      tool('get_websocket_messages'),
+      {},
+      wsCtx([
+        conn({
+          frames: [
+            frame(),
+            frame({ direction: 'received', opcode: 2, payload: 'AAEC', timestamp: 1_600 }),
+            frame({ direction: 'received', opcode: 8, payload: '', timestamp: 1_700 })
+          ]
+        })
+      ]),
+      audit
+    )
+    expect(res.ok).toBe(true)
+    const out = res.output as {
+      urls: string[]
+      connections: number
+      messagesSupported: boolean
+      framesTotal: number
+      connectionsList: Array<{
+        requestId: string
+        url: string
+        open: boolean
+        closedAt?: number
+        frames: Array<{ direction: string; kind: string; opcode: number; payload: string; timestamp: number }>
+        framesTruncated: boolean
+      }>
+    }
+    expect(out.messagesSupported).toBe(true)
+    expect(out.connections).toBe(1)
+    expect(out.urls).toEqual(['wss://app.example.com/socket'])
+    expect(out.framesTotal).toBe(3)
+    const c = out.connectionsList[0]
+    expect(c.requestId).toBe('ws-1')
+    expect(c.open).toBe(true) // no closedAt yet
+    expect(c.frames.map((f) => f.kind)).toEqual(['text', 'binary', 'close'])
+    expect(c.frames.map((f) => f.direction)).toEqual(['sent', 'received', 'received'])
+    expect(c.frames[1].payload).toBe('AAEC') // binary payload passed through (base64 per CDP)
+    expect(c.framesTruncated).toBe(false)
+  })
+
+  it('maps the remaining opcodes and reports a closed connection', async () => {
+    const res = await invokeTool(
+      tool('get_websocket_messages'),
+      {},
+      wsCtx([
+        conn({
+          closedAt: 2_000,
+          frames: [frame({ opcode: 9 }), frame({ opcode: 10 }), frame({ opcode: 7 })]
+        })
+      ]),
+      audit
+    )
+    expect(res.ok).toBe(true)
+    const out = res.output as {
+      connectionsList: Array<{ open: boolean; closedAt?: number; frames: Array<{ kind: string }> }>
+    }
+    expect(out.connectionsList[0].open).toBe(false)
+    expect(out.connectionsList[0].closedAt).toBe(2_000)
+    // ping/pong labelled; an unknown opcode keeps its number instead of lying
+    expect(out.connectionsList[0].frames.map((f) => f.kind)).toEqual(['ping', 'pong', 'opcode-7'])
+  })
+
+  it('clamps long payloads and caps a connection to its most recent frames', async () => {
+    const frames = Array.from({ length: 60 }, (_, n) =>
+      frame({ payload: `f${n}:${'x'.repeat(2000)}`, timestamp: n })
+    )
+    const res = await invokeTool(
+      tool('get_websocket_messages'),
+      {},
+      wsCtx([conn({ frames })]),
+      audit
+    )
+    expect(res.ok).toBe(true)
+    const out = res.output as {
+      framesTotal: number
+      connectionsList: Array<{
+        frames: Array<{ payload: string; timestamp: number }>
+        framesTruncated: boolean
+      }>
+      note?: string
+    }
+    expect(out.framesTotal).toBe(60)
+    expect(out.connectionsList[0].frames.length).toBe(50)
+    // the newest frames survive the cap, oldest dropped
+    expect(out.connectionsList[0].frames[0].timestamp).toBe(10)
+    expect(out.connectionsList[0].frames[49].timestamp).toBe(59)
+    expect(out.connectionsList[0].framesTruncated).toBe(true)
+    expect(out.connectionsList[0].frames[0].payload).toContain('chars]')
+    expect(out.connectionsList[0].frames[0].payload.length).toBeLessThan(2000)
+    expect(out.note).toContain('most recent 50 frames')
+  })
+
+  it('reports an honest empty state when nothing was captured', async () => {
+    const res = await invokeTool(tool('get_websocket_messages'), {}, wsCtx([]), audit)
+    expect(res.ok).toBe(true)
+    const out = res.output as {
+      urls: string[]
+      connections: number
+      messagesSupported: boolean
+      framesTotal: number
+      connectionsList: unknown[]
+      note?: string
+    }
+    expect(out.messagesSupported).toBe(true)
+    expect(out.connections).toBe(0)
+    expect(out.framesTotal).toBe(0)
+    expect(out.connectionsList).toEqual([])
+    expect(out.note).toContain('No WebSocket connections captured')
+  })
+
+  it('says frames are unsupported when the capture is absent, keeping the old shape', async () => {
+    // ctxWith() has no ctx.websockets, and the network log has a handshake.
+    const res = await invokeTool(
+      tool('get_websocket_messages'),
+      {},
+      ctxWith([req(1, { url: 'wss://app.example.com/socket', resourceType: 'websocket' })]),
+      audit
+    )
+    expect(res.ok).toBe(true)
+    const out = res.output as {
+      urls: string[]
+      connections: number
+      messages: unknown[]
+      messagesSupported: boolean
+      note?: string
+    }
+    expect(out.messagesSupported).toBe(false)
+    expect(out.messages).toEqual([])
+    expect(out.urls).toEqual(['wss://app.example.com/socket'])
+    expect(out.note).toContain('not wired to MCP tools')
   })
 })

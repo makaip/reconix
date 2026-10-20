@@ -8,7 +8,7 @@ import { createActiveOriginScopeChecker, currentScopeStatus, loadScopeChecker } 
 import { attachInspector, combineNetworkSinks } from './inspector'
 import { createInterceptor } from './intercept'
 import { startNetworkCapture, type NetworkCapture } from './network'
-import { createWebSocketCapture } from './websocket'
+import { createWebSocketCapture, type WebSocketCapture } from './websocket'
 import { createCrawler, createCrawlCore, type CrawlCore } from './crawler'
 import { createReplay } from './replay'
 import { createRepeater, createRepeaterCore, type RepeaterCore } from './repeater'
@@ -191,8 +191,11 @@ function createWindow(): void {
   let interceptor: Interceptor | undefined
   let crawlCore: CrawlCore | undefined
   let repeaterCore: RepeaterCore | undefined
+  // CDP WebSocket frame capture — created below (it needs mainWindow), but the
+  // bridge is built first, so it gets a getter like the other late-bound sinks.
+  let websockets: WebSocketCapture | undefined
   let copilotTargetTabId: number | null = null
-  copilotBridge = createCopilotBridge(mainWindow, () => network, () => interceptor, () => crawlCore, () => repeaterCore)
+  copilotBridge = createCopilotBridge(mainWindow, () => network, () => interceptor, () => crawlCore, () => repeaterCore, () => websockets)
 
   // Model/backend settings (see ~/.opencode/plan/model-swap-settings.md). Only
   // the app's own window may read or change them — the same sender guard used
@@ -235,7 +238,7 @@ function createWindow(): void {
   })
 
   const bodies = createBodyStore(mainWindow)
-  const websockets = createWebSocketCapture(mainWindow)
+  websockets = createWebSocketCapture(mainWindow)
   interceptor = createInterceptor(mainWindow) as typeof interceptor
   const inspector = attachInspector(
     mainWindow,
