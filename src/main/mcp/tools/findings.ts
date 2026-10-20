@@ -3,6 +3,7 @@
 // ONLY history access — a narrow structured query, never a DB handle.
 import { defineTool, type Tool } from '../tool'
 import { str } from '../validate'
+import { ToolInputError } from '../errors'
 
 const record_finding = defineTool<{ schema: unknown; evidenceRef: string }, unknown>({
   name: 'record_finding',
@@ -18,11 +19,17 @@ const record_finding = defineTool<{ schema: unknown; evidenceRef: string }, unkn
   parse: (raw) => {
     const r = raw as { schema?: unknown }
     if (typeof r?.schema !== 'object' || r.schema === null) {
-      throw new Error('"schema" must be an object')
+      throw new ToolInputError('"schema" must be an object')
     }
     return { schema: r.schema, evidenceRef: str(raw, 'evidenceRef') }
   },
-  execute: async (i, ctx) => ({ findingId: await ctx.findings.record(i.schema, i.evidenceRef) })
+  execute: async (i, ctx) => {
+    if (ctx.traces && typeof (ctx.traces as { get?: (id: string) => unknown }).get === 'function') {
+      const trace = (ctx.traces as { get: (id: string) => unknown }).get(i.evidenceRef)
+      if (!trace) throw new ToolInputError(`evidenceRef "${i.evidenceRef}" does not resolve to a captured trace`)
+    }
+    return { findingId: await ctx.findings.record(i.schema, i.evidenceRef) }
+  }
 })
 
 const query_log = defineTool<{ filter: unknown }, unknown>({
@@ -37,8 +44,11 @@ const query_log = defineTool<{ filter: unknown }, unknown>({
   },
   outputSchema: { type: 'array' },
   parse: (raw) => {
-    const r = raw as { filter?: unknown }
-    return { filter: r?.filter ?? {} }
+    const r = (raw ?? {}) as { filter?: unknown }
+    if (r.filter !== undefined && (typeof r.filter !== 'object' || r.filter === null || Array.isArray(r.filter))) {
+      throw new ToolInputError('"filter" must be an object')
+    }
+    return { filter: (r.filter as Record<string, unknown>) ?? {} }
   },
   execute: async (i, ctx) => ctx.history.query(i.filter)
 })
@@ -55,8 +65,10 @@ const export_report = defineTool<{ filter?: unknown }, unknown>({
   },
   execute: async (i, ctx) => {
     const rows = await ctx.history.query(i.filter)
+    const capped = (rows as any[]).slice(0, 200)
     const lines = ['# Findings Report', '', `Total: ${rows.length}`, '']
-    for (const r of rows as any[]) lines.push(`- ${JSON.stringify(r)}`)
+    for (const r of capped) lines.push(`- ${JSON.stringify(r).slice(0, 2000)}`)
+    if (rows.length > capped.length) lines.push(`... ${rows.length - capped.length} more rows omitted`)
     return { markdown: lines.join('\n'), count: rows.length }
   }
 })

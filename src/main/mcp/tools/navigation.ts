@@ -91,8 +91,8 @@ const screenshot = defineTool<{ fullPage?: boolean }, unknown>({
     const r = raw as { fullPage?: unknown }
     return typeof r?.fullPage === 'boolean' ? { fullPage: r.fullPage } : {}
   },
-  execute: async (_i, ctx) => {
-    const png = await ctx.cdp.screenshot()
+  execute: async (i, ctx) => {
+    const png = await ctx.cdp.screenshot(i.fullPage)
     return { traceRef: await ctx.traces.save('screenshot', png) }
   }
 })
@@ -213,7 +213,8 @@ const get_headers = defineTool<Record<string, never>, unknown>({
     if (!match) {
       throw new ToolExecError(
         `no captured response headers for the current document (${url}) — ` +
-          `the page may predate capture, or be a non-http document; navigate to refresh`
+          `the page may predate capture, or be a non-http document; navigate to refresh`,
+        true
       )
     }
     return {

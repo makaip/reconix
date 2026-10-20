@@ -396,7 +396,7 @@ const check_cors = defineTool<{ url: string }, unknown>({
       reflectedOrigin: acao === 'https://evil.example' || acao === '*',
       allowCredentials: acac === 'true',
       acao, acac,
-      vulnerable: (acao === 'https://evil.example' || acao === '*') && acac === 'true'
+      vulnerable: acao === 'https://evil.example' && acac === 'true'
     }
   }
 })

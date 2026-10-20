@@ -14,10 +14,13 @@ function asRecord(raw: unknown): Record<string, unknown> {
   return raw as Record<string, unknown>
 }
 
-export function str(raw: unknown, key: string): string {
+export function str(raw: unknown, key: string, maxLength?: number): string {
   const v = asRecord(raw)[key]
   if (typeof v !== 'string' || v.length === 0) {
     throw new ToolInputError(`"${key}" must be a non-empty string`)
+  }
+  if (maxLength !== undefined && v.length > maxLength) {
+    throw new ToolInputError(`"${key}" must be at most ${maxLength} characters`)
   }
   return v
 }

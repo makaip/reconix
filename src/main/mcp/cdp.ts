@@ -53,7 +53,7 @@ export interface CdpDriver {
   navigate(url: string): Promise<{ status: number; finalUrl: string }>
   pageInfo(): Promise<{ url: string; title: string; readyState: string }>
   evaluate(expression: string): Promise<string> // Runtime.evaluate; result stringified
-  screenshot(): Promise<Buffer>
+  screenshot(fullPage?: boolean): Promise<Buffer>
   cookies(): Promise<CookieRecord[]>
   dispatchInput(events: unknown[]): Promise<void>
   setEmulation(opts: EmulationOptions): Promise<void>
@@ -139,9 +139,18 @@ export class WebContentsCdpDriver implements CdpDriver {
     return JSON.stringify(res.result?.value ?? null)
   }
 
-  async screenshot(): Promise<Buffer> {
-    const image = await this.wc.capturePage()
-    return image.toPNG()
+  async screenshot(fullPage = false): Promise<Buffer> {
+    if (!fullPage) {
+      const image = await this.wc.capturePage()
+      return image.toPNG()
+    }
+    const res = (await this.send('Page.captureScreenshot', {
+      format: 'png',
+      captureBeyondViewport: true,
+      fromSurface: true
+    })) as { data?: string }
+    if (!res?.data) throw new ToolExecError('screenshot: full-page capture returned no data')
+    return Buffer.from(res.data, 'base64')
   }
 
   async cookies(): Promise<CookieRecord[]> {

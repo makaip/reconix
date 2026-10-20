@@ -19,7 +19,7 @@ const mutate_payload = defineTool<
   },
   outputSchema: { type: 'object', properties: { variants: { type: 'array' } } },
   parse: (raw) => ({
-    seed: str(raw, 'seed'),
+    seed: str(raw, 'seed', 4096),
     strategy: enumOf(raw, 'strategy', ['case', 'insert', 'truncate', 'repeat'] as const)
   }),
   execute: async (i) => {
