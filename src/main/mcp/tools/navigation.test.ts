@@ -6,7 +6,7 @@ import type { AuditLogger } from '../audit'
 import type { ToolContext } from '../tool'
 import type { Tool } from '../tool'
 import type { CapturedRequest } from '../../../shared/tabs'
-import type { EmulationOptions } from '../cdp'
+import type { EmulationOptions, HttpRequestSpec } from '../cdp'
 
 // A minimal audit logger that just hands back ids — the pipeline requires one
 // but these tests assert on tool output, not the audit trail.
@@ -17,7 +17,7 @@ const audit: AuditLogger = {
 
 interface FakeCtx {
   ctx: ToolContext
-  calls: { emulation: EmulationOptions[]; input: unknown[][] }
+  calls: { emulation: EmulationOptions[]; input: unknown[][]; fetched: string[] }
 }
 
 function makeCtx(opts: {
@@ -25,8 +25,10 @@ function makeCtx(opts: {
   evaluate?: (expr: string) => string | Promise<string>
   network?: CapturedRequest[]
   allowedHosts?: string[]
+  /** Body server for script[src] fetches. Absent = the request throws (offline). */
+  scripts?: (url: string) => { status?: number; body: string }
 }): FakeCtx {
-  const calls = { emulation: [] as EmulationOptions[], input: [] as unknown[][] }
+  const calls = { emulation: [] as EmulationOptions[], input: [] as unknown[][], fetched: [] as string[] }
   const pageUrl = opts.pageUrl ?? 'https://app.example.com/dash'
   const cdp = {
     navigate: async () => ({ status: 200, finalUrl: pageUrl }),
@@ -39,6 +41,19 @@ function makeCtx(opts: {
     },
     setEmulation: async (o: EmulationOptions) => {
       calls.emulation.push(o)
+    },
+    sendRequest: async (spec: HttpRequestSpec) => {
+      calls.fetched.push(spec.url)
+      const served = opts.scripts?.(spec.url)
+      if (!served) throw new Error(`ENOTFOUND ${spec.url}`)
+      return {
+        status: served.status ?? 200,
+        statusText: 'OK',
+        headers: {},
+        body: served.body,
+        bodyBytes: Buffer.byteLength(served.body),
+        durationMs: 1
+      }
     }
   }
   const allowed = opts.allowedHosts ?? ['app.example.com']
@@ -277,5 +292,155 @@ describe('navigation: get_storage clamps huge values', () => {
     // the whole result still serializes as valid, bounded JSON
     expect(JSON.stringify(out).length).toBeLessThan(8000)
     expect(() => JSON.parse(JSON.stringify(out))).not.toThrow()
+  })
+})
+
+// What the page expression returns for extract_js_routes.
+function pageScripts(routes: string[], srcs: string[] = []): string {
+  return JSON.stringify({ routes, total: routes.length, externalScripts: srcs.length, scriptSrcs: srcs })
+}
+
+interface RoutesOut {
+  routes: string[]
+  total: number
+  returned: number
+  omitted: number
+  truncated: boolean
+  externalScripts: number
+  externalScriptsScanned: number
+  externalScriptsSkipped: Record<string, number>
+  scriptBytesScanned: number
+  secrets: {
+    total: number
+    returned: number
+    omitted: number
+    hits: Array<{ type: string; redacted: string; confidence: string; script: string }>
+  }
+  note: string
+}
+
+describe('navigation: extract_js_routes (inline + external bundles)', () => {
+  it('keeps the inline-only result working when the page has no script src', async () => {
+    const { ctx, calls } = makeCtx({ evaluate: () => pageScripts(['/api/inline', '/login']) })
+    const res = await invokeTool(tool('extract_js_routes'), {}, ctx, audit)
+    expect(res.ok).toBe(true)
+    const out = res.output as RoutesOut
+    expect(out.routes).toEqual(['/api/inline', '/login'])
+    expect(out.externalScripts).toBe(0)
+    expect(out.externalScriptsScanned).toBe(0)
+    expect(calls.fetched).toEqual([])
+    expect(out.note).toContain('no external scripts')
+  })
+
+  it('fetches same-origin bundles and merges their routes into the result', async () => {
+    const bodies: Record<string, string> = {
+      'https://app.example.com/a.js': 'fetch("/api/users")',
+      'https://app.example.com/b.js': 'const u = `/api/orders/1`;'
+    }
+    const srcs = Object.keys(bodies)
+    const { ctx, calls } = makeCtx({
+      evaluate: () => pageScripts(['/api/inline'], srcs),
+      scripts: (url) => ({ body: bodies[url] })
+    })
+    const res = await invokeTool(tool('extract_js_routes'), {}, ctx, audit)
+    expect(res.ok).toBe(true)
+    const out = res.output as RoutesOut
+    expect(calls.fetched).toEqual(srcs)
+    expect(out.externalScripts).toBe(2)
+    expect(out.externalScriptsScanned).toBe(2)
+    expect(out.routes).toEqual(['/api/inline', '/api/users', '/api/orders/1'])
+    expect(out.total).toBe(3)
+    expect(out.omitted).toBe(0)
+    expect(out.truncated).toBe(false)
+  })
+
+  it('never fetches cross-origin or out-of-scope scripts', async () => {
+    const { ctx, calls } = makeCtx({
+      evaluate: () =>
+        pageScripts(
+          ['/api/inline'],
+          ['https://cdn.evil.test/x.js', 'https://other.example.com/y.js']
+        ),
+      scripts: () => ({ body: '"/api/leaked"' })
+    })
+    const res = await invokeTool(tool('extract_js_routes'), {}, ctx, audit)
+    expect(res.ok).toBe(true)
+    const out = res.output as RoutesOut
+    expect(calls.fetched).toEqual([])
+    expect(out.routes).toEqual(['/api/inline'])
+    expect(out.externalScriptsScanned).toBe(0)
+    expect(out.externalScriptsSkipped.crossOrigin).toBe(2)
+
+    // Same origin but outside allowed_hosts: the scope enforcer still wins.
+    const outOfScope = makeCtx({
+      allowedHosts: ['not-this-host.test'],
+      evaluate: () => pageScripts([], ['https://app.example.com/x.js']),
+      scripts: () => ({ body: '"/api/leaked"' })
+    })
+    const res2 = await invokeTool(tool('extract_js_routes'), {}, outOfScope.ctx, audit)
+    const out2 = res2.output as RoutesOut
+    expect(outOfScope.calls.fetched).toEqual([])
+    expect(out2.externalScriptsScanned).toBe(0)
+    expect(out2.externalScriptsSkipped.outOfScope).toBe(1)
+    expect(out2.routes).toEqual([])
+  })
+
+  it('caps how many scripts it scans and reports the overflow', async () => {
+    const srcs = Array.from({ length: 25 }, (_, n) => `https://app.example.com/s${n}.js`)
+    const { ctx, calls } = makeCtx({
+      evaluate: () => pageScripts([], srcs),
+      scripts: () => ({ body: 'var a = 1;' })
+    })
+    const res = await invokeTool(tool('extract_js_routes'), {}, ctx, audit)
+    const out = res.output as RoutesOut
+    expect(out.externalScriptsScanned).toBe(20)
+    expect(out.externalScriptsSkipped.overScriptLimit).toBe(5)
+    expect(calls.fetched).toHaveLength(20)
+  })
+
+  it('stops at the byte budget instead of reading a whole bundle set', async () => {
+    const filler = 'var a=1;'.repeat(112_500) // 900 kB
+    const srcs = [1, 2, 3].map((n) => `https://app.example.com/big${n}.js`)
+    const { ctx } = makeCtx({
+      evaluate: () => pageScripts([], srcs),
+      scripts: (url) => ({ body: `${filler}"/bulk/${url.slice(-4, -3)}"` })
+    })
+    const res = await invokeTool(tool('extract_js_routes'), {}, ctx, audit)
+    const out = res.output as RoutesOut
+    expect(out.scriptBytesScanned).toBe(2_000_000)
+    expect(out.externalScriptsScanned).toBe(3)
+    expect(out.routes).toContain('/bulk/1')
+    expect(out.routes).toContain('/bulk/2')
+    // The third bundle's tail (and its route) fell past the budget.
+    expect(out.routes).not.toContain('/bulk/3')
+    expect(out.note).toContain('byte budget')
+  })
+
+  it('counts failed and non-2xx fetches without failing the tool', async () => {
+    const { ctx } = makeCtx({
+      evaluate: () =>
+        pageScripts([], ['https://app.example.com/gone.js', 'https://app.example.com/offline.js']),
+      scripts: (url) => (url.endsWith('gone.js') ? { status: 404, body: '<html>nope</html>' } : undefined)
+    })
+    const res = await invokeTool(tool('extract_js_routes'), {}, ctx, audit)
+    expect(res.ok).toBe(true)
+    const out = res.output as RoutesOut
+    expect(out.externalScriptsScanned).toBe(0)
+    expect(out.externalScriptsSkipped.failed).toBe(2)
+    expect(out.routes).toEqual([])
+  })
+
+  it('scans bundle bodies for secrets and only returns redacted hits', async () => {
+    const key = 'AKIAIOSFODNN7EXAMPLE'
+    const { ctx } = makeCtx({
+      evaluate: () => pageScripts([], ['https://app.example.com/env.js']),
+      scripts: () => ({ body: `const cfg = { apiKey: "${key}" };` })
+    })
+    const res = await invokeTool(tool('extract_js_routes'), {}, ctx, audit)
+    const out = res.output as RoutesOut
+    expect(out.secrets.total).toBeGreaterThan(0)
+    expect(out.secrets.hits[0].type).toBe('aws-access-key-id')
+    expect(out.secrets.hits[0].script).toBe('https://app.example.com/env.js')
+    expect(JSON.stringify(out.secrets)).not.toContain(key)
   })
 })

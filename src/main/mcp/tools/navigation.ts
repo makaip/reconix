@@ -4,6 +4,9 @@ import { defineTool, type Tool, type ToolContext } from '../tool'
 import { urlString } from '../validate'
 import { ToolExecError } from '../errors'
 import { capArray } from '../limits'
+// Bundle secret scanning reuses the pure-compute detect_secrets pattern table
+// (and its redaction) rather than keeping a second copy of the matchers here.
+import { detectSecretsTool } from '../../../tools/detectSecrets'
 
 // cdp.evaluate returns the page value already JSON-stringified; a tool that
 // wants structure parses it back. Keeps the DOM-walking expressions readable.
@@ -348,43 +351,198 @@ const get_storage = defineTool<Record<string, never>, unknown>({
   }
 })
 
+// Route-shaped string literals ('/api/x', "/login?next=1", `/v2/users`). The
+// page expression below embeds the same pattern; keeping the TS copy here means
+// inline and bundle bodies are scanned by identical rules.
+const ROUTE_RE = /["'`](\/[a-zA-Z0-9_\-./?=&%]+)["'`]/g
+const ROUTE_MIN = 2
+const ROUTE_MAX = 199
+const MAX_ROUTES = 200
+
+// External-bundle budget. Bundles are megabytes of minified JS; pulling them all
+// would blow both the request time and the context window, so we scan a bounded
+// number of same-origin scripts within a bounded byte budget and report exactly
+// what was cut.
+const MAX_EXTERNAL_SCRIPTS = 20
+const MAX_EXTERNAL_SCRIPT_BYTES = 2_000_000
+const MAX_SECRET_HITS = 10
+
+/** Add every route-shaped literal in `text` to `into`; returns how many were new. */
+function collectRoutes(text: string, into: Set<string>): number {
+  ROUTE_RE.lastIndex = 0
+  let added = 0
+  let m: RegExpExecArray | null
+  while ((m = ROUTE_RE.exec(text)) !== null) {
+    const route = m[1]
+    if (route.length <= ROUTE_MIN || route.length > ROUTE_MAX) continue
+    if (into.has(route)) continue
+    into.add(route)
+    added++
+  }
+  return added
+}
+
+const SECRET_RANK: Record<string, number> = { high: 0, medium: 1, low: 2 }
+
 const extract_js_routes = defineTool<Record<string, never>, unknown>({
   name: 'extract_js_routes',
   description:
-    'Extract candidate API routes/endpoints from INLINE <script> blocks on the current page. ' +
-    'External scripts (script[src]) are not fetched — their bodies are not available to the page ' +
-    'DOM — so bundles served from src are skipped; `externalScripts` reports how many were skipped. ' +
-    'For those, use get_network_log / get_request on the bundle responses.',
+    'Extract candidate API routes/endpoints from the current page’s scripts: INLINE <script> blocks ' +
+    'plus SAME-ORIGIN external bundles (script[src]), which are re-fetched through the target session. ' +
+    'External scanning is scope-checked and capped (' +
+    `${MAX_EXTERNAL_SCRIPTS} scripts / ${MAX_EXTERNAL_SCRIPT_BYTES} bytes); cross-origin and ` +
+    'out-of-scope srcs are never fetched. Bundle bodies are also scanned for secret-shaped strings ' +
+    '(redacted). `externalScripts` is how many srcs the page has; `externalScriptsScanned` how many ' +
+    'were actually read.',
   riskTier: 'R',
   inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   outputSchema: { type: 'object' },
   parse: () => ({}),
   execute: async (_i, ctx) => {
-    const data = await evalJson<{ routes: string[]; total: number; externalScripts: number }>(ctx, `(()=>{
-      const src = Array.from(document.querySelectorAll('script')).map(s=>s.textContent||'').join('\\n');
+    const data = await evalJson<{
+      routes: string[]
+      total: number
+      externalScripts: number
+      scriptSrcs: string[]
+    }>(ctx, `(()=>{
+      const scripts = Array.from(document.querySelectorAll('script'));
+      const src = scripts.map(s=>s.textContent||'').join('\\n');
       const re = /["'\`](\\/[a-zA-Z0-9_\\-./?=&%]+)["'\`]/g;
       const set = new Set(); let m;
       while((m=re.exec(src))!==null){ if(m[1].length>2 && m[1].length<200) set.add(m[1]); }
-      return {routes:[...set].slice(0,200), total:set.size, externalScripts:document.querySelectorAll('script[src]').length};
+      // Distinct, absolute srcs — the DOM keeps no body for these, so they have to
+      // be re-fetched. Capped in-page so a pathological page can't produce a
+      // huge CDP payload; the same-origin filter downstream is what matters.
+      const srcs = [...new Set(scripts.filter(s=>s.src).map(s=>s.src))].slice(0,100);
+      return {routes:[...set].slice(0,200), total:set.size, externalScripts:srcs.length, scriptSrcs:srcs};
     })()`)
-    // TODO: optionally fetch same-origin script src and scan their bodies too
-    // (would need a scope-checked read through ctx.cdp + its own budget cap).
-    const truncated = data.total > data.routes.length
+
+    // Routes are de-duplicated across inline + external bodies; `total` stays the
+    // true union size so omitted/truncated accounting is honest.
+    const seen = new Set(data.routes)
+    let total = data.total
+
+    // Only the page's own origin is re-fetched: a CDN/third-party bundle would
+    // be both out of the engagement's origin and a wasted request. Scope is
+    // re-checked per URL as well (it is the authority, not the origin compare).
+    const { url: pageUrl } = await ctx.cdp.pageInfo()
+    let pageOrigin: string | null = null
+    try {
+      pageOrigin = new URL(pageUrl).origin
+    } catch {
+      pageOrigin = null
+    }
+
+    const skipped = { crossOrigin: 0, outOfScope: 0, overScriptLimit: 0, overByteBudget: 0, failed: 0 }
+    let scriptsScanned = 0
+    let bytesScanned = 0
+    let budgetExhausted = false
+    const secretHits: Array<{ type: string; redacted: string; confidence: string; script: string }> = []
+    const secretKeys = new Set<string>()
+
+    for (const src of data.scriptSrcs) {
+      if (scriptsScanned >= MAX_EXTERNAL_SCRIPTS) {
+        skipped.overScriptLimit++
+        continue
+      }
+      let origin: string | null = null
+      try {
+        origin = new URL(src).origin
+      } catch {
+        origin = null
+      }
+      if (!origin || !pageOrigin || origin !== pageOrigin) {
+        skipped.crossOrigin++
+        continue
+      }
+      if (!ctx.scope.isInScope(src)) {
+        skipped.outOfScope++
+        continue
+      }
+      const remaining = MAX_EXTERNAL_SCRIPT_BYTES - bytesScanned
+      if (remaining <= 0) {
+        budgetExhausted = true
+        skipped.overByteBudget++
+        continue
+      }
+
+      let body: string
+      try {
+        const res = await ctx.cdp.sendRequest({ url: src, method: 'GET' })
+        // A 3xx/4xx/5xx body is an error page, not a bundle — scanning it would
+        // only invent routes from HTML.
+        if (res.status < 200 || res.status >= 300) {
+          skipped.failed++
+          continue
+        }
+        body = res.body
+      } catch {
+        // One unreachable bundle must not fail the whole extract; it is counted.
+        skipped.failed++
+        continue
+      }
+
+      scriptsScanned++
+      const slice = body.length > remaining ? body.slice(0, remaining) : body
+      if (slice.length < body.length) budgetExhausted = true
+      bytesScanned += slice.length
+
+      total += collectRoutes(slice, seen)
+
+      // Secret shapes reuse the detect_secrets capability so the pattern table
+      // (and its redaction) lives in exactly one place. Hits are keyed by
+      // type+redacted value: the same shipped key in 5 bundles is one finding.
+      for (const hit of detectSecretsTool.handler({ body: slice }).hits) {
+        const key = `${hit.type}|${hit.redacted}`
+        if (secretKeys.has(key)) continue
+        secretKeys.add(key)
+        secretHits.push({ type: hit.type, redacted: hit.redacted, confidence: hit.confidence, script: src })
+      }
+    }
+
+    // Highest-confidence first so a capped list still shows the real secrets.
+    secretHits.sort((a, b) => (SECRET_RANK[a.confidence] ?? 3) - (SECRET_RANK[b.confidence] ?? 3))
+    const secretTotal = secretHits.length
+    const secrets = secretHits.slice(0, MAX_SECRET_HITS)
+
+    const routes = [...seen].slice(0, MAX_ROUTES)
+    const truncated = total > routes.length
+
+    const parts: string[] = []
+    if (truncated) parts.push(`routes capped at ${routes.length} of ${total}`)
+    parts.push('inline script bodies were scanned')
+    if (data.externalScripts === 0) {
+      parts.push('no external scripts on this page')
+    } else {
+      parts.push(`${scriptsScanned}/${data.externalScripts} external script(s) scanned`)
+      if (skipped.crossOrigin) parts.push(`${skipped.crossOrigin} cross-origin skipped`)
+      if (skipped.outOfScope) parts.push(`${skipped.outOfScope} out-of-scope skipped`)
+      if (skipped.overScriptLimit) parts.push(`${skipped.overScriptLimit} over the ${MAX_EXTERNAL_SCRIPTS}-script cap`)
+      if (skipped.overByteBudget || budgetExhausted) {
+        parts.push(`byte budget ${MAX_EXTERNAL_SCRIPT_BYTES} reached`)
+      }
+      if (skipped.failed) parts.push(`${skipped.failed} fetch(es) failed`)
+    }
+    if (secretTotal > secrets.length) parts.push(`${secretTotal - secrets.length} more secret hit(s) omitted`)
+    parts.push('use get_network_log / get_request on a bundle for anything not fetched here')
+
     return {
-      routes: data.routes,
-      total: data.total,
-      returned: data.routes.length,
-      omitted: data.total - data.routes.length,
+      routes,
+      total,
+      returned: routes.length,
+      omitted: Math.max(0, total - routes.length),
       truncated,
       externalScripts: data.externalScripts,
-      externalScriptsScanned: false,
-      note: truncated
-        ? `${data.externalScripts > 0 ? `${data.externalScripts} external script(s) skipped — ` : ''}` +
-          `routes capped at ${data.routes.length} of ${data.total}; ` +
-          'only inline script bodies were scanned. Use get_network_log / get_request on bundle responses for more.'
-        : data.externalScripts > 0
-          ? `${data.externalScripts} external script(s) skipped — only inline script bodies were scanned.`
-          : 'No external scripts on this page; only inline script bodies were scanned.'
+      externalScriptsScanned: scriptsScanned,
+      externalScriptsSkipped: skipped,
+      scriptBytesScanned: bytesScanned,
+      secrets: {
+        total: secretTotal,
+        returned: secrets.length,
+        omitted: Math.max(0, secretTotal - secrets.length),
+        hits: secrets
+      },
+      note: parts.join('; ')
     }
   }
 })
