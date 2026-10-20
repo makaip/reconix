@@ -249,3 +249,33 @@ describe('no tool in the navigation/interaction catalog is a throwing stub', () 
     expect(names).toContain('set_emulation')
   })
 })
+
+describe('navigation: get_storage clamps huge values', () => {
+  it('clamps each value and names the truncated keys', async () => {
+    const big = 'a'.repeat(5000)
+    const { ctx } = makeCtx({
+      evaluate: () =>
+        JSON.stringify({
+          localStorage: { token: big, small: 'ok' },
+          sessionStorage: { state: big }
+        })
+    })
+    const res = await invokeTool(tool('get_storage'), {}, ctx, audit)
+    expect(res.ok).toBe(true)
+    const out = res.output as {
+      localStorage: Record<string, string>
+      sessionStorage: Record<string, string>
+      truncated: { localStorage: string[]; sessionStorage: string[] }
+      maxValueChars: number
+    }
+    expect(out.localStorage.small).toBe('ok')
+    expect(out.localStorage.token.length).toBeLessThan(5000)
+    expect(out.localStorage.token).toContain('chars]')
+    expect(out.truncated.localStorage).toEqual(['token'])
+    expect(out.truncated.sessionStorage).toEqual(['state'])
+    expect(out.maxValueChars).toBe(2000)
+    // the whole result still serializes as valid, bounded JSON
+    expect(JSON.stringify(out).length).toBeLessThan(8000)
+    expect(() => JSON.parse(JSON.stringify(out))).not.toThrow()
+  })
+})

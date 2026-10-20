@@ -27,6 +27,10 @@ const crawl_start = defineTool<{ url: string; maxDepth?: number; maxPages?: numb
       maxPages: typeof r.maxPages === 'number' ? r.maxPages : undefined
     }
   },
+  // The crawl seeds from `url` and then follows links, so the pipeline's scope
+  // check must gate the seed here — otherwise crawl_start would be the one send
+  // path with no boundary (every followed link is re-checked by the spider).
+  target: (i) => i.url,
   execute: async (i, ctx) => {
     if (!ctx.crawler) throw new ToolExecError('crawler not available')
     const state = await ctx.crawler.start(i)

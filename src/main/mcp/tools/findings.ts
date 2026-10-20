@@ -60,8 +60,11 @@ const export_report = defineTool<{ filter?: unknown }, unknown>({
   inputSchema: { type: 'object', properties: { filter: { type: 'object' } }, additionalProperties: false },
   outputSchema: { type: 'object' },
   parse: (raw) => {
-    const r = raw as { filter?: unknown }
-    return { filter: r?.filter ?? {} }
+    const r = (raw ?? {}) as { filter?: unknown }
+    if (r.filter !== undefined && (typeof r.filter !== 'object' || r.filter === null || Array.isArray(r.filter))) {
+      throw new ToolInputError('"filter" must be an object')
+    }
+    return { filter: (r.filter as Record<string, unknown>) ?? {} }
   },
   execute: async (i, ctx) => {
     const rows = await ctx.history.query(i.filter)

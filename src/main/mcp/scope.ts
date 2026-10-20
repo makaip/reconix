@@ -5,6 +5,10 @@
 import type { ScopeConfig } from '../../shared/contracts'
 import { ScopeError } from './errors'
 
+// Host-only matching: a pattern never carries a port, and URL.hostname drops
+// any `:port`, so `https://app.example.com:8443` is in scope whenever
+// `app.example.com` is. Known limitation — a port-restricted scope needs a
+// separate check (the same granularity D's network floor can enforce).
 function hostMatches(host: string, pattern: string): boolean {
   if (pattern.startsWith('*.')) {
     const suffix = pattern.slice(1) // ".example.com"

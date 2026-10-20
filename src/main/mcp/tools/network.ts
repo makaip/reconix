@@ -4,7 +4,7 @@
 // rate-limited proxy. A custom tool must never egress on its own; it routes here.
 import { defineTool, type Tool } from '../tool'
 import { optStr, str, urlString } from '../validate'
-import { ToolExecError } from '../errors'
+import { ToolExecError, ToolInputError } from '../errors'
 import { MAX_LIST_ITEMS, clampString } from '../limits'
 import type { HttpRequestSpec } from '../cdp'
 import type { CapturedRequest } from '../../../shared/tabs'
@@ -36,31 +36,31 @@ const HEADER_NAME_RE = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/
 
 function parseJwtOverride(value: unknown): JwtOverride {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    throw new ToolExecError('"overrides.jwt" must be an object: { token, headerName?, scheme? }')
+    throw new ToolInputError('"overrides.jwt" must be an object: { token, headerName?, scheme? }')
   }
   const j = value as Record<string, unknown>
 
   if (typeof j.token !== 'string' || j.token.trim().length === 0) {
-    throw new ToolExecError('"overrides.jwt.token" must be a non-empty string')
+    throw new ToolInputError('"overrides.jwt.token" must be a non-empty string')
   }
   // The token is pasted verbatim into a header value; CR/LF would split it into
   // an extra header (request smuggling), so reject rather than sanitize.
   if (/[\r\n]/.test(j.token)) {
-    throw new ToolExecError('"overrides.jwt.token" must not contain CR/LF')
+    throw new ToolInputError('"overrides.jwt.token" must not contain CR/LF')
   }
 
   const headerName = j.headerName === undefined ? 'Authorization' : j.headerName
   if (typeof headerName !== 'string' || !HEADER_NAME_RE.test(headerName)) {
-    throw new ToolExecError('"overrides.jwt.headerName" must be a valid HTTP header name')
+    throw new ToolInputError('"overrides.jwt.headerName" must be a valid HTTP header name')
   }
 
   let scheme: string | null
   if (j.scheme === undefined) scheme = 'Bearer'
   else if (j.scheme === null) scheme = null
   else if (typeof j.scheme !== 'string') {
-    throw new ToolExecError('"overrides.jwt.scheme" must be a string, or null/empty for a bare token')
+    throw new ToolInputError('"overrides.jwt.scheme" must be a string, or null/empty for a bare token')
   } else {
-    if (/[\r\n]/.test(j.scheme)) throw new ToolExecError('"overrides.jwt.scheme" must not contain CR/LF')
+    if (/[\r\n]/.test(j.scheme)) throw new ToolInputError('"overrides.jwt.scheme" must not contain CR/LF')
     const trimmed = j.scheme.trim()
     scheme = trimmed.length === 0 ? null : trimmed
   }
@@ -72,11 +72,11 @@ function parseHeaderMap(obj: Record<string, unknown>, key: string): Record<strin
   const h = obj[key]
   if (h === undefined) return undefined
   if (typeof h !== 'object' || h === null || Array.isArray(h)) {
-    throw new ToolExecError(`"${key}" must be an object of string header values`)
+    throw new ToolInputError(`"${key}" must be an object of string header values`)
   }
   const out: Record<string, string> = {}
   for (const [name, value] of Object.entries(h as Record<string, unknown>)) {
-    if (typeof value !== 'string') throw new ToolExecError(`header "${name}" must be a string`)
+    if (typeof value !== 'string') throw new ToolInputError(`header "${name}" must be a string`)
     out[name] = value
   }
   return out
@@ -84,7 +84,7 @@ function parseHeaderMap(obj: Record<string, unknown>, key: string): Record<strin
 
 function parseRequestSpec(raw: unknown, key: string): RequestSpec {
   const v = (raw as Record<string, unknown>)?.[key]
-  if (typeof v !== 'object' || v === null) throw new ToolExecError(`"${key}" must be an object`)
+  if (typeof v !== 'object' || v === null) throw new ToolInputError(`"${key}" must be an object`)
   const spec = v as Record<string, unknown>
   return {
     url: urlString(spec, 'url'), // http(s) only, before scope check
@@ -98,7 +98,7 @@ function parseOverrides(raw: unknown): RequestOverrides | undefined {
   const o = (raw as Record<string, unknown>)?.overrides
   if (o === undefined) return undefined
   if (typeof o !== 'object' || o === null || Array.isArray(o)) {
-    throw new ToolExecError('"overrides" must be an object')
+    throw new ToolInputError('"overrides" must be an object')
   }
   const ov = o as Record<string, unknown>
   const out: RequestOverrides = {}
@@ -106,12 +106,12 @@ function parseOverrides(raw: unknown): RequestOverrides | undefined {
   if (ov.method !== undefined) out.method = optStr(ov, 'method')
   if (ov.headers !== undefined) {
     if (typeof ov.headers !== 'object' || ov.headers === null || Array.isArray(ov.headers)) {
-      throw new ToolExecError('"overrides.headers" must be an object')
+      throw new ToolInputError('"overrides.headers" must be an object')
     }
     const hdrs: Record<string, string | null> = {}
     for (const [k, val] of Object.entries(ov.headers as Record<string, unknown>)) {
       if (val !== null && typeof val !== 'string') {
-        throw new ToolExecError(`override header "${k}" must be a string, or null to remove it`)
+        throw new ToolInputError(`override header "${k}" must be a string, or null to remove it`)
       }
       hdrs[k] = val as string | null
     }
@@ -119,7 +119,7 @@ function parseOverrides(raw: unknown): RequestOverrides | undefined {
   }
   if ('body' in ov) {
     if (ov.body !== null && typeof ov.body !== 'string') {
-      throw new ToolExecError('"overrides.body" must be a string, or null to drop the body')
+      throw new ToolInputError('"overrides.body" must be a string, or null to drop the body')
     }
     out.body = ov.body as string | null
   }
@@ -292,7 +292,7 @@ async function mapWithConcurrency<T, R>(
 function parseVariants(raw: unknown): RequestOverrides[] {
   const v = (raw as Record<string, unknown>)?.variants
   if (!Array.isArray(v) || v.length === 0) {
-    throw new ToolExecError('"variants" must be a non-empty array of override objects')
+    throw new ToolInputError('"variants" must be a non-empty array of override objects')
   }
   // The size cap is enforced in execute against the engagement policy
   // (Policy.maxReplayBatch) — parse has no access to the context.
@@ -301,7 +301,7 @@ function parseVariants(raw: unknown): RequestOverrides[] {
       // Reuse the single-request override parser by wrapping each item.
       return parseOverrides({ overrides: item }) ?? {}
     } catch (e) {
-      throw new ToolExecError(`variants[${idx}]: ${(e as Error).message}`)
+      throw new ToolInputError(`variants[${idx}]: ${(e as Error).message}`)
     }
   })
 }
@@ -363,7 +363,7 @@ const replay_batch = defineTool<{ base: RequestSpec; variants: RequestOverrides[
   execute: async (i, ctx) => {
     const cap = ctx.policy?.maxReplayBatch ?? DEFAULT_MAX_REPLAY_BATCH
     if (i.variants.length > cap) {
-      throw new ToolExecError(
+      throw new ToolInputError(
         `batch has ${i.variants.length} variants; max ${cap} per call (engagement policy). ` +
           'Split the sweep, or raise Policy.maxReplayBatch.'
       )
@@ -558,7 +558,10 @@ export const networkTools: Tool[] = [
     outputSchema: { type: 'object' },
     parse: (raw) => {
       const r = raw as { raw?: unknown }
-      return { raw: r?.raw }
+      if (typeof r?.raw !== 'object' || r.raw === null || Array.isArray(r.raw)) {
+        throw new ToolInputError('"raw" must be an object (the intercept rule)')
+      }
+      return { raw: r.raw }
     },
     execute: async (i, ctx) => {
       if (!ctx.interceptor) throw new ToolExecError('interceptor not available')

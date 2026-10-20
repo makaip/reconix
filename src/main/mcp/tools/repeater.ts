@@ -19,7 +19,8 @@ const repeater_list = defineTool<Record<string, never>, unknown>({
 const repeater_save = defineTool<{ raw: unknown }, unknown>({
   name: 'repeater_save',
   description: 'Save or update a repeater request ({ name, tags, request }).',
-  riskTier: 'R',
+  // A write (state mutation) but no egress — tier P, not R.
+  riskTier: 'P',
   inputSchema: { type: 'object', required: ['raw'], properties: { raw: { type: 'object' } }, additionalProperties: false },
   outputSchema: { type: 'object' },
   parse: (raw) => {

@@ -17,13 +17,15 @@ async function evalJson<T>(ctx: ToolContext, expression: string): Promise<T> {
 }
 
 // Walks document.forms into a plain, serializable shape. Password values are
-// never read back. Shared by get_dom_extract and list_forms.
+// never read back. Shared by get_dom_extract and list_forms. `method` is read
+// off the IDL property (not the attribute) so a form with no method attribute —
+// or an invalid one — reports 'get', exactly as submit_form will send it.
 const FORMS_EXPR = `[...document.forms].map((f,i)=>({
   index:i,
   name:f.getAttribute('name')||null,
   id:f.id||null,
   action:f.action||null,
-  method:(f.getAttribute('method')||'get').toLowerCase(),
+  method:(f.method||'get').toLowerCase(),
   enctype:f.enctype||null,
   fields:[...f.elements].filter(e=>e.name||e.id).map(e=>({
     name:e.getAttribute('name')||null,
@@ -225,6 +227,11 @@ const get_headers = defineTool<Record<string, never>, unknown>({
   }
 })
 
+// Per-value ceiling for storage dumps. A single localStorage entry holding a
+// big JWT/state blob is common; without a per-value clamp the whole result blows
+// the context budget and the server-level clamp cuts the JSON mid-object.
+const STORAGE_VALUE_MAX = 2000
+
 const get_storage = defineTool<Record<string, never>, unknown>({
   name: 'get_storage',
   description: 'Dump localStorage, sessionStorage, and (best-effort) IndexedDB keys from the current page.',
@@ -233,31 +240,72 @@ const get_storage = defineTool<Record<string, never>, unknown>({
   outputSchema: { type: 'object' },
   parse: () => ({}),
   execute: async (_i, ctx) => {
-    const data = await evalJson<Record<string, unknown>>(ctx, `(()=>{
+    const data = await evalJson<{
+      localStorage?: Record<string, string | null>
+      sessionStorage?: Record<string, string | null>
+    }>(ctx, `(()=>{
       const ls={}; for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i); ls[k]=localStorage.getItem(k);}
       const ss={}; for(let i=0;i<sessionStorage.length;i++){const k=sessionStorage.key(i); ss[k]=sessionStorage.getItem(k);}
       return {localStorage:ls, sessionStorage:ss};
     })()`)
-    return data
+    const clamp = (
+      store: Record<string, string | null> | undefined
+    ): { values: Record<string, string | null>; truncated: string[] } => {
+      const values: Record<string, string | null> = {}
+      const truncated: string[] = []
+      for (const [k, v] of Object.entries(store ?? {})) {
+        if (typeof v === 'string' && v.length > STORAGE_VALUE_MAX) {
+          values[k] = `${v.slice(0, STORAGE_VALUE_MAX)}…[+${v.length - STORAGE_VALUE_MAX} chars]`
+          truncated.push(k)
+        } else {
+          values[k] = v
+        }
+      }
+      return { values, truncated }
+    }
+    const ls = clamp(data.localStorage)
+    const ss = clamp(data.sessionStorage)
+    return {
+      localStorage: ls.values,
+      sessionStorage: ss.values,
+      // Keys whose value was cut, so the agent re-reads deliberately rather than
+      // reasoning on a partial token as if it were complete.
+      truncated: { localStorage: ls.truncated, sessionStorage: ss.truncated },
+      maxValueChars: STORAGE_VALUE_MAX
+    }
   }
 })
 
 const extract_js_routes = defineTool<Record<string, never>, unknown>({
   name: 'extract_js_routes',
-  description: 'Extract candidate API routes/endpoints from inline and external script tags on the current page.',
+  description:
+    'Extract candidate API routes/endpoints from INLINE <script> blocks on the current page. ' +
+    'External scripts (script[src]) are not fetched — their bodies are not available to the page ' +
+    'DOM — so bundles served from src are skipped; `externalScripts` reports how many were skipped. ' +
+    'For those, use get_network_log / get_request on the bundle responses.',
   riskTier: 'R',
   inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   outputSchema: { type: 'object' },
   parse: () => ({}),
   execute: async (_i, ctx) => {
-    const data = await evalJson<{ routes: string[] }>(ctx, `(()=>{
+    const data = await evalJson<{ routes: string[]; externalScripts: number }>(ctx, `(()=>{
       const src = Array.from(document.querySelectorAll('script')).map(s=>s.textContent||'').join('\\n');
       const re = /["'\`](\\/[a-zA-Z0-9_\\-./?=&%]+)["'\`]/g;
       const set = new Set(); let m;
       while((m=re.exec(src))!==null){ if(m[1].length>2 && m[1].length<200) set.add(m[1]); }
-      return {routes:[...set].slice(0,200)};
+      return {routes:[...set].slice(0,200), externalScripts:document.querySelectorAll('script[src]').length};
     })()`)
-    return data
+    // TODO: optionally fetch same-origin script src and scan their bodies too
+    // (would need a scope-checked read through ctx.cdp + its own budget cap).
+    return {
+      routes: data.routes,
+      externalScripts: data.externalScripts,
+      externalScriptsScanned: false,
+      note:
+        data.externalScripts > 0
+          ? `${data.externalScripts} external script(s) skipped — only inline script bodies were scanned.`
+          : 'No external scripts on this page; only inline script bodies were scanned.'
+    }
   }
 })
 
