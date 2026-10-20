@@ -1,4 +1,10 @@
-import { useCallback, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent
+} from 'react'
 
 type Axis = 'x' | 'y'
 
@@ -34,7 +40,12 @@ function readSize(key: string | undefined, fallback: number, min: number, max: n
   }
 }
 
-/** Drag-to-resize for a single flex panel. Persisted only when `storageKey` is given. */
+/** Drag-to-resize for a single flex panel. Persisted only when `storageKey` is given.
+ *
+ *  Pointer moves are coalesced into one `setSize` per animation frame: the raw pointer position
+ *  is recorded on every move, but React only re-renders once per paint, so dragging does not
+ *  force a layout per pixel. The final position is always flushed on pointer-up (and the pending
+ *  frame cancelled) so persistence and the rendered size agree. */
 export function useResizable({
   axis,
   initial,
@@ -48,6 +59,16 @@ export function useResizable({
   const [dragging, setDragging] = useState(false)
   const startSize = useRef(initial)
   const startPos = useRef(0)
+  /** Cancels the in-flight resize frame of the current drag, if any. */
+  const cancelPending = useRef<(() => void) | null>(null)
+
+  // A drag can end without a pointer-up (unmount, panel collapse): drop the queued frame.
+  useEffect(() => {
+    return () => {
+      cancelPending.current?.()
+      cancelPending.current = null
+    }
+  }, [])
 
   const onHandlePointerDown = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -55,7 +76,33 @@ export function useResizable({
       startSize.current = size
       startPos.current = axis === 'x' ? event.clientX : event.clientY
       setDragging(true)
-      let latest = size
+      let latest = size // last size actually handed to React
+      let pending = size // most recent size requested by the pointer
+      let frameId: number | null = null
+
+      const cancelScheduled = (): void => {
+        if (frameId !== null) {
+          cancelAnimationFrame(frameId)
+          frameId = null
+        }
+      }
+      /** Commit `pending` to React and remember it as the rendered size. */
+      const flush = (): void => {
+        if (pending !== latest) {
+          latest = pending
+          setSize(latest)
+        }
+      }
+      const schedule = (next: number): void => {
+        pending = next
+        if (frameId === null) {
+          frameId = requestAnimationFrame(() => {
+            frameId = null
+            flush()
+          })
+        }
+      }
+      cancelPending.current = cancelScheduled
 
       const onMove = (moveEvent: PointerEvent): void => {
         const pos = axis === 'x' ? moveEvent.clientX : moveEvent.clientY
@@ -63,16 +110,19 @@ export function useResizable({
         const raw = startSize.current + delta
         if (onCollapse && raw < min / 2) {
           // keep the pre-drag size so reopening restores it
-          latest = startSize.current
-          setSize(latest)
+          cancelScheduled()
+          pending = startSize.current
           onUp()
           onCollapse()
           return
         }
-        latest = Math.min(max, Math.max(min, raw))
-        setSize(latest)
+        schedule(Math.min(max, Math.max(min, raw)))
       }
       function onUp(): void {
+        // Land the size at the pointer's final position rather than the last painted frame.
+        cancelScheduled()
+        flush()
+        cancelPending.current = null
         setDragging(false)
         if (storageKey) {
           try {
