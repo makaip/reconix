@@ -5,7 +5,7 @@
 // run's rows are readable through the usual store queries.
 import { ipcMain, type BrowserWindow } from 'electron'
 import type { Database } from 'node-sqlite3-wasm'
-import { loadScopeConfig } from './engagement'
+import { currentScopeStatus, loadScopeConfig, scopeStatusFromUnknown, setScopeStatus } from './engagement'
 import type { EngagementRow } from '../shared/engagements'
 
 export interface EngagementStoreOptions {
@@ -75,6 +75,10 @@ export function createEngagementStore(
       ? (scope as Record<string, unknown>).engagementId
       : `eng_${Date.now()}`) as string
 
+    // An explicit run scope becomes the live scope view; a run that just reuses
+    // scope.json leaves the view on the file so later edits still show through.
+    setScopeStatus(input.scope === undefined ? null : scopeStatusFromUnknown(scope))
+
     const startedAt = Date.now()
     db.run(
       'INSERT OR REPLACE INTO engagements (id, goal, scope_json, policy_json, started_at, stopped_at, status) VALUES (?, ?, ?, ?, ?, ?, ?)',
@@ -91,6 +95,8 @@ export function createEngagementStore(
       Date.now(),
       target
     ])
+    // No active run -> back to the loaded scope.json view.
+    setScopeStatus(null)
     broadcast()
   }
 
@@ -109,6 +115,9 @@ export function createEngagementStore(
 
   const broadcast = (): void => {
     if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
+      // Scope first: the badge should already be correct when the engagement
+      // row arrives. `scope:changed` carries the same projection scope:get does.
+      win.webContents.send('scope:changed', currentScopeStatus())
       win.webContents.send('engagement:changed', current())
     }
   }

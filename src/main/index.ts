@@ -4,7 +4,7 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { createBodyStore } from './bodies'
 import { applyModelSettings, createCopilotBridge, type CopilotBridge } from './copilot'
 import { loadModelSettings, listModels, save as saveModelSettings, testConnection } from './modelSettings'
-import { createActiveOriginScopeChecker, loadScopeChecker, loadScopeConfig, toScopeStatus } from './engagement'
+import { createActiveOriginScopeChecker, currentScopeStatus, loadScopeChecker } from './engagement'
 import { attachInspector, combineNetworkSinks } from './inspector'
 import { createInterceptor } from './intercept'
 import { startNetworkCapture, type NetworkCapture } from './network'
@@ -278,10 +278,11 @@ function createWindow(): void {
   const configuredScope = process.env.SCOPE_CONFIG_PATH ? loadScopeChecker() : null
   // Read-only scope view for the URL-bar badge + status-bar summary, derived from
   // the SAME scope.json the replays enforce so the UI can't disagree with it.
-  const engagementScope = loadScopeConfig()
+  // Resolved per request: the engagement store's live view wins while a run with
+  // its own scope is active, so start/stop is visible without a remount.
   ipcMain.removeHandler('scope:get')
   ipcMain.handle('scope:get', (event) =>
-    event.sender === mainWindow.webContents ? toScopeStatus(engagementScope) : null
+    event.sender === mainWindow.webContents ? currentScopeStatus() : null
   )
   // Proxy + engagement are the remaining status-bar facts. Neither is faked: the
   // proxy address comes from config (or is null), and the engagement id is the

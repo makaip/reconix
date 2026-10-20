@@ -67,6 +67,31 @@ export function toScopeStatus(config: ScopeConfig | null): ScopeStatus {
 }
 
 /**
+ * Live scope view for the renderer (URL-bar badge + status-bar summary).
+ * `null` means "no active run override" — fall back to the loaded scope.json.
+ * The engagement store swaps this in on start and clears it on stop, so the
+ * badge follows the authorized scope at runtime instead of only at boot.
+ */
+let liveScope: ScopeStatus | null = null
+
+/** The scope the UI should show right now: the active run's, else scope.json. */
+export function currentScopeStatus(): ScopeStatus {
+  return liveScope ?? toScopeStatus(loadScopeConfig())
+}
+
+/** Replace the live scope view. `null` reverts to the loaded scope.json. */
+export function setScopeStatus(status: ScopeStatus | null): void {
+  liveScope = status
+}
+
+/** Project an engagement row's stored `scope_json` into the renderer view.
+ *  Unknown or malformed shapes project to "none" rather than throwing. */
+export function scopeStatusFromUnknown(value: unknown): ScopeStatus {
+  if (typeof value !== 'object' || value === null) return toScopeStatus(null)
+  return isScopeConfig(value) ? toScopeStatus(value) : toScopeStatus(null)
+}
+
+/**
  * Loads the engagement ScopeConfig and builds the per-tool ScopeChecker host-side
  * replay gates every send on. Reads the SAME `scope.json` shape the egress proxy
  * consumes (SCOPE_CONFIG_PATH), so the host path and the container path authorize

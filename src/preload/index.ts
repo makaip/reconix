@@ -230,8 +230,11 @@ const api = {
   },
   scope: {
     // Read-only view of the engagement's authorized scope, for the URL-bar
-    // badge and status-bar summary. Static per run (scope.json is read at boot).
-    get: (): Promise<ScopeStatus> => ipcRenderer.invoke('scope:get')
+    // badge and status-bar summary. Seeded from scope.json at boot and pushed
+    // on every change (engagement start/stop) via onChanged.
+    get: (): Promise<ScopeStatus> => ipcRenderer.invoke('scope:get'),
+    onChanged: (callback: (scope: ScopeStatus) => void): (() => void) =>
+      subscribe('scope:changed', callback)
   },
   proxy: {
     // Configured egress proxy address (RECONIX_PROXY_ADDR), or null. The app
