@@ -209,7 +209,16 @@ function Sidebar({ style, onDragStart, onDragEnd, onOpenSource }: SidebarProps):
         {findings.length === 0 ? (
           <p className="dt-empty">No findings yet.</p>
         ) : (
-          findings.map((finding) => <FindingCard key={finding.id} finding={finding} />)
+          <>
+            {findings.map((finding) => <FindingCard key={finding.id} finding={finding} />)}
+            <button
+              type="button"
+              className="sidebar__engagement-btn"
+              onClick={() => void window.reconix.findings.clear()}
+            >
+              Clear findings
+            </button>
+          </>
         )}
       </div>
 

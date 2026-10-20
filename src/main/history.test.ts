@@ -8,6 +8,7 @@ const fakeFindings = (rows: StoredFinding[]): FindingsStore => ({
   sink: { record: async () => 'finding_x' },
   list: () => rows,
   summary: () => [],
+  clear: () => undefined,
   close: () => undefined
 })
 

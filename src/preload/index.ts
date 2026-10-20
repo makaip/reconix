@@ -224,8 +224,10 @@ const api = {
   },
   findings: {
     // Agent-recorded findings (record_finding), newest last. `list` is the
-    // mount-time readback; the push fires whenever one is recorded.
+    // mount-time readback; the push fires whenever one is recorded. `clear`
+    // deletes the active engagement's findings (or all when none is active).
     list: (): Promise<Finding[]> => ipcRenderer.invoke('findings:list'),
+    clear: (): Promise<boolean> => ipcRenderer.invoke('findings:clear'),
     onChanged: (callback: (findings: Finding[]) => void): (() => void) =>
       subscribe('findings:changed', callback)
   },

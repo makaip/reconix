@@ -24,6 +24,8 @@ export interface FindingsStore {
   list(): StoredFinding[]
   /** Renderer-facing summary rows. */
   summary(): Finding[]
+  /** Delete findings for the active engagement (or all when none is active). Broadcasts the new list. */
+  clear(): void
   /** Detach the IPC handler + window listener. Does NOT close the shared DB. */
   close(): void
 }
@@ -141,11 +143,28 @@ export function createFindingsStore(
     event.sender === win.webContents ? readAll().map(findingSummary) : []
   )
 
+  ipcMain.removeHandler('findings:clear')
+  ipcMain.handle('findings:clear', (event) => {
+    if (event.sender !== win.webContents) return false
+    const eid = resolveEngagementId()
+    if (eid) db.run('DELETE FROM findings WHERE engagement_id = ?', [eid])
+    else db.run('DELETE FROM findings')
+    broadcast()
+    return true
+  })
+
   // Called from stop() and again when the window closes; both paths land here.
   const close = (): void => {
     ipcMain.removeHandler('findings:list')
+    ipcMain.removeHandler('findings:clear')
   }
   win.on('closed', close)
 
-  return { sink, list: readAll, summary: () => readAll().map(findingSummary), close }
+  const clear = (): void => {
+    const eid = resolveEngagementId()
+    if (eid) db.run('DELETE FROM findings WHERE engagement_id = ?', [eid])
+    else db.run('DELETE FROM findings')
+    broadcast()
+  }
+  return { sink, list: readAll, summary: () => readAll().map(findingSummary), clear, close }
 }
