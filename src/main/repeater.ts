@@ -1,4 +1,5 @@
 import { BrowserWindow, ipcMain } from 'electron'
+import { Database } from 'node-sqlite3-wasm'
 import type { ResponseLike } from '../shared/tools'
 import type { ReplayResult, SaveRequestInput, SavedRequest } from '../shared/tabs'
 import { diffResponsesTool } from '../tools/diffResponses'
@@ -12,6 +13,10 @@ const MAX_TAGS = 20
 const MAX_TAG_LEN = 60
 
 export type Repeater = { close: () => void }
+
+export interface RepeaterCoreOptions {
+  db?: Database | null
+}
 
 let seq = 1
 const newId = (): string => `rep-${Date.now().toString(36)}-${seq++}`
@@ -44,12 +49,26 @@ function normalizeSave(raw: unknown): SaveRequestInput | null {
   }
 }
 
-/**
- * Repeater's saved-request store (ARCHITECTURE.MD §11.1): create/edit/tag/delete
- * requests and resend them through the SAME gated replayer the replay:send IPC uses,
- * so every send is scope- and rate-checked identically. Holds recent response history
- * per request for the diff view. In-memory, per session (no persistence yet).
- */
+function rowToSaved(row: Record<string, unknown>): SavedRequest | null {
+  try {
+    const id = String(row.id)
+    const name = String(row.name)
+    const tags = JSON.parse(String(row.tags_json ?? '[]'))
+    const request = JSON.parse(String(row.request_json))
+    const responses = JSON.parse(String(row.responses_json ?? '[]'))
+    return {
+      id,
+      name,
+      tags: Array.isArray(tags) ? tags : [],
+      request,
+      responses: Array.isArray(responses) ? responses : [],
+      updatedAt: Number(row.updated_at) || Date.now()
+    }
+  } catch {
+    return null
+  }
+}
+
 /** Reusable, window-independent repeater store + send core. */
 export interface RepeaterCore {
   list(): SavedRequest[]
@@ -60,11 +79,33 @@ export interface RepeaterCore {
   onUpdate(cb: (items: SavedRequest[]) => void): void
 }
 
-export function createRepeaterCore(replayer: Replayer): RepeaterCore {
-  // Insertion-ordered; oldest evicted once over MAX_SAVED.
-  const saved = new Map<string, SavedRequest>()
+export function createRepeaterCore(replayer: Replayer, opts: RepeaterCoreOptions = {}): RepeaterCore {
+  const db = opts.db ?? null
+  const useDb = db !== null
 
-  const list = (): SavedRequest[] => [...saved.values()]
+  // In-memory fallback map (used when no DB).
+  const memSaved = new Map<string, SavedRequest>()
+
+  // Restore seq from existing rows so restarts never reuse an id.
+  if (useDb && db) {
+    for (const row of db.all('SELECT id FROM repeater_saved')) {
+      const m = /^rep-[0-9a-z]+-(\d+)$/.exec(String((row as Record<string, unknown>).id))
+      if (m) seq = Math.max(seq, Number(m[1]) + 1)
+    }
+  }
+
+  const list = (): SavedRequest[] => {
+    if (useDb && db) {
+      const rows = db.all('SELECT * FROM repeater_saved ORDER BY rowid') as Record<string, unknown>[]
+      const out: SavedRequest[] = []
+      for (const r of rows) {
+        const s = rowToSaved(r)
+        if (s) out.push(s)
+      }
+      return out
+    }
+    return [...memSaved.values()]
+  }
 
   let listener: ((items: SavedRequest[]) => void) | undefined
   const broadcast = (): void => {
@@ -75,7 +116,22 @@ export function createRepeaterCore(replayer: Replayer): RepeaterCore {
     const input = normalizeSave(raw)
     if (!input) return null
     if (input.id) {
-      const existing = saved.get(input.id)
+      if (useDb && db) {
+        const rows = db.all('SELECT * FROM repeater_saved WHERE id = ?', [input.id]) as Record<string, unknown>[]
+        if (rows.length === 0) return null
+        const existing = rowToSaved(rows[0])
+        if (!existing) return null
+        db.run('UPDATE repeater_saved SET name=?, tags_json=?, request_json=?, updated_at=? WHERE id=?', [
+          input.name,
+          JSON.stringify(input.tags),
+          JSON.stringify(input.request),
+          Date.now(),
+          input.id
+        ])
+        broadcast()
+        return { ...existing, name: input.name, tags: input.tags, request: input.request, updatedAt: Date.now() }
+      }
+      const existing = memSaved.get(input.id)
       if (!existing) return null
       existing.name = input.name
       existing.tags = input.tags
@@ -92,11 +148,28 @@ export function createRepeaterCore(replayer: Replayer): RepeaterCore {
       responses: [],
       updatedAt: Date.now()
     }
-    saved.set(created.id, created)
-    while (saved.size > MAX_SAVED) {
-      const oldest = saved.keys().next().value
-      if (oldest === undefined) break
-      saved.delete(oldest)
+    if (useDb && db) {
+      db.run('INSERT INTO repeater_saved (id, name, tags_json, request_json, responses_json, updated_at) VALUES (?,?,?,?,?,?)', [
+        created.id,
+        created.name,
+        JSON.stringify(created.tags),
+        JSON.stringify(created.request),
+        '[]',
+        created.updatedAt
+      ])
+      // Evict oldest once over MAX_SAVED
+      const count = (db.all('SELECT COUNT(*) AS c FROM repeater_saved')[0] as { c: number }).c
+      if (count > MAX_SAVED) {
+        const oldest = db.all('SELECT id FROM repeater_saved ORDER BY rowid LIMIT ?', [count - MAX_SAVED]) as { id: string }[]
+        for (const o of oldest) db.run('DELETE FROM repeater_saved WHERE id = ?', [o.id])
+      }
+    } else {
+      memSaved.set(created.id, created)
+      while (memSaved.size > MAX_SAVED) {
+        const oldest = memSaved.keys().next().value
+        if (oldest === undefined) break
+        memSaved.delete(oldest)
+      }
     }
     broadcast()
     return created
@@ -104,14 +177,38 @@ export function createRepeaterCore(replayer: Replayer): RepeaterCore {
 
   const remove = (id: unknown): boolean => {
     if (typeof id !== 'string') return false
-    const had = saved.delete(id)
+    if (useDb && db) {
+      const rows = db.all('SELECT id FROM repeater_saved WHERE id = ?', [id]) as { id: string }[]
+      if (rows.length === 0) return false
+      db.run('DELETE FROM repeater_saved WHERE id = ?', [id])
+      broadcast()
+      return true
+    }
+    const had = memSaved.delete(id)
     if (had) broadcast()
     return had
   }
 
   const run = async (id: unknown): Promise<SavedRequest | null> => {
     if (typeof id !== 'string') return null
-    const entry = saved.get(id)
+    if (useDb && db) {
+      const rows = db.all('SELECT * FROM repeater_saved WHERE id = ?', [id]) as Record<string, unknown>[]
+      if (rows.length === 0) return null
+      const entry = rowToSaved(rows[0])
+      if (!entry) return null
+      const result = await replayer(entry.request)
+      entry.responses.push(result)
+      if (entry.responses.length > RESPONSE_HISTORY) entry.responses.shift()
+      entry.updatedAt = Date.now()
+      db.run('UPDATE repeater_saved SET responses_json=?, updated_at=? WHERE id=?', [
+        JSON.stringify(entry.responses),
+        entry.updatedAt,
+        id
+      ])
+      broadcast()
+      return entry
+    }
+    const entry = memSaved.get(id)
     if (!entry) return null
     const result = await replayer(entry.request)
     entry.responses.push(result)
@@ -121,13 +218,13 @@ export function createRepeaterCore(replayer: Replayer): RepeaterCore {
     return entry
   }
 
-  // Compares two responses of a saved request via the 5.E diff tool. Indices default
-  // to the two most recent. Returns null when either index has no successful response.
   const diff = (raw: unknown): unknown => {
     if (typeof raw !== 'object' || raw === null) return null
     const r = raw as { id?: unknown; aIndex?: unknown; bIndex?: unknown }
     if (typeof r.id !== 'string') return null
-    const entry = saved.get(r.id)
+    const entry = (useDb && db
+      ? (db.all('SELECT * FROM repeater_saved WHERE id = ?', [r.id]) as Record<string, unknown>[]).map(rowToSaved).find(Boolean)
+      : memSaved.get(r.id)) as SavedRequest | undefined
     if (!entry) return null
     const n = entry.responses.length
     const ai = typeof r.aIndex === 'number' ? r.aIndex : n - 2

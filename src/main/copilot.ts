@@ -77,6 +77,7 @@ import {
 import { ScopeChecker, type ScopeEnforcer } from './mcp/scope'
 import type { NetworkReader, ToolContext } from './mcp/tool'
 import { openDatabase } from './db'
+import { Database } from 'node-sqlite3-wasm'
 import { createFindingsStore } from './findings'
 import { createEngagementStore } from './engagements'
 import { createTraceStore } from './traces'
@@ -254,6 +255,8 @@ export interface CopilotBridge {
   waitUntilReady(): Promise<{ ok: boolean; error?: string }>
   /** Cost/latency figures for the agentic pipeline (counts + timing only). */
   usageSnapshot(): UsageSnapshot
+  /** Shared SQLite DB (for subsystems wired after the bridge is created). */
+  getDatabase(): Database
   stop(): Promise<void>
 }
 
@@ -1448,6 +1451,9 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
   ipcMain.handle('copilot:usage-snapshot', () => usage.snapshot())
 
   return {
+    getDatabase() {
+      return db
+    },
     setActiveTarget(wc, tabId) {
       cdp.setActive(wc)
       networkReader.setActiveTab(tabId)

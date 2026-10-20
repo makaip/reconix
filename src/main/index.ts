@@ -306,7 +306,8 @@ function createWindow(): void {
   const { replayer } = createReplay(mainWindow, configuredScope ?? activeOriginScope)
   // Repeater reuses the one gated replayer so its sends are scope-/rate-checked too.
   // The core is shared with the copilot's MCP tools so the agent can drive it.
-  repeaterCore = createRepeaterCore(replayer)
+  const db = copilotBridge.getDatabase()
+  repeaterCore = createRepeaterCore(replayer, { db })
   createRepeater(mainWindow, replayer, repeaterCore)
   // The crawler drives the SAME gated replayer, so its spidering never egresses
   // outside authorized scope or past the per-host rate limit. The core is shared
