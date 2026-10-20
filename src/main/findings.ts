@@ -107,10 +107,16 @@ export function createFindingsStore(
     seq = Math.max(seq, idSeq(String((row as Record<string, unknown>).id)))
   }
 
-  const readAll = (): StoredFinding[] =>
-    db
-      .all('SELECT id, schema_json, evidence_ref, ts FROM findings ORDER BY rowid')
-      .map((row) => toStored(row as Record<string, unknown>))
+  // Scope findings to the active engagement so a sidebar/history view never
+  // mixes rows from different runs (or from a previous website). When no
+  // engagement is active, return everything — the historical "all findings" view.
+  const readAll = (): StoredFinding[] => {
+    const eid = resolveEngagementId()
+    const rows = eid
+      ? db.all('SELECT id, schema_json, evidence_ref, ts FROM findings WHERE engagement_id = ? ORDER BY rowid', [eid])
+      : db.all('SELECT id, schema_json, evidence_ref, ts FROM findings ORDER BY rowid')
+    return rows.map((row) => toStored(row as Record<string, unknown>))
+  }
 
   const broadcast = (): void => {
     if (!win.isDestroyed() && !win.webContents.isDestroyed()) {

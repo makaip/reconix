@@ -8,16 +8,23 @@ export function useFindings(): Finding[] {
 
   useEffect(() => {
     let live = true
-    void window.reconix.findings
-      .list()
-      .then((initial) => {
-        if (live) setFindings(initial)
-      })
-      .catch(() => undefined)
-    const unsubscribe = window.reconix.findings.onChanged(setFindings)
+    const reload = (): void => {
+      void window.reconix.findings
+        .list()
+        .then((initial) => {
+          if (live) setFindings(initial)
+        })
+        .catch(() => undefined)
+    }
+    reload()
+    const unsubscribeFindings = window.reconix.findings.onChanged(setFindings)
+    // Re-fetch when the active engagement changes so findings from a previous
+    // run/site don't bleed into the current one.
+    const unsubscribeEngagement = window.reconix.engagement.onChanged(() => reload())
     return () => {
       live = false
-      unsubscribe()
+      unsubscribeFindings()
+      unsubscribeEngagement()
     }
   }, [])
 
