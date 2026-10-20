@@ -2,6 +2,7 @@ import navLeft from '../../assets/icons/nav-left.svg'
 import navReload from '../../assets/icons/nav-reload.svg'
 import navRight from '../../assets/icons/nav-right.svg'
 import toolbarChat from '../../assets/icons/toolbar-chat.svg'
+import toolbarSettings from '../../assets/icons/toolbar-settings.svg'
 import toolbarSidebar from '../../assets/icons/toolbar-sidebar.svg'
 import UrlBar from './UrlBar'
 
@@ -13,6 +14,7 @@ type ToolbarProps = {
   onToggleSidebar: () => void
   copilotOpen: boolean
   onToggleCopilot: () => void
+  onOpenSettings: () => void
   /** True while the Copilot engine is still booting — navigation is
    *  accepted by the address bar but held by the main process until the
    *  engine's ready, so disable the controls rather than let the user
@@ -44,6 +46,7 @@ function Toolbar({
   onToggleSidebar,
   copilotOpen,
   onToggleCopilot,
+  onOpenSettings,
   navDisabled
 }: ToolbarProps): JSX.Element {
   const { target } = window.reconix
@@ -87,6 +90,16 @@ function Toolbar({
       >
         <img src={toolbarChat} width={14} height={14} alt="" />
         Copilot
+      </button>
+
+      <button
+        type="button"
+        className="toolbar-button"
+        aria-label="Open settings"
+        title="Settings"
+        onClick={onOpenSettings}
+      >
+        <img src={toolbarSettings} width={14} height={14} alt="" />
       </button>
     </div>
   )

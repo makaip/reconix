@@ -152,6 +152,7 @@ function App(): JSX.Element {
         onToggleSidebar={() => setSidebarOpen((open) => !open)}
         copilotOpen={copilotOpen}
         onToggleCopilot={() => setCopilotOpen((open) => !open)}
+        onOpenSettings={() => setSettingsOpen(true)}
         navDisabled={engineStatus.status === 'starting'}
       />
 

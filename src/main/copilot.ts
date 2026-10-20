@@ -765,7 +765,7 @@ export async function applyModelSettings(
     const text = await readFile(agentPath, 'utf8')
     const spec = getModelSpec(settings, 'orchestrator')
     // Only touch the frontmatter block; the body may mention "model:" in prose.
-    const next = text.replace(/^---\r?\n([\s\S]*?)\r?\n---/, (_block, frontmatter: string) => {
+    const next = text.replace(/^---\r?\n([\s\S]*?)\r?\n---/, (_match, frontmatter: string) => {
       const updated = /^model:.*$/m.test(frontmatter)
         ? frontmatter.replace(/^model:.*$/m, `model: ${spec}`)
         : `${frontmatter}\nmodel: ${spec}`
