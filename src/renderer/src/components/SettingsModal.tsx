@@ -331,8 +331,10 @@ function ModelSection(): JSX.Element {
             domAnalyzer: allGroups.length ? allGroups : FALLBACK_DOM_ANALYZER_GROUPS
           })
         })
-        .catch(() => {
-          /* keep fallback groups */
+        .catch((err: unknown) => {
+          console.error('[settings] listModels failed:', err)
+          // keep fallback groups; surface a hint in the load error only if
+          // settings themselves also failed to load.
         })
     }
 

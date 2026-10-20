@@ -381,17 +381,31 @@ const MODELS_CACHE_TTL_MS = 5 * 60 * 1000
 export async function listModels(): Promise<ModelList> {
   if (modelsCache && Date.now() - modelsCache.at < MODELS_CACHE_TTL_MS) return modelsCache.value
   const exec = promisify(execFile)
+  const candidates = process.platform === 'win32' ? ['opencode', 'opencode.cmd', 'opencode.exe'] : ['opencode']
   let stdout = ''
-  try {
-    const res = await exec('opencode', ['models'], { timeout: 30000, maxBuffer: 10 * 1024 * 1024 })
-    stdout = res.stdout
-  } catch (err) {
-    const e = err as { stdout?: string }
-    stdout = e.stdout ?? ''
-    if (!stdout) throw new Error(`opencode models failed: ${(err as Error).message}`)
+  let lastErr: unknown
+  for (const bin of candidates) {
+    try {
+      const res = await exec(bin, ['models'], {
+        timeout: 30000,
+        maxBuffer: 10 * 1024 * 1024,
+        shell: process.platform === 'win32'
+      })
+      stdout = res.stdout
+      lastErr = null
+      break
+    } catch (err) {
+      lastErr = err
+      const e = err as { stdout?: string }
+      if (e.stdout) { stdout = e.stdout; break }
+    }
+  }
+  if (!stdout) {
+    const msg = lastErr instanceof Error ? lastErr.message : String(lastErr)
+    throw new Error(`opencode models failed: ${msg}`)
   }
   const grouped = new Map<string, string[]>()
-  for (const line of stdout.split(/\\r?\\n/)) {
+  for (const line of stdout.split(/\r?\n/)) {
     const trimmed = line.trim()
     if (!trimmed) continue
     const slash = trimmed.indexOf('/')
