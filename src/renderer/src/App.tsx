@@ -157,20 +157,26 @@ function App(): JSX.Element {
       />
 
       <div className="shell">
+        {/* Always mounted: toggling swaps a .sidebar--collapsed class instead of unmounting,
+            so the sitemap (selection, scroll position, folder state) survives the toggle and
+            flipping it back doesn't rebuild/refit the whole tree. When collapsed the sidebar
+            lays out absolutely and slides out, so the center column reclaims the width.
+            The resize handle is the only piece still conditionally rendered — it's a plain
+            div, and dragging it against a collapsed panel would be meaningless. */}
+        <Sidebar
+          collapsed={!sidebarOpen}
+          dragging={sidebarOpen && sidebarResize.dragging}
+          style={{ flexBasis: sidebarResize.size }}
+          onDragStart={() => setDragActive(true)}
+          onDragEnd={() => setDragActive(false)}
+          onOpenSource={(target) => setOpenSource((prev) => ({ target, nonce: (prev?.nonce ?? 0) + 1 }))}
+        />
         {sidebarOpen && (
-          <>
-            <Sidebar
-              style={{ flexBasis: sidebarResize.size }}
-              onDragStart={() => setDragActive(true)}
-              onDragEnd={() => setDragActive(false)}
-              onOpenSource={(target) => setOpenSource((prev) => ({ target, nonce: (prev?.nonce ?? 0) + 1 }))}
-            />
-            <ResizeHandle
-              orientation="vertical"
-              dragging={sidebarResize.dragging}
-              onPointerDown={sidebarResize.onHandlePointerDown}
-            />
-          </>
+          <ResizeHandle
+            orientation="vertical"
+            dragging={sidebarResize.dragging}
+            onPointerDown={sidebarResize.onHandlePointerDown}
+          />
         )}
 
         <main className="center">

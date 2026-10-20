@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react'
+import { memo, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react'
 import plus from '../../assets/icons/plus.svg'
 import { useFindings } from '../../hooks/useFindings'
 import { useEngagement } from '../../hooks/useEngagement'
@@ -13,6 +13,11 @@ import SitemapRow from './SitemapRow'
 
 type SidebarProps = {
   style?: CSSProperties
+  /** Show the sidebar as slid out: positioned absolutely and translated off-screen
+   *  (see .sidebar--collapsed in shell.css). The component stays mounted either way. */
+  collapsed?: boolean
+  /** True while the resize edge is being dragged; suppresses the transform transition. */
+  dragging?: boolean
   onDragStart: () => void
   onDragEnd: () => void
   /** Open a sitemap endpoint in the DevTools Sources tab. */
@@ -22,14 +27,14 @@ type SidebarProps = {
 /** The payload a sitemap node contributes to a drag/attach: its host+path is both url and label. */
 const toDragItem = (node: SitemapNode): ResourceDragItem => ({ url: node.id, label: node.id })
 
-function Sidebar({ style, onDragStart, onDragEnd, onOpenSource }: SidebarProps): JSX.Element {
+function Sidebar({ style, collapsed = false, dragging = false, onDragStart, onDragEnd, onOpenSource }: SidebarProps): JSX.Element {
   const sitemap = useSitemap()
   const findings = useFindings()
   const engagement = useEngagement()
   const [goalDraft, setGoalDraft] = useState('')
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [anchor, setAnchor] = useState<string | null>(null)
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
+  const [folded, setFolded] = useState<Set<string>>(new Set())
   /** The keyboard cursor row (VS Code's "focused" item), independent of the selection. */
   const [focus, setFocus] = useState<string | null>(null)
   const treeRef = useRef<HTMLDivElement>(null)
@@ -40,14 +45,14 @@ function Sidebar({ style, onDragStart, onDragEnd, onOpenSource }: SidebarProps):
     let hideBelow = Infinity
     for (const node of sitemap) {
       if (node.depth > hideBelow) continue
-      hideBelow = node.kind === 'folder' && collapsed.has(node.id) ? node.depth : Infinity
+      hideBelow = node.kind === 'folder' && folded.has(node.id) ? node.depth : Infinity
       out.push(node)
     }
     return out
-  }, [sitemap, collapsed])
+  }, [sitemap, folded])
 
   const toggle = (id: string): void =>
-    setCollapsed((current) => {
+    setFolded((current) => {
       const next = new Set(current)
       if (!next.delete(id)) next.add(id)
       return next
@@ -126,7 +131,7 @@ function Sidebar({ style, onDragStart, onDragEnd, onOpenSource }: SidebarProps):
     }
     if (!focusNode) return
     const isFolder = focusNode.kind === 'folder'
-    const isCollapsed = collapsed.has(focusNode.id)
+    const isCollapsed = folded.has(focusNode.id)
     switch (event.key) {
       case 'ArrowRight': {
         handled()
@@ -170,7 +175,12 @@ function Sidebar({ style, onDragStart, onDragEnd, onOpenSource }: SidebarProps):
   }
 
   return (
-    <aside className="sidebar" aria-label="Sitemap and findings" style={style}>
+    <aside
+      className={`sidebar${collapsed ? ' sidebar--collapsed' : ''}${dragging ? ' sidebar--dragging' : ''}`}
+      aria-label="Sitemap and findings"
+      aria-hidden={collapsed}
+      style={style}
+    >
       <div className="sidebar__scroll">
         <SectionHeader label="Sitemap" count={sitemap.length} />
         {sitemap.length === 0 ? (
@@ -192,7 +202,7 @@ function Sidebar({ style, onDragStart, onDragEnd, onOpenSource }: SidebarProps):
                   node={node}
                   selected={selected.has(node.id)}
                   focused={node === focusNode}
-                  collapsed={collapsed.has(node.id)}
+                  collapsed={folded.has(node.id)}
                   onToggle={() => toggle(node.id)}
                   onSelect={clickSelect}
                   onOpen={() => node.kind === 'page' && onOpenSource(node.id)}
@@ -271,4 +281,6 @@ function Sidebar({ style, onDragStart, onDragEnd, onOpenSource }: SidebarProps):
   )
 }
 
-export default Sidebar
+/** memo: the shell re-renders on every drag frame and network tick; the sidebar's own state
+ *  lives inside, so a stable props set should mean zero re-renders out here. */
+export default memo(Sidebar)

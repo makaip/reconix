@@ -10,8 +10,11 @@
   flex: 1 1 0;
   min-height: 0;
   display: flex;
+  /* Anchors the absolutely-positioned collapsed sidebar (see .sidebar--collapsed). */
+  position: relative;
   overflow: hidden;
   background: var(--color-bg-panel);
+  contain: layout;
 }
 
 .sidebar {
@@ -22,6 +25,36 @@
   background: var(--color-bg-panel);
   border-right: 1px solid var(--color-border);
   overflow: hidden;
+  /* The sidebar is the cheapest panel to isolate: neither its layout (width/children)
+   * nor its paint (scrolling tree, hover highlights) should spill into the shell's. */
+  contain: layout paint;
+  will-change: transform;
+}
+
+/* Collapsed slides out instead of unmounting, so tree state (selection, scroll, opened
+ * folders) survives the toggle. Absolute positioning takes it out of the flex row so the
+ * center column immediately reclaims the width; shell's overflow:hidden clips it, so no
+   overlay leaks over the toolbar or the page. */
+.sidebar--collapsed {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  /* Not a flex item anymore, so flex-basis is inert — size it explicitly. */
+  width: var(--sidebar-width);
+  transform: translateX(-100%);
+}
+
+/* Transition only when the resize handle isn't dragging: per-frame drags shouldn't
+   animate, and the transition itself costs a repaint per pixel. */
+.sidebar:not(.sidebar--dragging) {
+  transition: transform 150ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar:not(.sidebar--dragging) {
+    transition: none;
+  }
 }
 
 .copilot {
