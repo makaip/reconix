@@ -3,7 +3,7 @@ import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { createBodyStore } from './bodies'
 import { applyModelSettings, createCopilotBridge, type CopilotBridge } from './copilot'
-import { loadModelSettings, save as saveModelSettings, testConnection } from './modelSettings'
+import { loadModelSettings, listModels, save as saveModelSettings, testConnection } from './modelSettings'
 import { createActiveOriginScopeChecker, loadScopeChecker, loadScopeConfig, toScopeStatus } from './engagement'
 import { attachInspector, combineNetworkSinks } from './inspector'
 import { createInterceptor } from './intercept'
@@ -228,6 +228,11 @@ function createWindow(): void {
       await loadModelSettings(app.getPath('userData')),
       target as Parameters<typeof testConnection>[1]
     )
+  })
+  ipcMain.removeHandler('settings:list-models')
+  ipcMain.handle('settings:list-models', async (event) => {
+    if (!settingsAllowed(event)) throw new Error('Unauthorized settings:list-models sender')
+    return listModels()
   })
 
   const bodies = createBodyStore(mainWindow)

@@ -29,7 +29,9 @@ type Feedback = { kind: 'ok' | 'error'; message: string } | { kind: 'busy' }
 /** Sentinel <option> value for the "Custom…" picker choice. */
 const CUSTOM_CHOICE = '__custom__'
 
-const ORCHESTRATOR_GROUPS: ModelGroup[] = [
+// Fallback groups used only if the live `settings:list-models` call fails, so
+// the dropdowns stay usable offline / in dev without the opencode binary.
+const FALLBACK_ORCHESTRATOR_GROUPS: ModelGroup[] = [
   { provider: 'vLLM (local)', options: [{ id: 'vllm-orchestrator/orchestrator-model', label: 'Local Qwen' }] },
   {
     provider: 'Gemini',
@@ -42,7 +44,7 @@ const ORCHESTRATOR_GROUPS: ModelGroup[] = [
   { provider: 'OpenRouter', options: [{ id: 'openrouter/dolphin3-mistral-24b', label: 'Dolphin Mistral 24B' }] }
 ]
 
-const DOM_ANALYZER_GROUPS: ModelGroup[] = [
+const FALLBACK_DOM_ANALYZER_GROUPS: ModelGroup[] = [
   { provider: 'OpenCode', options: [{ id: 'opencode/grok-code', label: 'Grok Code (default)' }] },
   { provider: 'Gemini', options: [{ id: 'gemini/gemini-flash-lite-latest', label: 'Gemini Flash Lite (latest)' }] }
 ]
@@ -283,9 +285,10 @@ function ModelSection(): JSX.Element {
   const hasApi = Boolean(settingsApi)
 
   const [model, setModel] = useState<ModelSettings | null>(null)
-  const [customRole, setCustomRole] = useState<Record<'orchestrator' | 'domAnalyzer', boolean>>({
-    orchestrator: false,
-    domAnalyzer: false
+  // (custom selection is now derived from the target spec + loaded groups)
+  const [groups, setGroups] = useState<{ orchestrator: ModelGroup[]; domAnalyzer: ModelGroup[] }>({
+    orchestrator: FALLBACK_ORCHESTRATOR_GROUPS,
+    domAnalyzer: FALLBACK_DOM_ANALYZER_GROUPS
   })
   const [loadError, setLoadError] = useState<string | null>(null)
   // Retry counter reloads persisted settings without remounting the modal.
@@ -306,15 +309,34 @@ function ModelSection(): JSX.Element {
       .then((next) => {
         if (cancelled) return
         setModel(next)
-        setCustomRole({
-          orchestrator: startsCustom(next.orchestrator, ORCHESTRATOR_GROUPS),
-          domAnalyzer: startsCustom(next.domAnalyzer, DOM_ANALYZER_GROUPS)
-        })
         setLoadError(null)
       })
       .catch((err: unknown) => {
         if (!cancelled) setLoadError(`Could not load model settings: ${(err as Error).message}`)
       })
+
+    // Pull the live model catalog from OpenCode so the dropdowns reflect every
+    // provider the user has authenticated, not a hand-maintained subset.
+    if (settingsApi?.listModels) {
+      settingsApi
+        .listModels()
+        .then((result) => {
+          if (cancelled || !result?.providers) return
+          const allGroups: ModelGroup[] = result.providers.map((provider) => ({
+            provider: provider.id,
+            options: provider.models.map((m) => ({ id: `${provider.id}/${m}`, label: m }))
+          }))
+          setGroups({
+            orchestrator: allGroups.length ? allGroups : FALLBACK_ORCHESTRATOR_GROUPS,
+            domAnalyzer: allGroups.length ? allGroups : FALLBACK_DOM_ANALYZER_GROUPS
+          })
+        })
+        .catch(() => {
+          /* keep fallback groups */
+        })
+    }
+
+    // custom flags are derived in render from the target spec + loaded groups
     return () => {
       cancelled = true
     }
@@ -422,12 +444,11 @@ function ModelSection(): JSX.Element {
         <RoleBlock
           title="Orchestrator model"
           target={draft.orchestrator}
-          groups={ORCHESTRATOR_GROUPS}
-          customSelected={customRole.orchestrator}
+          groups={groups.orchestrator}
+          customSelected={startsCustom(draft.orchestrator, groups.orchestrator) || draft.orchestrator.provider === 'custom'}
           test={tests.orchestrator}
-          onPatch={(patch, custom) => {
+          onPatch={(patch) => {
             patchRole('orchestrator', patch)
-            setCustomRole((prev) => ({ ...prev, orchestrator: custom }))
           }}
           onTest={() => void onTest('orchestrator', roleTestTarget(draft.orchestrator))}
         />
@@ -435,12 +456,11 @@ function ModelSection(): JSX.Element {
         <RoleBlock
           title="DOM-analyzer model"
           target={draft.domAnalyzer}
-          groups={DOM_ANALYZER_GROUPS}
-          customSelected={customRole.domAnalyzer}
+          groups={groups.domAnalyzer}
+          customSelected={startsCustom(draft.domAnalyzer, groups.domAnalyzer) || draft.domAnalyzer.provider === 'custom'}
           test={tests.domAnalyzer}
-          onPatch={(patch, custom) => {
+          onPatch={(patch) => {
             patchRole('domAnalyzer', patch)
-            setCustomRole((prev) => ({ ...prev, domAnalyzer: custom }))
           }}
           onTest={() => void onTest('domAnalyzer', roleTestTarget(draft.domAnalyzer))}
         />

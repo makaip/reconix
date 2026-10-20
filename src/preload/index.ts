@@ -175,7 +175,11 @@ const api = {
     // Probe a provider endpoint without saving it. Returns the model list on
     // success so the UI can offer a picker.
     testConnection: (target: SettingsTestTarget): Promise<SettingsTestResult> =>
-      ipcRenderer.invoke('settings:test-connection', target)
+      ipcRenderer.invoke('settings:test-connection', target),
+    // Enumerate every model OpenCode can reach (grouped by provider). Used to
+    // populate the model dropdowns instead of a hand-maintained list.
+    listModels: (): Promise<{ providers: Array<{ id: string; models: string[] }> }> =>
+      ipcRenderer.invoke('settings:list-models')
   },
   target: {
     setBounds: (bounds: Bounds): Promise<void> => ipcRenderer.invoke('target:set-bounds', bounds),

@@ -11,6 +11,8 @@
 // never logged. Encryption is deferred to v2 per the plan.
 
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import { join } from 'node:path'
 
 export const REASONING_LEVELS = ['off', 'low', 'medium', 'high'] as const
@@ -368,4 +370,41 @@ export async function testConnection(
   } finally {
     clearTimeout(timer)
   }
+}
+
+export type ModelOption = { provider: string; model: string }
+export type ModelList = { providers: Array<{ id: string; models: string[] }> }
+
+let modelsCache: { at: number; value: ModelList } | null = null
+const MODELS_CACHE_TTL_MS = 5 * 60 * 1000
+
+export async function listModels(): Promise<ModelList> {
+  if (modelsCache && Date.now() - modelsCache.at < MODELS_CACHE_TTL_MS) return modelsCache.value
+  const exec = promisify(execFile)
+  let stdout = ''
+  try {
+    const res = await exec('opencode', ['models'], { timeout: 30000, maxBuffer: 10 * 1024 * 1024 })
+    stdout = res.stdout
+  } catch (err) {
+    const e = err as { stdout?: string }
+    stdout = e.stdout ?? ''
+    if (!stdout) throw new Error(`opencode models failed: ${(err as Error).message}`)
+  }
+  const grouped = new Map<string, string[]>()
+  for (const line of stdout.split(/\\r?\\n/)) {
+    const trimmed = line.trim()
+    if (!trimmed) continue
+    const slash = trimmed.indexOf('/')
+    if (slash <= 0) continue
+    const provider = trimmed.slice(0, slash)
+    const model = trimmed.slice(slash + 1)
+    if (!grouped.has(provider)) grouped.set(provider, [])
+    grouped.get(provider)!.push(model)
+  }
+  const providers = [...grouped.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([id, models]) => ({ id, models: [...new Set(models)].sort() }))
+  const value: ModelList = { providers }
+  modelsCache = { at: Date.now(), value }
+  return value
 }
