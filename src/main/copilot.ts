@@ -6,11 +6,12 @@
 // over loopback HTTP, same as the eventual Docker setup will once 5.D lands —
 // the connector/transport layer doesn't care which one is on the other end.
 //
-// Model wiring (see ORCHESTRATOR_MODEL / DOM_ANALYZER_MODEL below):
-//  - The orchestrator runs on the remote vLLM server configured in reconix.env
-//    (ORCHESTRATOR_BASE_URL / ORCHESTRATOR_API_KEY, read by opencode.json's
-//    vllm-orchestrator provider). index.ts loads reconix.env into the env the
-//    spawned `opencode serve` inherits.
+// Model wiring (see getOrchestratorModel / getDomAnalyzerModel below — both
+// resolve through ./modelSettings, so the user can swap models in-app):
+//  - The orchestrator defaults to the remote vLLM server configured in
+//    reconix.env (ORCHESTRATOR_BASE_URL / ORCHESTRATOR_API_KEY, read by
+//    opencode.json's vllm-orchestrator provider). index.ts loads reconix.env
+//    into the env the spawned `opencode serve` inherits.
 //  - The DOM parser (and the @evaluator subagent) run through the custom
 //    `gemini` provider using GOOGLE_GENERATIVE_AI_API_KEY directly.
 //    gemini-flash-lite-latest is used because the full gemini-*-flash models cap
@@ -81,23 +82,34 @@ import { createEngagementStore } from './engagements'
 import { createTraceStore } from './traces'
 import { createAuditLogger } from './auditLog'
 import { createHistoryReader } from './history'
+import {
+  getModelSpec,
+  invalidateModelSettingsCache,
+  loadModelSettings,
+  peekModelSettings,
+  resolveModelSpec,
+  type ModelSettings
+} from './modelSettings'
 
 const HOST = '127.0.0.1'
 const OPENCODE_PORT = 4097
-// Models pinned on the sessions we create. Must be set explicitly, not left to
-// the agent's config: OpenCode otherwise bypasses the agent model and routes to
-// its own hosted gateway, which 403s for provider-authed models (see
-// transport.ts's OpenCodeConfig.model). Keep in sync with opencode.json /
-// .opencode/agents/*.md. The orchestrator runs on the remote vLLM server
-// (reconix.env's ORCHESTRATOR_BASE_URL); the DOM parser (and the evaluator
-// subagent) run on OpenCode Zen's free Grok Code model.
-const ORCHESTRATOR_MODEL = 'vllm-orchestrator/orchestrator-model'
-// OpenCode Zen's built-in `opencode` provider (grok-code-fast-1, free). Unlike
-// the provider-authed models above, this one IS served by OpenCode's own
-// gateway, so pinning the model id here routes to the gateway as intended
-// rather than 403ing. Auth comes from `opencode auth login` (the OpenCode Zen
-// key), not a provider block in opencode.json.
-const DOM_ANALYZER_MODEL = 'opencode/grok-code'
+// Models are pinned on the sessions we create. They MUST be set explicitly, not
+// left to the agent's config: OpenCode otherwise bypasses the agent model and
+// routes to its own hosted gateway, which 403s for provider-authed models (see
+// transport.ts's OpenCodeConfig.model). The defaults live in
+// ./modelSettings and reproduce the previous hardcoded values:
+//  - orchestrator: vllm-orchestrator/orchestrator-model (remote vLLM server,
+//    reconix.env's ORCHESTRATOR_BASE_URL);
+//  - domAnalyzer: opencode/grok-code (OpenCode Zen's free Grok Code, served by
+//    OpenCode's own gateway; auth comes from `opencode auth login`, not a
+//    provider block in opencode.json).
+// Swapping either one in the UI takes effect on the next new session/chat.
+export async function getOrchestratorModel(): Promise<string> {
+  return resolveModelSpec(app.getPath('userData'), 'orchestrator')
+}
+export async function getDomAnalyzerModel(): Promise<string> {
+  return resolveModelSpec(app.getPath('userData'), 'domAnalyzer')
+}
 // Must match opencode.json's mcp.servers.reconix.url — not read back from
 // there, since opencode.json is static config and this needs to be a fixed
 // port the running process actually binds to.
@@ -390,6 +402,7 @@ async function runOneShotAgent(
   password: string,
   agent: string,
   text: string,
+  model: string,
   timeoutMs = 25_000
 ): Promise<string | null> {
   const headers = {
@@ -402,7 +415,7 @@ async function runOneShotAgent(
     const sessionRes = await fetch(`${baseUrl}/api/session`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ agent, model: parseModel(DOM_ANALYZER_MODEL) })
+      body: JSON.stringify({ agent, model: parseModel(model) })
     })
     if (!sessionRes.ok) {
       console.error(
@@ -705,6 +718,77 @@ function rawEventSessionId(raw: RawEvent): string | null {
  *  the audit log keeps the durable events and skips these. */
 const TRANSIENT_DELTA_EVENT_TYPES = new Set(['session.text.delta', 'session.reasoning.delta'])
 
+/** Mirrors the saved custom backends into the repo's opencode.json (the
+ *  versioned source of truth), then re-runs the global sync so a running/new
+ *  `opencode serve` sees them. Also keeps the orchestrator agent frontmatter
+ *  `model:` line in sync. Best-effort throughout: a config write failure must
+ *  never fail settings:set — the in-memory settings are already authoritative
+ *  for the model pinned on the next session. */
+export async function applyModelSettings(
+  settings: ModelSettings,
+  previous?: ModelSettings
+): Promise<void> {
+  invalidateModelSettingsCache(app.getPath('userData'))
+  const repoRoot = app.getAppPath()
+
+  try {
+    const configPath = join(repoRoot, 'opencode.json')
+    const config = JSON.parse(await readFile(configPath, 'utf8')) as JsonObject
+    const providers = isJsonObject(config.providers) ? config.providers : {}
+    // Drop providers we generated for backends that no longer exist, then
+    // (re)write one block per configured custom backend.
+    for (const backend of previous?.customBackends ?? []) {
+      if (!settings.customBackends.some((next) => next.id === backend.id)) delete providers[backend.id]
+    }
+    for (const backend of settings.customBackends) {
+      providers[backend.id] = {
+        package: '@ai-sdk/openai-compatible',
+        name: `Custom (${backend.id})`,
+        settings: { baseURL: backend.baseUrl, apiKey: backend.apiKey },
+        models: { [backend.model]: { name: backend.model } }
+      }
+    }
+    config.providers = providers
+    await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`)
+  } catch (err) {
+    console.warn('[copilot] could not update opencode.json with custom backends:', err)
+  }
+
+  try {
+    await syncGlobalOpenCodeConfig()
+  } catch (err) {
+    console.warn('[copilot] could not sync global OpenCode config:', err)
+  }
+
+  try {
+    const agentPath = join(repoRoot, '.opencode', 'agents', 'pentest-orchestrator.md')
+    const text = await readFile(agentPath, 'utf8')
+    const spec = getModelSpec(settings, 'orchestrator')
+    // Only touch the frontmatter block; the body may mention "model:" in prose.
+    const next = text.replace(/^---\r?\n([\s\S]*?)\r?\n---/, (_block, frontmatter: string) => {
+      const updated = /^model:.*$/m.test(frontmatter)
+        ? frontmatter.replace(/^model:.*$/m, `model: ${spec}`)
+        : `${frontmatter}\nmodel: ${spec}`
+      return `---\n${updated}\n---`
+    })
+    if (next !== text) await writeFile(agentPath, next)
+  } catch (err) {
+    console.warn('[copilot] could not update pentest-orchestrator frontmatter:', err)
+  }
+
+  if (previous && previous.reasoning !== settings.reasoning) {
+    // vLLM reads enable_thinking at server start; a running `opencode serve`
+    // keeps the old value until it is restarted.
+    console.info(
+      `[copilot] reasoning changed to "${settings.reasoning}" — restart opencode serve for it to take effect`
+    )
+  }
+}
+
+function isJsonObject(value: unknown): value is JsonObject {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
 export function createCopilotBridge(win: BrowserWindow, getNetwork: () => NetworkCapture | undefined, getInterceptor?: () => { save(raw: unknown): InterceptRule | null; list(): InterceptRule[]; toggle(id: unknown, enabled: unknown): InterceptRule | null; remove(id: unknown): boolean } | undefined, getCrawler?: () => { start(raw: unknown): unknown; stop(): unknown; getState(): unknown } | undefined, getRepeater?: () => { list(): unknown; save(raw: unknown): unknown; remove(id: unknown): unknown; run(id: unknown): unknown; diff(raw: unknown): unknown } | undefined): CopilotBridge {
   setQuestionSender((payload) => { if (!win.isDestroyed()) win.webContents.send('copilot:question', payload) })
   let child: ChildProcessWithoutNullStreams | null = null
@@ -790,12 +874,14 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
   // subagents + the ambient DOM parser) and onAgentEvent (orchestrator turn
   // timeline) sinks below, plus explicit notes at the send/parser call sites.
   const usage = new UsageMeter({
-    modelForRole: (role) =>
-      role === 'orchestrator'
-        ? ORCHESTRATOR_MODEL
+    modelForRole: (role) => {
+      const settings = peekModelSettings()
+      return role === 'orchestrator'
+        ? getModelSpec(settings, 'orchestrator')
         : role === 'dom-analyzer' || role === 'subagent'
-          ? DOM_ANALYZER_MODEL
+          ? getModelSpec(settings, 'domAnalyzer')
           : 'unknown'
+    }
   })
 
   // Ambient state, prepended to every message sent to the orchestrator so it
@@ -888,6 +974,18 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
       )
     } catch {
       // No reconix.env: the inherited env alone is all we have.
+    }
+    // Reasoning effort applies to the vLLM orchestrator at spawn time: Qwen's
+    // enable_thinking is a server-side flag, so a change requires restarting
+    // `opencode serve` (applyModelSettings logs that when it changes).
+    try {
+      const settings = await loadModelSettings(app.getPath('userData'))
+      envFromFile.RECONIX_REASONING_EFFORT = settings.reasoning
+      if (settings.orchestrator.provider === 'vllm-orchestrator') {
+        envFromFile.VLLM_ENABLE_THINKING = settings.reasoning === 'off' ? 'false' : 'true'
+      }
+    } catch (err) {
+      console.warn('[copilot] could not load model settings for server env:', err)
     }
     // serve must PRINT a generated password (parsed below) and bind OUR port,
     // not reconix.env's. GOOGLE_* and the rest of process.env (incl. the .env
@@ -1176,7 +1274,7 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
       if (!baseUrl) return null
       const started = Date.now()
       try {
-        return await runOneShotAgent(baseUrl, password, 'dom-analyzer', html)
+        return await runOneShotAgent(baseUrl, password, 'dom-analyzer', html, await getDomAnalyzerModel())
       } finally {
         usage.noteAmbientCall('dom-analyzer', Date.now() - started)
         emitUsage(true)
@@ -1193,8 +1291,11 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
     if (starting) return starting
     starting = (async () => {
       const { baseUrl, password } = await ensureServerInfo()
+      // Resolved per session: a model swap applies to the next new chat, never
+      // mid-session (the plan's v1 semantics).
+      const orchestratorModel = await getOrchestratorModel()
       const c = createOpenCodeConnector(
-        { baseUrl, password, agent: 'pentest-orchestrator', model: ORCHESTRATOR_MODEL, requiredMcpServer: 'reconix', requiredMcpUrl: `http://127.0.0.1:${MCP_PORT}/mcp` },
+        { baseUrl, password, agent: 'pentest-orchestrator', model: orchestratorModel, requiredMcpServer: 'reconix', requiredMcpUrl: `http://127.0.0.1:${MCP_PORT}/mcp` },
         {
           onAgentEvent: (ev: AgentEvent) => {
             if (responseStartedAt !== null) {

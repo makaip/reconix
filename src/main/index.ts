@@ -2,7 +2,8 @@ import { app, shell, BrowserWindow, ipcMain, Menu, session, type MenuItemConstru
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { createBodyStore } from './bodies'
-import { createCopilotBridge, type CopilotBridge } from './copilot'
+import { applyModelSettings, createCopilotBridge, type CopilotBridge } from './copilot'
+import { loadModelSettings, save as saveModelSettings, testConnection } from './modelSettings'
 import { createActiveOriginScopeChecker, loadScopeChecker, loadScopeConfig, toScopeStatus } from './engagement'
 import { attachInspector, combineNetworkSinks } from './inspector'
 import { createInterceptor } from './intercept'
@@ -194,6 +195,41 @@ function createWindow(): void {
   let copilotTargetTabId: number | null = null
   copilotBridge = createCopilotBridge(mainWindow, () => network, () => interceptor, () => crawlCore, () => repeaterCore)
 
+  // Model/backend settings (see ~/.opencode/plan/model-swap-settings.md). Only
+  // the app's own window may read or change them — the same sender guard used
+  // by the other UI-facing handlers below.
+  const settingsAllowed = (event: Electron.IpcMainInvokeEvent): boolean =>
+    event.sender === mainWindow.webContents
+  ipcMain.removeHandler('settings:get')
+  ipcMain.handle('settings:get', (event) => {
+    if (!settingsAllowed(event)) throw new Error('Unauthorized settings:get sender')
+    return loadModelSettings(app.getPath('userData'))
+  })
+  ipcMain.removeHandler('settings:set')
+  ipcMain.handle('settings:set', async (event, raw: unknown) => {
+    if (!settingsAllowed(event)) throw new Error('Unauthorized settings:set sender')
+    // Snapshot the old settings first: applyModelSettings uses them to prune
+    // provider blocks for removed custom backends.
+    const previous = await loadModelSettings(app.getPath('userData'))
+    const result = await saveModelSettings(app.getPath('userData'), raw)
+    if (result.ok && result.settings) {
+      // Best-effort config sync; applyModelSettings swallows its own failures.
+      await applyModelSettings(result.settings, previous)
+    }
+    return result
+  })
+  ipcMain.removeHandler('settings:test-connection')
+  ipcMain.handle('settings:test-connection', async (event, target: unknown) => {
+    if (!settingsAllowed(event)) throw new Error('Unauthorized settings:test-connection sender')
+    if (typeof target !== 'string' && (typeof target !== 'object' || target === null)) {
+      return { ok: false, error: 'target must be "orchestrator", "domAnalyzer", or a backend descriptor' }
+    }
+    return testConnection(
+      await loadModelSettings(app.getPath('userData')),
+      target as Parameters<typeof testConnection>[1]
+    )
+  })
+
   const bodies = createBodyStore(mainWindow)
   const websockets = createWebSocketCapture(mainWindow)
   interceptor = createInterceptor(mainWindow) as typeof interceptor
@@ -298,6 +334,13 @@ app.whenReady().then(async () => {
   })
 
   ipcMain.handle('ping', () => 'pong')
+
+  // Load model settings once at startup so a corrupt file is logged before the
+  // UI can ask for it, and the copilot's first session resolves against a warm
+  // cache. load() never throws, but guard anyway: settings must not block boot.
+  await loadModelSettings(app.getPath('userData')).catch((err: unknown) => {
+    console.warn('[settings] could not preload model settings:', err)
+  })
 
   createWindow()
 
