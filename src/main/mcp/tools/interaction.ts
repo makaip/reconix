@@ -239,12 +239,16 @@ const set_emulation = defineTool<EmulationInput, unknown>({
 
 import { requestQuestion } from '../../questionBridge'
 
+// An MCP tool call must not hang forever when the renderer is closed, busy, or
+// never wired to the question bridge — resolve null (cancelled) after 60s.
+const ASK_USER_TIMEOUT_MS = 60_000
+
 const ask_user = defineTool<
   { header: string; question: string; options?: string[]; multiple?: boolean },
   unknown
 >({
   name: 'ask_user',
-  description: 'Pause and ask the user a question with optional choices. Returns their answer.',
+  description: 'Pause and ask the user a question with optional choices. Returns their answer, or {cancelled:true} after a 60s timeout.',
   riskTier: 'R',
   inputSchema: {
     type: 'object',
@@ -268,12 +272,15 @@ const ask_user = defineTool<
     return { header, question, options, multiple }
   },
   execute: async (i) => {
-    const answer = await requestQuestion({
-      header: i.header,
-      question: i.question,
-      options: i.options,
-      multiple: i.multiple
-    })
+    const answer = await requestQuestion(
+      {
+        header: i.header,
+        question: i.question,
+        options: i.options,
+        multiple: i.multiple
+      },
+      ASK_USER_TIMEOUT_MS
+    )
     if (answer === null) return { cancelled: true }
     return { answer }
   }

@@ -511,22 +511,35 @@ const get_request = defineTool<{ id: string }, unknown>({
   }
 })
 
+// WebSocket *messages* are captured over CDP (Network.webSocketFrame*) by
+// src/main/websocket.ts, but that capture is owned by the inspector and is not
+// exposed on ToolContext — so this tool cannot read frames yet. What IS
+// available is the handshake URL from the network reader (webRequest sees the
+// upgrade request as resourceType 'websocket', never the frames). Report that
+// honestly instead of pretending to return messages.
 const get_websocket_messages = defineTool<Record<string, never>, unknown>({
   name: 'get_websocket_messages',
-  description: 'Best-effort: list WebSocket URLs observed on the current page.',
+  description:
+    'List WebSocket handshake URLs observed in the network log. Frame/message capture is not ' +
+    'exposed to MCP tools yet — `messages` is always empty; do not infer traffic from it.',
   riskTier: 'R',
   inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   outputSchema: { type: 'object' },
   parse: () => ({}),
   execute: async (_i, ctx) => {
-    try {
-      const raw = await ctx.cdp.evaluate(
-        'JSON.stringify([...new Set(performance.getEntriesByType("resource").filter(e=>String(e.name).startsWith("ws")).map(e=>e.name))])'
-      )
-      const urls = JSON.parse(raw)
-      return { urls: Array.isArray(urls) ? urls : [] }
-    } catch {
-      return { urls: [] }
+    const handshakes = ctx.network
+      .list()
+      .filter((r) => /websocket/i.test(r.resourceType) || /^wss?:/i.test(r.url))
+    const urls = [...new Set(handshakes.map((r) => r.url))]
+    return {
+      urls,
+      connections: urls.length,
+      messages: [],
+      messagesSupported: false,
+      note:
+        urls.length > 0
+          ? 'urls come from the network log handshake. Message/frame payloads are not implemented for MCP tools (CDP frame capture exists in the app UI only).'
+          : 'No WebSocket handshakes in the network log. Message/frame payloads are not implemented for MCP tools (CDP frame capture exists in the app UI only).'
     }
   }
 })

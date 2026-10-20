@@ -36,6 +36,17 @@ function parseRequestSpec(raw: unknown, key: string): HttpRequestSpec {
 // marker injected into the URL query (unless the caller already placed it) and
 // reports whether the marker reflects in the response body or headers. Tier M
 // because it issues a real request.
+const REFLECTION_PARAM = '_reconix_probe'
+
+/** Adds the marker as a query param without overwriting any existing key. */
+function addMarkerParam(url: string, marker: string): string {
+  const u = new URL(url)
+  let name = REFLECTION_PARAM
+  for (let n = 2; u.searchParams.has(name); n++) name = `${REFLECTION_PARAM}${n}`
+  u.searchParams.set(name, marker)
+  return u.href
+}
+
 const probe_reflection = defineTool<{ base: HttpRequestSpec; marker?: string }, unknown>({
   name: 'probe_reflection',
   description:
@@ -57,11 +68,7 @@ const probe_reflection = defineTool<{ base: HttpRequestSpec; marker?: string }, 
     const marker = i.marker && i.marker.length > 0 ? i.marker : `reconix_probe_${Math.random().toString(36).slice(2, 10)}`
     let url = i.base.url
     try {
-      const u = new URL(url)
-      if (!url.includes(marker)) {
-        if (!u.searchParams.has('probe')) u.searchParams.set('probe', marker)
-        url = u.href
-      }
+      if (!url.includes(marker)) url = addMarkerParam(url, marker)
     } catch {
       // leave url as-is
     }
@@ -86,7 +93,96 @@ const probe_reflection = defineTool<{ base: HttpRequestSpec; marker?: string }, 
 })
 
 // ── vary helper (shared by vary_parameter and test_idor) ──────────────────────
-type VaryInput = { base: HttpRequestSpec; paramName: string; values: string[]; location?: 'query' | 'body' }
+type VaryLocation = 'query' | 'body' | 'path'
+type VaryInput = { base: HttpRequestSpec; paramName: string; values: string[]; location?: VaryLocation }
+
+/** Case-insensitive header lookup (the caller's header casing is arbitrary). */
+function headerValue(headers: Record<string, string> | undefined, name: string): string | undefined {
+  if (!headers) return undefined
+  const lower = name.toLowerCase()
+  for (const [k, v] of Object.entries(headers)) if (k.toLowerCase() === lower) return v
+  return undefined
+}
+
+function parseJsonObject(body: string): Record<string, unknown> | null {
+  try {
+    const v = JSON.parse(body) as unknown
+    return typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : null
+  } catch {
+    return null
+  }
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/**
+ * Replaces one value in a URL path. Prefers an explicit `{param}` / `:param`
+ * placeholder; otherwise swaps the final id-looking segment (numeric or UUID).
+ * Throws when the path has no place to put the value — better than silently
+ * probing the same URL N times and reporting a fake "no difference".
+ */
+function setPathParam(rawUrl: string, paramName: string, value: string): string {
+  const encoded = encodeURIComponent(value)
+  // `urlString` runs the URL constructor, which percent-encodes braces, so the
+  // `{id}` convention reaches us as `%7Bid%7D` — accept both spellings.
+  const tokens = [
+    `{${paramName}}`,
+    `%7B${paramName}%7D`,
+    `%7b${paramName}%7d`,
+    `:${paramName}`
+  ]
+  for (const token of tokens) {
+    if (rawUrl.includes(token)) return rawUrl.split(token).join(encoded)
+  }
+  const segments = rawUrl.split('/')
+  const last = segments.length - 1
+  const tail = segments[last].split(/[?#]/)[0]
+  if (tail && (/^\d+$/.test(tail) || UUID_RE.test(tail))) {
+    // Keep any query/hash suffix attached to the final segment.
+    segments[last] = segments[last].replace(tail, encoded)
+    return segments.join('/')
+  }
+  throw new ToolExecError(
+    `location "path" needs a {${paramName}} or :${paramName} placeholder in the url, ` +
+      'or a numeric/UUID final path segment to vary'
+  )
+}
+
+/**
+ * Writes `value` into `paramName` while preserving the rest of the body.
+ *
+ * JSON bodies are edited through JSON.parse/stringify — never fed through
+ * URLSearchParams, which would mangle quotes and turn a JSON document into a
+ * form-encoded blob. URLSearchParams is used only for form-encoded bodies
+ * (declared by content-type, or a body that is plainly `k=v&k2=v2`). Anything
+ * else gets the raw `&name=value` append, which at least doesn't re-encode
+ * bytes the caller already sent.
+ */
+function setBodyParam(base: HttpRequestSpec, paramName: string, value: string): string {
+  const body = base.body ?? ''
+  const contentType = headerValue(base.headers, 'content-type') ?? ''
+  const jsonBody = body.trim().length > 0 ? parseJsonObject(body) : null
+
+  if (jsonBody) {
+    jsonBody[paramName] = value
+    return JSON.stringify(jsonBody)
+  }
+  if (/json/i.test(contentType) && body.trim().length > 0) {
+    // Declared JSON but unparseable — refuse to guess rather than re-encode it.
+    throw new ToolExecError('location "body": content-type is JSON but the body does not parse as a JSON object')
+  }
+
+  const formDeclared = /application\/x-www-form-urlencoded/i.test(contentType)
+  const looksForm = body.trim().length === 0 || /^[^=&\s]+=[^&]*(&[^=&\s]+=[^&]*)*$/.test(body.trim())
+  if (formDeclared || looksForm) {
+    const params = new URLSearchParams(body)
+    params.set(paramName, value)
+    return params.toString()
+  }
+  const pair = `${encodeURIComponent(paramName)}=${encodeURIComponent(value)}`
+  return body ? `${body}&${pair}` : pair
+}
+
 async function varyAcross(i: VaryInput, ctx: Parameters<Tool['execute']>[1]): Promise<unknown> {
   const cap = ctx.policy?.maxReplayBatch ?? 20
   if (i.values.length > cap) {
@@ -94,24 +190,11 @@ async function varyAcross(i: VaryInput, ctx: Parameters<Tool['execute']>[1]): Pr
   }
   const location = i.location ?? 'query'
   const buildSpec = (value: string): HttpRequestSpec => {
-    if (location === 'query') {
-      const u = new URL(i.base.url)
-      u.searchParams.set(i.paramName, value)
-      return { ...i.base, url: u.href }
-    }
-    let body = i.base.body ?? ''
-    try {
-      const params = new URLSearchParams(body)
-      if (params.has(i.paramName) || body.includes('=')) {
-        params.set(i.paramName, value)
-        body = params.toString()
-      } else {
-        body = body ? `${body}&${encodeURIComponent(i.paramName)}=${encodeURIComponent(value)}` : `${encodeURIComponent(i.paramName)}=${encodeURIComponent(value)}`
-      }
-    } catch {
-      body = body ? `${body}&${encodeURIComponent(i.paramName)}=${encodeURIComponent(value)}` : `${encodeURIComponent(i.paramName)}=${encodeURIComponent(value)}`
-    }
-    return { ...i.base, body }
+    if (location === 'path') return { ...i.base, url: setPathParam(i.base.url, i.paramName, value) }
+    if (location === 'body') return { ...i.base, body: setBodyParam(i.base, i.paramName, value) }
+    const u = new URL(i.base.url)
+    u.searchParams.set(i.paramName, value)
+    return { ...i.base, url: u.href }
   }
 
   const specs = i.values.map(buildSpec)
@@ -211,7 +294,7 @@ const reproduce = defineTool<{ traceRef: string }, unknown>({
   execute: async (i, ctx) => {
     const trace = ctx.traces.get(i.traceRef)
     if (!trace) throw new ToolExecError(`no trace for ref ${i.traceRef}`)
-    let stored: { request?: HttpRequestSpec; response?: { status: number; bodyBytes: number } }
+    let stored: { request?: HttpRequestSpec; response?: { status: number; bodyBytes: number; body?: string } }
     try {
       stored = JSON.parse(Buffer.from(trace.data).toString('utf8'))
     } catch {
@@ -220,13 +303,22 @@ const reproduce = defineTool<{ traceRef: string }, unknown>({
     if (!stored?.request?.url) throw new ToolExecError('trace is not a reqresp bundle')
     if (!ctx.scope.isInScope(stored.request.url)) throw new ToolExecError('stored request target out of scope — not sent')
     const result = await ctx.cdp.sendRequest(stored.request)
-    const matched = !!stored.response && result.status === stored.response.status && result.bodyBytes === stored.response.bodyBytes
+    // Oracle: status + exact byte length + the first 500 chars of the body.
+    // Status+size alone calls two completely different pages a "match" when
+    // their lengths coincidentally agree; the body head catches that.
+    const expectedHead = typeof stored.response?.body === 'string' ? stored.response.body.slice(0, 500) : null
+    const actualHead = result.body.slice(0, 500)
+    const statusMatches = !!stored.response && result.status === stored.response.status
+    const bytesMatch = !!stored.response && result.bodyBytes === stored.response.bodyBytes
+    const bodyMatches = expectedHead === null || expectedHead === actualHead
+    const matched = statusMatches && bytesMatch && bodyMatches
     const newRef = await ctx.traces.save('reqresp', JSON.stringify({ request: stored.request, response: result, reproducedFrom: i.traceRef }))
     return {
       matched,
       traceRef: newRef,
-      expected: stored.response ? { status: stored.response.status, bodyBytes: stored.response.bodyBytes } : null,
-      actual: { status: result.status, statusText: result.statusText, bodyBytes: result.bodyBytes, durationMs: result.durationMs }
+      expected: stored.response ? { status: stored.response.status, bodyBytes: stored.response.bodyBytes, bodyHead: expectedHead } : null,
+      actual: { status: result.status, statusText: result.statusText, bodyBytes: result.bodyBytes, durationMs: result.durationMs, bodyHead: actualHead },
+      checks: { status: statusMatches, bodyBytes: bytesMatch, bodyHead: bodyMatches }
     }
   }
 })
@@ -261,6 +353,42 @@ const RUN_TOOL_ALLOWLIST = (process.env.RECONIX_RUN_TOOL_ALLOWLIST ?? '')
   .filter(Boolean)
 const RUN_TOOL_TIMEOUT_MS = 60_000
 const RUN_TOOL_MAX_OUTPUT = 1_000_000
+
+/**
+ * Kills the whole process tree. A bare child.kill() only signals the direct
+ * child, so a wrapper script (nmap -> sh -> helper, any `sh -c`) leaves
+ * grandchildren running past the timeout. On POSIX the child is spawned
+ * detached, which makes it a process-group leader, so a negative pid signals
+ * the group; on Windows taskkill /T walks the tree.
+ */
+function killProcessTree(child: import('node:child_process').ChildProcess): void {
+  const pid = child.pid
+  if (pid === undefined) return
+  if (process.platform === 'win32') {
+    try {
+      const killer = spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true })
+      killer.on('error', () => {
+        try { child.kill('SIGKILL') } catch { /* already gone */ }
+      })
+    } catch {
+      try { child.kill('SIGKILL') } catch { /* already gone */ }
+    }
+    return
+  }
+  try {
+    process.kill(-pid, 'SIGKILL')
+  } catch {
+    try { child.kill('SIGKILL') } catch { /* already gone */ }
+  }
+}
+
+/** Appends a chunk without exceeding the byte cap; returns the new total. */
+function appendCapped(chunks: Buffer[], total: number, chunk: Buffer): number {
+  if (total >= RUN_TOOL_MAX_OUTPUT) return total
+  const take = Math.min(chunk.length, RUN_TOOL_MAX_OUTPUT - total)
+  chunks.push(chunk.subarray(0, take))
+  return total + take
+}
 
 const run_tool = defineTool<{ binary: string; args?: string[]; timeoutMs?: number }, unknown>({
   name: 'run_tool',
@@ -299,28 +427,61 @@ const run_tool = defineTool<{ binary: string; args?: string[]; timeoutMs?: numbe
     }
     const timeout = i.timeoutMs ?? RUN_TOOL_TIMEOUT_MS
     return new Promise((resolve, reject) => {
-      const child = spawn(i.binary, i.args ?? [], { shell: false, stdio: ['ignore', 'pipe', 'pipe'] })
-      let stdout = ''
-      let stderr = ''
+      const child = spawn(i.binary, i.args ?? [], {
+        shell: false,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        // POSIX: own process group so timeout can signal the whole tree.
+        detached: process.platform !== 'win32',
+        windowsHide: true
+      })
+      const stdoutChunks: Buffer[] = []
+      const stderrChunks: Buffer[] = []
+      let stdoutBytes = 0
+      let stderrBytes = 0
       let killed = false
+      let settled = false
+      let grace: NodeJS.Timeout | null = null
+
+      const finish = (code: number | null): void => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        if (grace) clearTimeout(grace)
+        // Decode once, after all chunks are in: per-chunk slicing split
+        // multi-byte UTF-8 sequences at the cap and produced mojibake.
+        resolve({
+          exitCode: code,
+          stdout: Buffer.concat(stdoutChunks).toString('utf8'),
+          stderr: Buffer.concat(stderrChunks).toString('utf8'),
+          stdoutTruncated: stdoutBytes >= RUN_TOOL_MAX_OUTPUT,
+          stderrTruncated: stderrBytes >= RUN_TOOL_MAX_OUTPUT,
+          timedOut: killed
+        })
+      }
+
       const timer = setTimeout(() => {
         killed = true
-        try { child.kill('SIGKILL') } catch { /* ignore */ }
+        killProcessTree(child)
+        // A grandchild holding the pipes open can delay 'close' forever; report
+        // what we captured rather than leaving the MCP call hanging.
+        grace = setTimeout(() => finish(null), 1_000)
+        grace.unref?.()
       }, timeout)
+
       child.stdout.on('data', (chunk: Buffer) => {
-        if (stdout.length < RUN_TOOL_MAX_OUTPUT) stdout += chunk.toString('utf8').slice(0, RUN_TOOL_MAX_OUTPUT - stdout.length)
+        stdoutBytes = appendCapped(stdoutChunks, stdoutBytes, chunk)
       })
       child.stderr.on('data', (chunk: Buffer) => {
-        if (stderr.length < RUN_TOOL_MAX_OUTPUT) stderr += chunk.toString('utf8').slice(0, RUN_TOOL_MAX_OUTPUT - stderr.length)
+        stderrBytes = appendCapped(stderrChunks, stderrBytes, chunk)
       })
       child.on('error', (err) => {
+        if (settled) return
+        settled = true
         clearTimeout(timer)
+        if (grace) clearTimeout(grace)
         reject(new ToolExecError(`run_tool: failed to spawn "${i.binary}": ${err.message}`))
       })
-      child.on('close', (code) => {
-        clearTimeout(timer)
-        resolve({ exitCode: code, stdout, stderr, timedOut: killed })
-      })
+      child.on('close', (code) => finish(code))
     })
   }
 })
@@ -358,21 +519,45 @@ const compare_roles = defineTool<
   },
   target: (i) => i.base.url,
   execute: async (i, ctx) => {
-    const send = async (token: string) => {
+    // One row per role, in order. A role that is out of scope (or fails to
+    // send) gets its own `error` row instead of aborting the whole comparison —
+    // matching replay_batch, so the agent still sees the role that did run.
+    const send = async (role: 'A' | 'B', token: string): Promise<Record<string, unknown>> => {
       const hn = i.headerName ?? 'Cookie'
       const spec = { ...i.base, headers: { ...(i.base.headers ?? {}), [hn]: token } }
-      if (!ctx.scope.isInScope(spec.url)) throw new ToolExecError('target out of scope — not sent')
-      const r = await ctx.cdp.sendRequest(spec)
-      const ref = await ctx.traces.save('reqresp', JSON.stringify({ request: spec, response: r, role: token }))
-      return { status: r.status, statusText: r.statusText, bodyBytes: r.bodyBytes, durationMs: r.durationMs, bodyPreview: clampString(r.body, 200), bodyRef: ref }
+      if (!ctx.scope.isInScope(spec.url)) {
+        return { role, url: spec.url, error: 'out of scope — not sent' }
+      }
+      try {
+        const r = await ctx.cdp.sendRequest(spec)
+        const ref = await ctx.traces.save('reqresp', JSON.stringify({ request: spec, response: r, role: token }))
+        return {
+          role,
+          url: spec.url,
+          status: r.status,
+          statusText: r.statusText,
+          bodyBytes: r.bodyBytes,
+          durationMs: r.durationMs,
+          bodyPreview: clampString(r.body, 200),
+          bodyHead: r.body.slice(0, 500),
+          bodyRef: ref
+        }
+      } catch (err) {
+        return { role, url: spec.url, error: (err as Error)?.message ?? String(err) }
+      }
     }
-    const [a, b] = await Promise.all([send(i.roleA), send(i.roleB)])
+    const [a, b] = await Promise.all([send('A', i.roleA), send('B', i.roleB)])
+    const both = typeof a.status === 'number' && typeof b.status === 'number'
+    const statusChanged = both ? a.status !== b.status : null
+    const bodyBytesChanged = both ? a.bodyBytes !== b.bodyBytes : null
+    const bodyChanged = both ? a.bodyHead !== b.bodyHead : null
     return {
-      roleA: a,
-      roleB: b,
-      statusChanged: a.status !== b.status,
-      bodyBytesChanged: a.bodyBytes !== b.bodyBytes,
-      anomalous: a.status !== b.status || a.bodyBytes !== b.bodyBytes
+      count: 2,
+      roles: [a, b],
+      statusChanged,
+      bodyBytesChanged,
+      bodyChanged,
+      anomalous: both ? statusChanged || bodyBytesChanged || bodyChanged : null
     }
   }
 })
@@ -402,19 +587,31 @@ const check_cors = defineTool<{ url: string }, unknown>({
 })
 
 // ── test_idor ─────────────────────────────────────────────────────────────────
-const test_idor = defineTool<{ base: HttpRequestSpec; paramName: string; values: string[] }, unknown>({
+const test_idor = defineTool<{ base: HttpRequestSpec; paramName: string; values: string[]; location?: VaryLocation }, unknown>({
   name: 'test_idor',
-  description: 'IDOR probe: vary an ID-like parameter and flag responses that change (access control weakness).',
+  description: 'IDOR probe: vary an ID-like parameter (query, body, or {id}/:id path segment) and flag responses that change (access control weakness).',
   riskTier: 'M',
   inputSchema: { type: 'object', required: ['base', 'paramName', 'values'], properties: {
     base: { type: 'object', required: ['url'], properties: { url: { type: 'string' }, method: { type: 'string' }, headers: { type: 'object' }, body: { type: 'string' } } },
-    paramName: { type: 'string' }, values: { type: 'array', items: { type: 'string' } }
+    paramName: { type: 'string' }, values: { type: 'array', items: { type: 'string' } },
+    location: { type: 'string', enum: ['query', 'body', 'path'] }
   }, additionalProperties: false },
   outputSchema: { type: 'object' },
-  parse: (raw) => ({ base: parseRequestSpec(raw, 'base'), paramName: str(raw, 'paramName'), values: strArray(raw, 'values') }),
+  parse: (raw) => {
+    const location = optStr(raw, 'location') ?? 'query'
+    if (location !== 'query' && location !== 'body' && location !== 'path') {
+      throw new ToolInputError('"location" must be "query", "body", or "path"')
+    }
+    return {
+      base: parseRequestSpec(raw, 'base'),
+      paramName: str(raw, 'paramName'),
+      values: strArray(raw, 'values'),
+      location: location as VaryLocation
+    }
+  },
   target: (i) => i.base.url,
   execute: async (i, ctx) => {
-    const out = await varyAcross({ ...i, location: 'query' }, ctx)
+    const out = await varyAcross({ ...i, location: i.location ?? 'query' }, ctx)
     return { probe: 'idor', ...(out as Record<string, unknown>) }
   }
 })
