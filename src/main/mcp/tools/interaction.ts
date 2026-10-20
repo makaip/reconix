@@ -14,7 +14,10 @@ async function evalJson<T>(ctx: ToolContext, expression: string): Promise<T> {
   try {
     return JSON.parse(raw) as T
   } catch {
-    throw new ToolExecError(`page returned non-JSON result: ${raw.slice(0, 200)}`)
+    throw new ToolExecError(
+      `page returned non-JSON result: ${raw.slice(0, 200)} — ` +
+        'the page may still be loading; check get_page_info or navigate and retry'
+    )
   }
 }
 
@@ -47,10 +50,20 @@ const click = defineTool<{ selector: string }, unknown>({
   parse: (raw) => ({ selector: str(raw, 'selector') }),
   execute: async (i, ctx) => {
     const sel = JSON.stringify(i.selector)
-    const r = await ctx.cdp.evaluate(
-      `(()=>{const el=document.querySelector(${sel});if(!el)return false;el.click();return true;})()`
+    // Tag page-side failures instead of collapsing them into a bare false, so
+    // the caller learns whether nothing matched or the selector was malformed.
+    const r = await evalJson<true | { error: string }>(
+      ctx,
+      `(()=>{let el;try{el=document.querySelector(${sel})}catch(e){return {error:'invalid selector: '+e.message}}
+        if(!el)return {error:'no element matched selector'};el.click();return true;})()`
     )
-    return { ok: r === 'true' }
+    if (r === true) return { ok: true }
+    if (/^invalid selector/.test(r.error)) throw new ToolInputError(r.error)
+    return {
+      ok: false,
+      reason: `no element matched selector "${i.selector}"`,
+      nextStep: 'inspect the DOM with query_dom, or wait for the element to render and retry'
+    }
   }
 })
 
@@ -69,13 +82,25 @@ const fill = defineTool<{ selector: string; value: string }, unknown>({
   execute: async (i, ctx) => {
     const sel = JSON.stringify(i.selector)
     const val = JSON.stringify(i.value)
-    const r = await ctx.cdp.evaluate(
-      `(()=>{const el=document.querySelector(${sel});if(!el)return false;if(el.tagName==='INPUT'&&el.type==='file'&&${val}!=='')return 'file-input';el.value=${val};el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}));el.dispatchEvent(new Event('blur',{bubbles:true}));return true;})()`
+    const r = await evalJson<{ ok: true } | { error: string }>(
+      ctx,
+      `(()=>{let el;try{el=document.querySelector(${sel})}catch(e){return {error:'invalid selector: '+e.message}}
+        if(!el)return {error:'no element matched selector'};
+        if(el.tagName==='INPUT'&&el.type==='file'&&${val}!=='')return {error:'file-input'};
+        el.value=${val};el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}));el.dispatchEvent(new Event('blur',{bubbles:true}));return {ok:true};})()`
     )
-    if (r === JSON.stringify('file-input')) {
-      throw new ToolInputError('fill cannot upload files or assign filenames to file inputs. Use reconix_upload_files with the selector and actual file contents, or an approved multipart request through replay_request. Do not repeat fill or click the file picker for this approach.')
+    if ('error' in r) {
+      if (r.error === 'file-input') {
+        throw new ToolInputError('fill cannot upload files or assign filenames to file inputs. Use reconix_upload_files with the selector and actual file contents, or an approved multipart request through replay_request. Do not repeat fill or click the file picker for this approach.')
+      }
+      if (/^invalid selector/.test(r.error)) throw new ToolInputError(r.error)
+      return {
+        ok: false,
+        reason: `no element matched selector "${i.selector}"`,
+        nextStep: 'inspect the DOM with query_dom and pass a selector that resolves to the input'
+      }
     }
-    return { ok: r === 'true' }
+    return r
   }
 })
 
@@ -126,7 +151,7 @@ const query_dom = defineTool<{ selector: string }, unknown>({
     // querySelectorAll can throw SyntaxError on a bad selector — catch it in
     // the page and hand back a tagged result so the tool reports a clean input
     // error rather than a raw page exception.
-    return evalJson<{ nodes: unknown[] } | { error: string }>(
+    return evalJson<{ total: number; truncated: boolean; nodes: unknown[] } | { error: string }>(
       ctx,
       // Caps (count + per-field length) keep a broad selector from overflowing
       // the context window; `total` tells the agent how many actually matched.
@@ -142,8 +167,19 @@ const query_dom = defineTool<{ selector: string }, unknown>({
           html:(el.outerHTML||'').slice(0,200)
         }))}})()`
     ).then((r) => {
-      if ('error' in r) throw new ToolInputError(r.error)
-      return r
+      if ('error' in r) throw new ToolInputError(`${r.error} — inspect the DOM with a simpler selector (e.g. "#id", "form input")`)
+      const returned = r.nodes.length
+      return {
+        ...r,
+        returned,
+        omitted: Math.max(0, r.total - returned),
+        note:
+          r.total === 0
+            ? 'no elements matched this selector; the node may not exist yet (wait/re-render) or live in an iframe or shadow root'
+            : r.truncated
+              ? `only the first ${returned} of ${r.total} matches are included; narrow the selector for the rest`
+              : undefined
+      }
     })
   }
 })
@@ -163,11 +199,16 @@ const set_dom = defineTool<{ selector: string; html: string }, unknown>({
   execute: async (i, ctx) => {
     const sel = JSON.stringify(i.selector)
     const html = JSON.stringify(i.html)
-    const r = await ctx.cdp.evaluate(
-      `(()=>{const el=document.querySelector(${sel});if(!el)return false;el.innerHTML=${html};return true;})()`
+    const r = await evalJson<true | { error: string }>(
+      ctx,
+      `(()=>{let el;try{el=document.querySelector(${sel})}catch(e){return {error:'invalid selector: '+e.message}}
+        if(!el)return {error:'no element matched selector'};el.innerHTML=${html};return true;})()`
     )
-    if (r !== 'true') throw new ToolExecError(`no element matched selector: ${i.selector}`)
-    return { ok: true }
+    if (r === true) return { ok: true }
+    if (/^invalid selector/.test(r.error)) throw new ToolInputError(r.error)
+    throw new ToolExecError(
+      `no element matched selector: ${i.selector} — inspect the DOM with query_dom and retry with a selector that resolves`
+    )
   }
 })
 
@@ -281,7 +322,12 @@ const ask_user = defineTool<
       },
       ASK_USER_TIMEOUT_MS
     )
-    if (answer === null) return { cancelled: true }
+    if (answer === null) {
+      return {
+        cancelled: true,
+        reason: 'no answer received within 60s (the UI may be closed, busy, or the question was dismissed)'
+      }
+    }
     return { answer }
   }
 })

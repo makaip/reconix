@@ -87,7 +87,11 @@ const probe_reflection = defineTool<{ base: HttpRequestSpec; marker?: string }, 
       inHeaders,
       marker,
       response: { status: result.status, statusText: result.statusText, bodyBytes: result.bodyBytes, durationMs: result.durationMs },
-      bodyRef
+      bodyRef,
+      note:
+        inBody || inHeaders.length > 0
+          ? 'marker reflected — follow up with an encoding/context-specific payload to confirm exploitability'
+          : 'marker did not reflect in the body or response headers — try a different parameter name, location (body), or an encoding variant before ruling reflection out'
     }
   }
 })
@@ -236,6 +240,7 @@ async function varyAcross(i: VaryInput, ctx: Parameters<Tool['execute']>[1]): Pr
   const baseline = results.find((r): r is Record<string, unknown> & { status: number } => typeof r?.status === 'number')
   const statuses: Record<string, number> = {}
   let errors = 0
+  let outOfScope = 0
   for (const r of results) {
     if (typeof r?.status === 'number') {
       statuses[r.status] = (statuses[r.status] ?? 0) + 1
@@ -244,9 +249,25 @@ async function varyAcross(i: VaryInput, ctx: Parameters<Tool['execute']>[1]): Pr
       }
     } else {
       errors++
+      if (r?.error === 'out of scope — not sent') outOfScope++
     }
   }
-  return { count: results.length, paramName: i.paramName, location, results, summary: { statuses, errors } }
+  const sent = results.length - errors
+  return {
+    count: results.length,
+    paramName: i.paramName,
+    location,
+    results,
+    summary: { statuses, errors, sent, outOfScope },
+    note:
+      results.length > 0 && sent === 0
+        ? outOfScope === results.length
+          ? `no variants were sent: all ${results.length} URLs were out of scope — check base.url against the engagement scope`
+          : `no variants were sent: every request failed — inspect the per-row errors (first: ${String(results[0]?.error ?? 'unknown')})`
+        : errors > 0
+          ? `${errors} of ${results.length} variants failed; inspect their error rows before drawing conclusions`
+          : undefined
+  }
 }
 
 // ── vary_parameter ────────────────────────────────────────────────────────────
@@ -312,9 +333,20 @@ const reproduce = defineTool<{ traceRef: string }, unknown>({
     const bytesMatch = !!stored.response && result.bodyBytes === stored.response.bodyBytes
     const bodyMatches = expectedHead === null || expectedHead === actualHead
     const matched = statusMatches && bytesMatch && bodyMatches
+    const mismatches = [
+      !statusMatches ? `status ${stored.response?.status} → ${result.status}` : null,
+      !bytesMatch ? `body bytes ${stored.response?.bodyBytes} → ${result.bodyBytes}` : null,
+      !bodyMatches ? 'body head differs' : null
+    ].filter((x): x is string => x !== null)
+    const reason = matched
+      ? undefined
+      : !stored.response
+        ? 'stored trace has no baseline response to compare against'
+        : `response no longer matches: ${mismatches.join('; ')}`
     const newRef = await ctx.traces.save('reqresp', JSON.stringify({ request: stored.request, response: result, reproducedFrom: i.traceRef }))
     return {
       matched,
+      reason,
       traceRef: newRef,
       expected: stored.response ? { status: stored.response.status, bodyBytes: stored.response.bodyBytes, bodyHead: expectedHead } : null,
       actual: { status: result.status, statusText: result.statusText, bodyBytes: result.bodyBytes, durationMs: result.durationMs, bodyHead: actualHead },
@@ -557,7 +589,12 @@ const compare_roles = defineTool<
       statusChanged,
       bodyBytesChanged,
       bodyChanged,
-      anomalous: both ? statusChanged || bodyBytesChanged || bodyChanged : null
+      anomalous: both ? statusChanged || bodyBytesChanged || bodyChanged : null,
+      note: both
+        ? statusChanged || bodyBytesChanged || bodyChanged
+          ? 'responses differ between roles — confirm the difference exposes data the other role should not see'
+          : 'responses are identical for both roles — no evidence of a role-based access difference on this request'
+        : `comparison incomplete: role ${typeof a.status === 'number' ? 'B' : 'A'} did not return a response (${String(a.error ?? b.error ?? 'unknown error')}) — fix that role's token/scope and retry`
     }
   }
 })
@@ -581,7 +618,13 @@ const check_cors = defineTool<{ url: string }, unknown>({
       reflectedOrigin: acao === 'https://evil.example' || acao === '*',
       allowCredentials: acac === 'true',
       acao, acac,
-      vulnerable: acao === 'https://evil.example' && acac === 'true'
+      vulnerable: acao === 'https://evil.example' && acac === 'true',
+      note:
+        acao === undefined
+          ? 'no Access-Control-Allow-Origin header on the response — CORS is not enabled for this endpoint (or the response was an error/cached)'
+          : acao === 'https://evil.example' && acac === 'true'
+            ? 'arbitrary Origin reflected with credentials — strong CORS misconfiguration signal'
+            : `ACAO is ${String(acao)}${acac ? `, ACAC ${String(acac)}` : ''} — not the exploitable reflect+credentials combination`
     }
   }
 })

@@ -32,10 +32,18 @@ const crawl_start = defineTool<{ url: string; maxDepth?: number; maxPages?: numb
   // path with no boundary (every followed link is re-checked by the spider).
   target: (i) => i.url,
   execute: async (i, ctx) => {
-    if (!ctx.crawler) throw new ToolExecError('crawler not available')
+    if (!ctx.crawler) {
+      throw new ToolExecError(
+        'crawler not available in this build/surface — walk the target manually with navigate + list_links, then get_dom_extract on each page'
+      )
+    }
     const state = await ctx.crawler.start(i)
     if (state && (state as { stoppedReason?: string }).stoppedReason === 'error') {
-      throw new ToolExecError(`crawl_start failed: ${(state as { error?: string }).error ?? 'invalid url'}`, false)
+      throw new ToolExecError(
+        `crawl_start failed: ${(state as { error?: string }).error ?? 'invalid url'} — ` +
+          'verify the URL is http(s) and inside the engagement scope, then retry',
+        false
+      )
     }
     return state
   }
@@ -49,7 +57,11 @@ const crawl_status = defineTool<Record<string, never>, unknown>({
   outputSchema: { type: 'object' },
   parse: () => ({}),
   execute: async (_i, ctx) => {
-    if (!ctx.crawler) throw new ToolExecError('crawler not available')
+    if (!ctx.crawler) {
+      throw new ToolExecError(
+        'crawler not available in this build/surface — no crawl can be running; use navigate + list_links instead'
+      )
+    }
     return ctx.crawler.getState()
   }
 })
@@ -62,7 +74,11 @@ const crawl_stop = defineTool<Record<string, never>, unknown>({
   outputSchema: { type: 'object' },
   parse: () => ({}),
   execute: async (_i, ctx) => {
-    if (!ctx.crawler) throw new ToolExecError('crawler not available')
+    if (!ctx.crawler) {
+      throw new ToolExecError(
+        'crawler not available in this build/surface — there is no crawl to stop; use navigate + list_links instead'
+      )
+    }
     return ctx.crawler.stop()
   }
 })

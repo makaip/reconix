@@ -42,7 +42,11 @@ function bridge(cap: CapabilityTool<unknown, unknown>): Tool {
     outputSchema: cap.outputSchema ?? { type: 'object' },
     parse: (raw) => {
       const res = cap.validateInput(raw)
-      if (!res.ok) throw new ToolInputError(res.errors.join('; '))
+      if (!res.ok) {
+        throw new ToolInputError(
+          `${res.errors.join('; ')} — check the tool's inputSchema for required fields and types`
+        )
+      }
       return res.value
     },
     execute: async (input) => cap.handler(input)

@@ -229,6 +229,8 @@ const replay_request = defineTool<{ base: RequestSpec; overrides?: RequestOverri
       'reqresp',
       JSON.stringify({ request: spec, response: result })
     )
+    const body = clampString(result.body)
+    const bodyTruncated = body.length < result.body.length
     return {
       response: {
         status: result.status,
@@ -236,9 +238,13 @@ const replay_request = defineTool<{ base: RequestSpec; overrides?: RequestOverri
         headers: result.headers,
         durationMs: result.durationMs,
         bodyBytes: result.bodyBytes,
-        body: clampString(result.body)
+        body,
+        bodyTruncated
       },
-      bodyRef
+      bodyRef,
+      note: bodyTruncated
+        ? `inline body shows the first ${body.length} chars of ${result.body.length}; read the full response from bodyRef (get_trace) if needed`
+        : undefined
     }
   }
 })
@@ -406,15 +412,31 @@ const replay_batch = defineTool<{ base: RequestSpec; variants: RequestOverrides[
     const baseline = results.find((r): r is Extract<BatchRow, { status: number }> => 'status' in r)
     const statuses: Record<string, number> = {}
     let errors = 0
+    let outOfScope = 0
     for (const r of results) {
       if ('status' in r) {
         statuses[r.status] = (statuses[r.status] ?? 0) + 1
         if (baseline) r.anomalous = r.status !== baseline.status || r.bodyBytes !== baseline.bodyBytes
       } else {
         errors++
+        if (r.error === 'out of scope — not sent') outOfScope++
       }
     }
-    return { count: results.length, results, summary: { statuses, errors } }
+    const sent = results.length - errors
+    const firstError = results.find((r): r is Extract<BatchRow, { error: string }> => 'error' in r)?.error
+    return {
+      count: results.length,
+      results,
+      summary: { statuses, errors, sent, outOfScope },
+      note:
+        results.length > 0 && sent === 0
+          ? outOfScope === results.length
+            ? `no variants were sent: all ${results.length} URLs were out of scope — check base.url/variants against the engagement scope`
+            : `no variants were sent: every request failed — inspect the per-row errors (first: ${firstError ?? 'unknown'})`
+          : errors > 0
+            ? `${errors} of ${results.length} variants failed; inspect their error rows before drawing conclusions`
+            : undefined
+    }
   }
 })
 
@@ -469,11 +491,22 @@ const get_network_log = defineTool<{ sinceId?: string }, unknown>({
     // entries were dropped so it knows to paginate rather than assume it saw all.
     const all = ctx.network.list(i.sinceId)
     const entries = all.slice(-MAX_LIST_ITEMS).map(toRow)
+    const omitted = Math.max(0, all.length - entries.length)
     return {
       entries,
       total: all.length,
-      omitted: Math.max(0, all.length - entries.length),
-      nextCursor: entries.length > 0 ? entries[entries.length - 1].id : (i.sinceId ?? null)
+      returned: entries.length,
+      omitted,
+      truncated: omitted > 0,
+      nextCursor: entries.length > 0 ? entries[entries.length - 1].id : (i.sinceId ?? null),
+      note:
+        all.length === 0
+          ? i.sinceId
+            ? `no new requests since "${i.sinceId}" — the page may predate capture or the action produced no traffic`
+            : 'no requests captured for this tab yet — the page may predate capture; navigate or reload to start recording'
+          : omitted > 0
+            ? `only the most recent ${entries.length} of ${all.length} entries are included; page back with sinceId for older ones`
+            : undefined
     }
   }
 })
@@ -492,7 +525,12 @@ const get_request = defineTool<{ id: string }, unknown>({
   parse: (raw) => ({ id: str(raw, 'id') }),
   execute: async (i, ctx) => {
     const req = ctx.network.get(i.id)
-    if (!req) throw new ToolExecError(`no request with id "${i.id}" (it may have aged out)`)
+    if (!req) {
+      throw new ToolExecError(
+        `no request with id "${i.id}" (it may have aged out) — ` +
+          'list recent ids with get_network_log and retry with one of its entries'
+      )
+    }
     // Clamp long header values (cookies, tokens) so one row stays within budget
     // and serializes as valid JSON rather than being cut mid-object upstream.
     const trimValues = <V>(h: Record<string, V> | undefined): Record<string, V> | undefined =>
@@ -564,9 +602,19 @@ export const networkTools: Tool[] = [
       return { raw: r.raw }
     },
     execute: async (i, ctx) => {
-      if (!ctx.interceptor) throw new ToolExecError('interceptor not available')
+      if (!ctx.interceptor) {
+        throw new ToolExecError(
+          'interceptor not available in this build/surface — inspect traffic with get_network_log/get_request instead'
+        )
+      }
       const rule = ctx.interceptor.save(i.raw)
-      if (rule === null) throw new ToolExecError('set_intercept_rule: invalid rule payload', false)
+      if (rule === null) {
+        throw new ToolExecError(
+          'set_intercept_rule: invalid rule payload — expected { urlPattern/match, replacement?, enabled? }; ' +
+            'check the existing rules via the interceptor UI',
+          false
+        )
+      }
       return { rule }
     }
   }) as Tool

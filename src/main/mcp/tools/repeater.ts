@@ -11,7 +11,11 @@ const repeater_list = defineTool<Record<string, never>, unknown>({
   outputSchema: { type: 'object' },
   parse: () => ({}),
   execute: async (_i, ctx) => {
-    if (!ctx.repeater) throw new ToolExecError('repeater not available')
+    if (!ctx.repeater) {
+      throw new ToolExecError(
+        'repeater not available in this build/surface — use replay_request to send an ad-hoc request instead'
+      )
+    }
     return ctx.repeater.list()
   }
 })
@@ -25,12 +29,25 @@ const repeater_save = defineTool<{ raw: unknown }, unknown>({
   outputSchema: { type: 'object' },
   parse: (raw) => {
     const r = raw as { raw?: unknown }
-    return { raw: r?.raw }
+    if (typeof r?.raw !== 'object' || r.raw === null || Array.isArray(r.raw)) {
+      throw new ToolInputError('"raw" must be an object: { name, tags?, request: { url, method?, headers?, body? } }')
+    }
+    return { raw: r.raw }
   },
   execute: async (i, ctx) => {
-    if (!ctx.repeater) throw new ToolExecError('repeater not available')
+    if (!ctx.repeater) {
+      throw new ToolExecError(
+        'repeater not available in this build/surface — use replay_request to send an ad-hoc request instead'
+      )
+    }
     const saved = ctx.repeater.save(i.raw)
-    if (saved === null) throw new ToolExecError('repeater_save: invalid payload or unknown id', false)
+    if (saved === null) {
+      throw new ToolExecError(
+        'repeater_save: invalid payload or unknown id — expected { name, tags?, request: { url, method?, headers?, body? } }; ' +
+          'call repeater_list to see saved ids',
+        false
+      )
+    }
     return saved
   }
 })
@@ -47,9 +64,18 @@ const repeater_send = defineTool<{ id: string }, unknown>({
     return { id }
   },
   execute: async (i, ctx) => {
-    if (!ctx.repeater) throw new ToolExecError('repeater not available')
+    if (!ctx.repeater) {
+      throw new ToolExecError(
+        'repeater not available in this build/surface — use replay_request to send an ad-hoc request instead'
+      )
+    }
     const result = await ctx.repeater.run(i.id)
-    if (result === null) throw new ToolExecError(`repeater_send: no saved request with id ${i.id}`, false)
+    if (result === null) {
+      throw new ToolExecError(
+        `repeater_send: no saved request with id ${i.id} — call repeater_list for valid ids, or save one with repeater_save`,
+        false
+      )
+    }
     return result
   }
 })

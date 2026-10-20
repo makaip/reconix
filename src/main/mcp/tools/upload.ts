@@ -74,11 +74,11 @@ export const uploadFiles = defineTool<UploadInput, unknown>({
     const raw = await ctx.cdp.evaluate(`(()=>{
       let el;
       try { el=document.querySelector(${JSON.stringify(input.selector)}); }
-      catch { return {error:'Invalid CSS selector. Inspect the DOM and use a valid file-input selector.'}; }
-      if(!el || el.tagName!=='INPUT' || el.type!=='file') return {error:'Selector must match an input[type=file]. Use query_dom to locate it.'};
-      if(el.matches(':disabled')) return {error:'File input is disabled.'};
+      catch { return {error:'Invalid CSS selector. Inspect the DOM with query_dom and use a valid input[type=file] selector.'}; }
+      if(!el || el.tagName!=='INPUT' || el.type!=='file') return {error:'Selector must match an input[type=file]. Use query_dom with selector "input[type=file]" to locate it.'};
+      if(el.matches(':disabled')) return {error:'File input is disabled. Enable it (or wait for the page to finish loading) before uploading.'};
       const files=${JSON.stringify(input.files)};
-      if(files.length>1 && !el.multiple) return {error:'This file input accepts only one file.'};
+      if(files.length>1 && !el.multiple) return {error:'This file input accepts only one file. Send a single file, or choose a multiple file input.'};
       const transfer=new DataTransfer();
       for(const file of files){
         const bytes=Uint8Array.from(atob(file.base64),c=>c.charCodeAt(0));
@@ -90,8 +90,16 @@ export const uploadFiles = defineTool<UploadInput, unknown>({
       el.dispatchEvent(new Event('change',{bubbles:true}));
       return {ok:true,files:selected};
     })()`)
-    const result = JSON.parse(raw) as { error?: string }
-    if (result.error) throw new ToolExecError(result.error)
+    let result: { error?: string }
+    try {
+      result = JSON.parse(raw) as { error?: string }
+    } catch {
+      throw new ToolExecError(
+        `upload_files: page returned a non-JSON result (${String(raw).slice(0, 200)}). ` +
+          'The page may have navigated — inspect it with get_page_info and retry.'
+      )
+    }
+    if (result.error) throw new ToolExecError(`${result.error} (selector: ${input.selector})`)
     return result
   }
 })

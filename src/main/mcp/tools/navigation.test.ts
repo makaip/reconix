@@ -169,7 +169,7 @@ describe('interaction: query_dom', () => {
     })
     const res = await invokeTool(tool('query_dom'), { selector: 'a' }, ctx, audit)
     expect(res.ok).toBe(true)
-    expect(res.output).toEqual({ nodes: [{ tag: 'a', id: 'x' }] })
+    expect(res.output).toMatchObject({ nodes: [{ tag: 'a', id: 'x' }] })
   })
 
   it('reports an invalid selector as an input error, not a crash', async () => {
