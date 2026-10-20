@@ -48,6 +48,7 @@ export const submitForm = defineTool<SubmitInput, unknown>({
       // not flushed. Treat a disabled button as fatal only when the underlying
       // form is also invalid; otherwise submit through the form itself (no
       // submitter) so the action still fires. Track it so the caller knows.
+      const proto = HTMLFormElement.prototype
       let submitterDisabled = false
       if (button && button.matches(':disabled')) {
         const formValid = Object.getOwnPropertyDescriptor(proto, 'noValidate').get.call(form)
@@ -59,7 +60,6 @@ export const submitForm = defineTool<SubmitInput, unknown>({
         }
         submitterDisabled = true
       }
-      const proto=HTMLFormElement.prototype;
       const destination=()=>({
         action:button && button.hasAttribute('formaction') ? button.formAction : Object.getOwnPropertyDescriptor(proto,'action').get.call(form),
         method:button && button.hasAttribute('formmethod') ? button.formMethod : Object.getOwnPropertyDescriptor(proto,'method').get.call(form)

@@ -550,6 +550,7 @@ export const networkTools: Tool[] = [
     execute: async (i, ctx) => {
       if (!ctx.interceptor) throw new ToolExecError('interceptor not available')
       const rule = ctx.interceptor.save(i.raw)
+      if (rule === null) throw new ToolExecError('set_intercept_rule: invalid rule payload', false)
       return { rule }
     }
   }) as Tool

@@ -1,7 +1,7 @@
 // API.md §3.9 — Crawler. Exposes the app's scope-aware spider (§11.4) to the
 // copilot. Start is tier M (it issues many GETs); status/results are read-only.
 import { defineTool, type Tool } from '../tool'
-import { ToolExecError } from '../errors'
+import { ToolExecError, ToolInputError } from '../errors'
 
 const crawl_start = defineTool<{ url: string; maxDepth?: number; maxPages?: number }, unknown>({
   name: 'crawl_start',
@@ -20,15 +20,20 @@ const crawl_start = defineTool<{ url: string; maxDepth?: number; maxPages?: numb
   outputSchema: { type: 'object' },
   parse: (raw) => {
     const r = raw as Record<string, unknown>
+    if (typeof r.url !== 'string' || r.url === '') throw new ToolInputError('"url" must be a non-empty string')
     return {
-      url: typeof r.url === 'string' ? r.url : '',
+      url: r.url,
       maxDepth: typeof r.maxDepth === 'number' ? r.maxDepth : undefined,
       maxPages: typeof r.maxPages === 'number' ? r.maxPages : undefined
     }
   },
   execute: async (i, ctx) => {
     if (!ctx.crawler) throw new ToolExecError('crawler not available')
-    return ctx.crawler.start(i)
+    const state = await ctx.crawler.start(i)
+    if (state && (state as { stoppedReason?: string }).stoppedReason === 'error') {
+      throw new ToolExecError(`crawl_start failed: ${(state as { error?: string }).error ?? 'invalid url'}`, false)
+    }
+    return state
   }
 })
 

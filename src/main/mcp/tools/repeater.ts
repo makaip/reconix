@@ -1,7 +1,7 @@
 // API.md §3.10 — Repeater. Exposes the app's saved-request store + gated send
 // (§11.1) to the copilot. Send is tier M; list/diff are read-only.
 import { defineTool, type Tool } from '../tool'
-import { ToolExecError } from '../errors'
+import { ToolExecError, ToolInputError } from '../errors'
 
 const repeater_list = defineTool<Record<string, never>, unknown>({
   name: 'repeater_list',
@@ -28,7 +28,9 @@ const repeater_save = defineTool<{ raw: unknown }, unknown>({
   },
   execute: async (i, ctx) => {
     if (!ctx.repeater) throw new ToolExecError('repeater not available')
-    return ctx.repeater.save(i.raw)
+    const saved = ctx.repeater.save(i.raw)
+    if (saved === null) throw new ToolExecError('repeater_save: invalid payload or unknown id', false)
+    return saved
   }
 })
 
@@ -38,10 +40,16 @@ const repeater_send = defineTool<{ id: string }, unknown>({
   riskTier: 'M',
   inputSchema: { type: 'object', required: ['id'], properties: { id: { type: 'string' } }, additionalProperties: false },
   outputSchema: { type: 'object' },
-  parse: (raw) => ({ id: (raw as { id?: unknown }).id as string }),
+  parse: (raw) => {
+    const id = (raw as { id?: unknown }).id
+    if (typeof id !== 'string' || id === '') throw new ToolInputError('"id" must be a non-empty string')
+    return { id }
+  },
   execute: async (i, ctx) => {
     if (!ctx.repeater) throw new ToolExecError('repeater not available')
-    return ctx.repeater.run(i.id)
+    const result = await ctx.repeater.run(i.id)
+    if (result === null) throw new ToolExecError(`repeater_send: no saved request with id ${i.id}`, false)
+    return result
   }
 })
 

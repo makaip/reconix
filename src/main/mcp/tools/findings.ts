@@ -57,7 +57,7 @@ const export_report = defineTool<{ filter?: unknown }, unknown>({
     const rows = await ctx.history.query(i.filter)
     const lines = ['# Findings Report', '', `Total: ${rows.length}`, '']
     for (const r of rows as any[]) lines.push(`- ${JSON.stringify(r)}`)
-    return { markdown: lines.join('\\n'), count: rows.length }
+    return { markdown: lines.join('\n'), count: rows.length }
   }
 })
 

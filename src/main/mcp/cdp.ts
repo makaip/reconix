@@ -192,6 +192,13 @@ export class WebContentsCdpDriver implements CdpDriver {
 
     return new Promise<HttpReplayResult>((resolve, reject) => {
       let request: ReturnType<typeof net.request>
+      let timedOut = false
+      const timeout = setTimeout(() => {
+        timedOut = true
+        try { request.abort() } catch { /* ignore */ }
+        reject(new ToolExecError('replay_request: timed out after 30s', true))
+      }, 30_000)
+      const finish = (fn: () => void) => { clearTimeout(timeout); fn() }
       try {
         request = net.request({
           url: spec.url,
@@ -201,11 +208,11 @@ export class WebContentsCdpDriver implements CdpDriver {
           redirect: 'follow'
         })
       } catch (err) {
-        reject(
+        finish(() => reject(
           new ToolExecError(
             `replay_request: bad request spec — ${(err as Error)?.message ?? String(err)}`
           )
-        )
+        ))
         return
       }
 
@@ -228,22 +235,23 @@ export class WebContentsCdpDriver implements CdpDriver {
           for (const [k, v] of Object.entries(response.headers)) {
             headers[k] = Array.isArray(v) ? v.join(', ') : String(v)
           }
-          resolve({
+          finish(() => resolve({
             status: response.statusCode,
             statusText: response.statusMessage ?? '',
             headers,
             body: buf.toString('utf8'),
             bodyBytes: buf.length,
             durationMs: Date.now() - started
-          })
+          }))
         })
         response.on('error', (err: Error) =>
-          reject(new ToolExecError(`replay_request: response error — ${err.message}`, true))
+          finish(() => reject(new ToolExecError(`replay_request: response error — ${err.message}`, true)))
         )
       })
-      request.on('error', (err) =>
-        reject(new ToolExecError(`replay_request: ${err.message}`, true))
-      )
+      request.on('error', (err) => {
+        if (timedOut) return
+        finish(() => reject(new ToolExecError(`replay_request: ${err.message}`, true)))
+      })
 
       if (hasBody) request.write(spec.body as string)
       request.end()
