@@ -4,7 +4,9 @@
   "model": "gemini/gemini-flash-lite-latest",
   "compaction": {
     "auto": true,
-    "keep": { "tokens": 24000 },
+    "keep": {
+      "tokens": 24000
+    },
     "buffer": 8000
   },
   "providers": {
@@ -21,9 +23,14 @@
           "body": {
             "temperature": 0.6,
             "top_p": 0.95,
-            "chat_template_kwargs": { "enable_thinking": true }
+            "chat_template_kwargs": {
+              "enable_thinking": true
+            }
           },
-          "limit": { "context": 32768, "output": 4096 }
+          "limit": {
+            "context": 32768,
+            "output": 4096
+          }
         }
       }
     },
@@ -35,7 +42,9 @@
         "apiKey": "{env:GOOGLE_GENERATIVE_AI_API_KEY}"
       },
       "models": {
-        "gemini-flash-lite-latest": { "name": "Gemini Flash Lite" }
+        "gemini-flash-lite-latest": {
+          "name": "Gemini Flash Lite"
+        }
       }
     },
     "openrouter": {
@@ -48,8 +57,14 @@
       "models": {
         "dolphin3-mistral-24b": {
           "name": "Dolphin3 Mistral 24B (uncensored, high context)",
-          "body": { "temperature": 0.7, "top_p": 0.95 },
-          "limit": { "context": 131072, "output": 4096 }
+          "body": {
+            "temperature": 0.7,
+            "top_p": 0.95
+          },
+          "limit": {
+            "context": 131072,
+            "output": 4096
+          }
         }
       }
     }
