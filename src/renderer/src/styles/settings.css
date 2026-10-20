@@ -134,3 +134,80 @@
   opacity: 0.6;
   cursor: default;
 }
+
+/* Model section: provider/model controls reuse the dark input styling of the
+   rest of the app (rep__input / dt-* in devtools.css). */
+.settings__row--form {
+  cursor: default;
+}
+
+.settings__row-action {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings__select,
+.settings__field-input {
+  min-width: 0;
+  padding: 4px 6px;
+  font-size: var(--text-xs);
+  color: var(--color-text);
+  background: var(--color-bg-inset);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+
+.settings__select {
+  width: 190px;
+  cursor: pointer;
+}
+
+.settings__field-input {
+  width: 100%;
+}
+
+.settings__select:focus,
+.settings__field-input:focus {
+  outline: none;
+  border-color: var(--color-accent);
+}
+
+.settings__fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 12px;
+  padding: 10px 0;
+}
+
+.settings__field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.settings__field--wide {
+  grid-column: 1 / -1;
+}
+
+.settings__field-label {
+  font-size: var(--text-2xs);
+  color: var(--color-text-faint);
+}
+
+.settings__fields-header {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.settings__row-hint--ok {
+  color: var(--color-success);
+}
+
+.settings__row-hint--error {
+  color: var(--color-error);
+}

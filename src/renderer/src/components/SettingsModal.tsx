@@ -1,9 +1,517 @@
 import { useEffect, useState } from 'react'
 import type { UseSettings } from '../hooks/useSettings'
+// Types mirror the preload contract (src/preload/index.ts): window.reconix.settings
+// speaks in ModelSettings / SettingsTestTarget shapes over IPC.
+import type {
+  CustomBackend,
+  ModelSettings,
+  ModelTarget,
+  ReasoningEffort,
+  SettingsTestTarget
+} from '../../../preload/index'
 
 type SettingsModalProps = {
   settings: UseSettings
   onClose: () => void
+}
+
+// ---------------------------------------------------------------------------
+// Model section — provider/model selection, reasoning effort, custom backends.
+// ---------------------------------------------------------------------------
+
+/** One grouped dropdown entry: OpenCode addresses models as `<provider>/<model>`. */
+type ModelOption = { id: string; label: string }
+type ModelGroup = { provider: string; options: ModelOption[] }
+
+/** Inline status for one "Test connection" probe (busy | ok | error). */
+type Feedback = { kind: 'ok' | 'error'; message: string } | { kind: 'busy' }
+
+/** Sentinel <option> value for the "Custom…" picker choice. */
+const CUSTOM_CHOICE = '__custom__'
+
+const ORCHESTRATOR_GROUPS: ModelGroup[] = [
+  { provider: 'vLLM (local)', options: [{ id: 'vllm-orchestrator/orchestrator-model', label: 'Local Qwen' }] },
+  {
+    provider: 'Gemini',
+    options: [
+      { id: 'gemini/gemini-flash-lite-latest', label: 'Gemini Flash Lite (latest)' },
+      { id: 'gemini/gemini-2.5-pro', label: 'Gemini 2.5 Pro' }
+    ]
+  },
+  { provider: 'OpenCode', options: [{ id: 'opencode/grok-code', label: 'Grok Code' }] },
+  { provider: 'OpenRouter', options: [{ id: 'openrouter/dolphin3-mistral-24b', label: 'Dolphin Mistral 24B' }] }
+]
+
+const DOM_ANALYZER_GROUPS: ModelGroup[] = [
+  { provider: 'OpenCode', options: [{ id: 'opencode/grok-code', label: 'Grok Code (default)' }] },
+  { provider: 'Gemini', options: [{ id: 'gemini/gemini-flash-lite-latest', label: 'Gemini Flash Lite (latest)' }] }
+]
+
+const REASONING_LEVELS: ReasoningEffort[] = ['off', 'low', 'medium', 'high']
+const REASONING_LABELS: Record<ReasoningEffort, string> = {
+  off: 'Off',
+  low: 'Low',
+  medium: 'Medium',
+  high: 'High'
+}
+
+const specOf = (target: ModelTarget): string => `${target.provider}/${target.model}`
+
+const isKnownSpec = (target: ModelTarget, groups: ModelGroup[]): boolean =>
+  groups.some((group) => group.options.some((option) => option.id === specOf(target)))
+
+/** A saved target with no known id is treated as previously-custom when it
+ *  carries its own endpoint/key override; otherwise it shows as a raw value. */
+const startsCustom = (target: ModelTarget, groups: ModelGroup[]): boolean =>
+  !isKnownSpec(target, groups) && Boolean(target.baseUrl || target.apiKey)
+
+const roleTestTarget = (target: ModelTarget): SettingsTestTarget => ({
+  provider: target.provider,
+  model: target.model,
+  baseUrl: target.baseUrl ?? undefined,
+  apiKey: target.apiKey ?? undefined
+})
+
+const backendTestTarget = (backend: CustomBackend): SettingsTestTarget => ({
+  baseUrl: backend.baseUrl,
+  apiKey: backend.apiKey,
+  model: backend.model
+})
+
+const hintClass = (kind: 'ok' | 'error'): string =>
+  `settings__row-hint settings__row-hint--${kind}`
+
+type RoleBlockProps = {
+  title: string
+  target: ModelTarget
+  groups: ModelGroup[]
+  customSelected: boolean
+  test: Feedback | undefined
+  onPatch: (patch: Partial<ModelTarget>, custom: boolean) => void
+  onTest: () => void
+}
+
+function RoleBlock({
+  title,
+  target,
+  groups,
+  customSelected,
+  test,
+  onPatch,
+  onTest
+}: RoleBlockProps): JSX.Element {
+  const spec = specOf(target)
+  const known = isKnownSpec(target, groups)
+
+  return (
+    <>
+      <div className="settings__row settings__row--form">
+        <span className="settings__row-text">
+          <span className="settings__row-label">{title}</span>
+          <span className="settings__row-hint">{customSelected ? `${spec} — custom` : spec}</span>
+          {test && (
+            <span
+              className={
+                test.kind === 'busy' ? 'settings__row-hint' : hintClass(test.kind)
+              }
+            >
+              {test.kind === 'busy' ? 'Testing connection…' : test.message}
+            </span>
+          )}
+        </span>
+        <span className="settings__row-action">
+          <select
+            className="settings__select"
+            value={customSelected ? CUSTOM_CHOICE : spec}
+            onChange={(e) => {
+              const value = e.target.value
+              if (value === CUSTOM_CHOICE) {
+                // Keep the model id so the form below starts pre-filled.
+                onPatch({ provider: 'custom', model: target.model || 'model' }, true)
+              } else {
+                const separator = value.indexOf('/')
+                onPatch(
+                  {
+                    provider: value.slice(0, separator),
+                    model: value.slice(separator + 1),
+                    baseUrl: null,
+                    apiKey: null
+                  },
+                  false
+                )
+              }
+            }}
+          >
+            {/* Saved values outside the known list stay visible as the raw id. */}
+            {!known && !customSelected && <option value={spec}>{spec}</option>}
+            {customSelected && <option value={CUSTOM_CHOICE}>Custom…</option>}
+            {groups.map((group) => (
+              <optgroup key={group.provider} label={group.provider}>
+                {group.options.map((option) => (
+                  <option key={option.id} value={option.id}>
+                    {option.label}
+                  </option>
+                ))}
+              </optgroup>
+            ))}
+            <option value={CUSTOM_CHOICE}>Custom…</option>
+          </select>
+          <button type="button" className="settings__button" onClick={onTest} disabled={test?.kind === 'busy'}>
+            {test?.kind === 'busy' ? 'Testing…' : 'Test connection'}
+          </button>
+        </span>
+      </div>
+      {customSelected && (
+        <div className="settings__fields">
+          <label className="settings__field settings__field--wide">
+            <span className="settings__field-label">Base URL (OpenAI-compatible)</span>
+            <input
+              className="settings__field-input"
+              type="text"
+              placeholder="http://127.0.0.1:8000/v1"
+              value={target.baseUrl ?? ''}
+              onChange={(e) => onPatch({ baseUrl: e.target.value }, true)}
+            />
+          </label>
+          <label className="settings__field">
+            <span className="settings__field-label">API key</span>
+            <input
+              className="settings__field-input"
+              type="password"
+              placeholder="environment key if empty"
+              autoComplete="off"
+              value={target.apiKey ?? ''}
+              onChange={(e) => onPatch({ apiKey: e.target.value }, true)}
+            />
+          </label>
+          <label className="settings__field">
+            <span className="settings__field-label">Model id</span>
+            <input
+              className="settings__field-input"
+              type="text"
+              value={target.model}
+              onChange={(e) => onPatch({ model: e.target.value }, true)}
+            />
+          </label>
+        </div>
+      )}
+    </>
+  )
+}
+
+type BackendBlockProps = {
+  backend: CustomBackend
+  index: number
+  test: Feedback | undefined
+  onPatch: (patch: Partial<CustomBackend>) => void
+  onRemove: () => void
+  onTest: () => void
+}
+
+function BackendBlock({ backend, index, test, onPatch, onRemove, onTest }: BackendBlockProps): JSX.Element {
+  return (
+    <div className="settings__fields">
+      <div className="settings__fields-header">
+        <span className="settings__field-label">
+          Backend {index + 1}
+          {backend.id ? ` — ${backend.id}` : ''}
+        </span>
+        <span className="settings__row-action">
+          <button type="button" className="settings__button" onClick={onTest} disabled={test?.kind === 'busy'}>
+            {test?.kind === 'busy' ? 'Testing…' : 'Test connection'}
+          </button>
+          <button type="button" className="settings__button" onClick={onRemove}>
+            Remove
+          </button>
+        </span>
+      </div>
+      <label className="settings__field">
+        <span className="settings__field-label">ID (provider name)</span>
+        <input
+          className="settings__field-input"
+          type="text"
+          placeholder="my-backend"
+          value={backend.id}
+          onChange={(e) => onPatch({ id: e.target.value })}
+        />
+      </label>
+      <label className="settings__field">
+        <span className="settings__field-label">Model</span>
+        <input
+          className="settings__field-input"
+          type="text"
+          value={backend.model}
+          onChange={(e) => onPatch({ model: e.target.value })}
+        />
+      </label>
+      <label className="settings__field settings__field--wide">
+        <span className="settings__field-label">Base URL</span>
+        <input
+          className="settings__field-input"
+          type="text"
+          placeholder="https://host/v1"
+          value={backend.baseUrl}
+          onChange={(e) => onPatch({ baseUrl: e.target.value })}
+        />
+      </label>
+      <label className="settings__field settings__field--wide">
+        <span className="settings__field-label">API key</span>
+        <input
+          className="settings__field-input"
+          type="password"
+          placeholder="none"
+          autoComplete="off"
+          value={backend.apiKey}
+          onChange={(e) => onPatch({ apiKey: e.target.value })}
+        />
+      </label>
+      {test && (
+        <span
+          className={`settings__row-hint${test.kind === 'error' ? ' settings__row-hint--error' : test.kind === 'ok' ? ' settings__row-hint--ok' : ''}`}
+        >
+          {test.kind === 'busy' ? 'Testing connection…' : test.message}
+        </span>
+      )}
+    </div>
+  )
+}
+
+function ModelSection(): JSX.Element {
+  // Optional chaining everywhere: a missing/disabled settings bridge must not
+  // crash the modal — the section degrades to an inline error instead.
+  const settingsApi = window.reconix?.settings
+  const hasApi = Boolean(settingsApi)
+
+  const [model, setModel] = useState<ModelSettings | null>(null)
+  const [customRole, setCustomRole] = useState<Record<'orchestrator' | 'domAnalyzer', boolean>>({
+    orchestrator: false,
+    domAnalyzer: false
+  })
+  const [loadError, setLoadError] = useState<string | null>(null)
+  // Retry counter reloads persisted settings without remounting the modal.
+  const [retry, setRetry] = useState(0)
+  const [tests, setTests] = useState<Record<string, Feedback>>({})
+  const [saveStatus, setSaveStatus] = useState<Feedback | null>(null)
+
+  // Load persisted settings on modal open. Never throws at call sites:
+  // rejections land in loadError, cancellations are dropped.
+  useEffect(() => {
+    if (!settingsApi?.get) {
+      setLoadError('Model settings are unavailable in this window.')
+      return
+    }
+    let cancelled = false
+    settingsApi
+      .get()
+      .then((next) => {
+        if (cancelled) return
+        setModel(next)
+        setCustomRole({
+          orchestrator: startsCustom(next.orchestrator, ORCHESTRATOR_GROUPS),
+          domAnalyzer: startsCustom(next.domAnalyzer, DOM_ANALYZER_GROUPS)
+        })
+        setLoadError(null)
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setLoadError(`Could not load model settings: ${(err as Error).message}`)
+      })
+    return () => {
+      cancelled = true
+    }
+    // Remounts via App.tsx on open; `retry` powers the inline Retry button.
+  }, [retry])
+
+  const patchRole = (role: 'orchestrator' | 'domAnalyzer', patch: Partial<ModelTarget>): void => {
+    if (!model) return
+    if (role === 'orchestrator') setModel({ ...model, orchestrator: { ...model.orchestrator, ...patch } })
+    else setModel({ ...model, domAnalyzer: { ...model.domAnalyzer, ...patch } })
+  }
+
+  const patchBackend = (index: number, patch: Partial<CustomBackend>): void => {
+    if (!model) return
+    setModel({
+      ...model,
+      customBackends: model.customBackends.map((b, i) => (i === index ? { ...b, ...patch } : b))
+    })
+  }
+
+  const addBackend = (): void => {
+    if (!model) return
+    const number = model.customBackends.length + 1
+    setModel({
+      ...model,
+      customBackends: [
+        ...model.customBackends,
+        { id: `my-backend-${number}`, baseUrl: '', apiKey: '', model: '' }
+      ]
+    })
+  }
+
+  const removeBackend = (index: number): void => {
+    if (!model) return
+    setModel({ ...model, customBackends: model.customBackends.filter((_, i) => i !== index) })
+  }
+
+  // Probe one target (role or ad-hoc form values) and report inline. Statuses
+  // are keyed per row: 'orchestrator' | 'domAnalyzer' | 'backend:<index>'.
+  const onTest = async (key: string, target: SettingsTestTarget): Promise<void> => {
+    if (!settingsApi?.testConnection) return
+    setTests((prev) => ({ ...prev, [key]: { kind: 'busy' } }))
+    const result = await settingsApi.testConnection(target)
+    const message = result.ok
+      ? result.models && result.models.length > 0
+        ? `Reachable — ${result.models.length} model${result.models.length === 1 ? '' : 's'} (first: ${result.models[0]})`
+        : 'Reachable'
+      : `Unreachable: ${result.error ?? 'unknown error'}`
+    setTests((prev) => ({ ...prev, [key]: { kind: result.ok ? 'ok' : 'error', message } }))
+  }
+
+  const onSave = async (): Promise<void> => {
+    if (!model || !settingsApi?.set) return
+    setSaveStatus({ kind: 'busy' })
+    setTests({}) // stale per-row results no longer match the draft
+    const result = await settingsApi.set(model)
+    if (result.ok) setSaveStatus({ kind: 'ok', message: 'Saved.' })
+    else setSaveStatus({ kind: 'error', message: `Save failed: ${result.error ?? 'unknown error'}` })
+  }
+
+  if (loadError) {
+    return (
+      <section className="settings__section">
+        <h3 className="settings__section-title">Model</h3>
+        <div className="settings__row settings__row--form">
+          <span className="settings__row-text">
+            <span className={hintClass('error')}>{loadError}</span>
+            {hasApi && <span className="settings__row-hint">Press Retry to read settings again.</span>}
+          </span>
+          {hasApi && (
+            <button
+              type="button"
+              className="settings__button"
+              onClick={() => {
+                setLoadError(null)
+                setRetry((n) => n + 1)
+              }}
+            >
+              Retry
+            </button>
+          )}
+        </div>
+      </section>
+    )
+  }
+
+  if (!model) {
+    return (
+      <section className="settings__section">
+        <h3 className="settings__section-title">Model</h3>
+        <div className="settings__row settings__row--form">
+          <span className="settings__row-label">Loading model settings…</span>
+        </div>
+      </section>
+    )
+  }
+
+  const draft = model
+
+  return (
+    <section className="settings__section">
+      <h3 className="settings__section-title">Model</h3>
+
+      <>
+        <RoleBlock
+          title="Orchestrator model"
+          target={draft.orchestrator}
+          groups={ORCHESTRATOR_GROUPS}
+          customSelected={customRole.orchestrator}
+          test={tests.orchestrator}
+          onPatch={(patch, custom) => {
+            patchRole('orchestrator', patch)
+            setCustomRole((prev) => ({ ...prev, orchestrator: custom }))
+          }}
+          onTest={() => void onTest('orchestrator', roleTestTarget(draft.orchestrator))}
+        />
+
+        <RoleBlock
+          title="DOM-analyzer model"
+          target={draft.domAnalyzer}
+          groups={DOM_ANALYZER_GROUPS}
+          customSelected={customRole.domAnalyzer}
+          test={tests.domAnalyzer}
+          onPatch={(patch, custom) => {
+            patchRole('domAnalyzer', patch)
+            setCustomRole((prev) => ({ ...prev, domAnalyzer: custom }))
+          }}
+          onTest={() => void onTest('domAnalyzer', roleTestTarget(draft.domAnalyzer))}
+        />
+
+        <div className="settings__row settings__row--form">
+          <span className="settings__row-text">
+            <span className="settings__row-label">Reasoning effort</span>
+            <span className="settings__row-hint">vLLM requires a server restart</span>
+          </span>
+          <select
+            className="settings__select"
+            value={draft.reasoning}
+            onChange={(e) => setModel({ ...draft, reasoning: e.target.value as ReasoningEffort })}
+          >
+            {REASONING_LEVELS.map((level) => (
+              <option key={level} value={level}>
+                {REASONING_LABELS[level]}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {draft.customBackends.map((backend, index) => (
+            <BackendBlock
+              key={`${backend.id || 'backend'}-${index}`}
+              backend={backend}
+              index={index}
+              test={tests[`backend-${index}`]}
+              onPatch={(patch) => patchBackend(index, patch)}
+              onRemove={() => {
+                removeBackend(index)
+                setTests((prev) => {
+                  const next = { ...prev }
+                  delete next[`backend-${index}`]
+                  return next
+                })
+              }}
+              onTest={() => void onTest(`backend-${index}`, backendTestTarget(backend))}
+            />
+          ))}
+
+          <div className="settings__row settings__row--form">
+            <span className="settings__row-text">
+              <span className="settings__row-label">Custom backends</span>
+              <span className="settings__row-hint">OpenAI-compatible servers, mirrored into opencode.json</span>
+            </span>
+            <button type="button" className="settings__button" onClick={addBackend}>
+              Add backend
+            </button>
+          </div>
+
+          <div className="settings__row settings__row--form">
+            <span className="settings__row-text">
+              <span className="settings__row-label">Model settings</span>
+              {saveStatus && saveStatus.kind !== 'busy' && (
+                <span className={hintClass(saveStatus.kind)}>{saveStatus.message}</span>
+              )}
+              <span className="settings__row-hint">Takes effect on the next new chat</span>
+            </span>
+            <button
+              type="button"
+              className="settings__button"
+              onClick={() => void onSave()}
+              disabled={!hasApi || saveStatus?.kind === 'busy'}
+            >
+              {saveStatus?.kind === 'busy' ? 'Saving…' : 'Save'}
+            </button>
+          </div>
+      </>
+    </section>
+  )
 }
 
 type ToggleRowProps = {
@@ -68,46 +576,48 @@ function SettingsModal({ settings, onClose }: SettingsModalProps): JSX.Element {
         onMouseDown={(e) => e.stopPropagation()}
       >
         <header className="settings__header">
-        <h2 className="settings__title">Settings</h2>
-        <button type="button" className="settings__close" aria-label="Close settings" onClick={onClose}>
-          ×
-        </button>
-      </header>
+          <h2 className="settings__title">Settings</h2>
+          <button type="button" className="settings__close" aria-label="Close settings" onClick={onClose}>
+            ×
+          </button>
+        </header>
 
-      <div className="settings__body">
-        <section className="settings__section">
-          <h3 className="settings__section-title">General</h3>
-          <ToggleRow
-            label="Open sitemap on launch"
-            hint="Show the sidebar when the app starts"
-            checked={values.openSidebarOnLaunch}
-            onChange={(v) => set('openSidebarOnLaunch', v)}
-          />
-          <ToggleRow
-            label="Open Copilot on launch"
-            hint="Show the Copilot panel when the app starts"
-            checked={values.openCopilotOnLaunch}
-            onChange={(v) => set('openCopilotOnLaunch', v)}
-          />
-        </section>
+        <div className="settings__body">
+          <section className="settings__section">
+            <h3 className="settings__section-title">General</h3>
+            <ToggleRow
+              label="Open sitemap on launch"
+              hint="Show the sidebar when the app starts"
+              checked={values.openSidebarOnLaunch}
+              onChange={(v) => set('openSidebarOnLaunch', v)}
+            />
+            <ToggleRow
+              label="Open Copilot on launch"
+              hint="Show the Copilot panel when the app starts"
+              checked={values.openCopilotOnLaunch}
+              onChange={(v) => set('openCopilotOnLaunch', v)}
+            />
+          </section>
 
-        <section className="settings__section">
-          <h3 className="settings__section-title">About</h3>
-          <div className="settings__row">
-            <span className="settings__row-text">
-              <span className="settings__row-label">Reconix {version}</span>
-              {updateStatus && <span className="settings__row-hint">{updateStatus}</span>}
-            </span>
-            <button
-              type="button"
-              className="settings__button"
-              onClick={() => void onCheckForUpdates()}
-              disabled={checking}
-            >
-              {checking ? 'Checking…' : 'Check for updates'}
-            </button>
-          </div>
-        </section>
+          <ModelSection />
+
+          <section className="settings__section">
+            <h3 className="settings__section-title">About</h3>
+            <div className="settings__row">
+              <span className="settings__row-text">
+                <span className="settings__row-label">Reconix {version}</span>
+                {updateStatus && <span className="settings__row-hint">{updateStatus}</span>}
+              </span>
+              <button
+                type="button"
+                className="settings__button"
+                onClick={() => void onCheckForUpdates()}
+                disabled={checking}
+              >
+                {checking ? 'Checking…' : 'Check for updates'}
+              </button>
+            </div>
+          </section>
         </div>
       </div>
     </div>
