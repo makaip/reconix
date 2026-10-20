@@ -36,12 +36,32 @@ export const submitForm = defineTool<SubmitInput, unknown>({
     // then to ensure the form/button did not change before the actual submit.
     const setup = `
       let form,button;
+      const sel=${JSON.stringify(input.selector)};
+      const sub=${input.submitterSelector === undefined ? 'null' : JSON.stringify(input.submitterSelector)};
       try {
-        form=document.querySelector(${JSON.stringify(input.selector)});
-        button=${input.submitterSelector === undefined ? 'null' : `document.querySelector(${JSON.stringify(input.submitterSelector)})`};
-      } catch { return {error:'Invalid CSS selector. Inspect the DOM and choose a form and optional submit button.'}; }
-      if(!(form instanceof HTMLFormElement)) return {error:'selector must match an HTML form. Use list_forms or query_dom to locate it.'};
-      if(${input.submitterSelector !== undefined} && !button) return {error:'submitterSelector did not match a submit button.'};
+        form=document.querySelector(sel);
+        // Be forgiving: list_forms reports a ready selector, but callers also
+        // pass a bare id, a form name, or a 0-based form index. Accept those
+        // shapes rather than dead-ending on a technically-invalid selector.
+        if(!(form instanceof HTMLFormElement)){
+          const byId=document.getElementById(sel);
+          if(byId instanceof HTMLFormElement) form=byId;
+        }
+        if(!(form instanceof HTMLFormElement) && /^\\d+$/.test(sel)) form=document.forms[Number(sel)]||null;
+        if(!(form instanceof HTMLFormElement)){
+          try { const byName=document.querySelector('form[name='+JSON.stringify(sel)+']'); if(byName instanceof HTMLFormElement) form=byName; } catch {}
+        }
+        button=sub===null?null:document.querySelector(sub);
+        if(sub!==null && !button && form instanceof HTMLFormElement){
+          // Fall back to a submit button whose text/value matches, or the only
+          // submit button in the form (covers "Log in" style callers).
+          const subs=[...form.querySelectorAll('button,input[type=submit],input[type=image]')];
+          const want=String(sub).trim().toLowerCase();
+          button=subs.find(b=>String(b.textContent||b.value||'').trim().toLowerCase()===want) || (subs.length===1?subs[0]:null);
+        }
+      } catch { return {error:'Invalid CSS selector. Inspect the DOM with query_dom and choose a form and optional submit button.'}; }
+      if(!(form instanceof HTMLFormElement)) return {error:'selector must match an HTML form. Call list_forms and pass one of its selector values (or an id/name), then retry.'};
+      if(${input.submitterSelector !== undefined} && !button) return {error:'submitterSelector did not match a submit button or a button label. Use query_dom to find input[type=submit] or button[type=submit] inside the form.'};
       if(button && (!((button instanceof HTMLButtonElement && button.type==='submit') || (button instanceof HTMLInputElement && ['submit','image'].includes(button.type))) || button.form!==form)) return {error:'submitterSelector must match a submit button belonging to the selected form.'};
       // Frameworks (Angular/React/Vue) often keep the submit button disabled
       // attribute stale after programmatic fills because change detection has
@@ -55,8 +75,8 @@ export const submitForm = defineTool<SubmitInput, unknown>({
           ? true
           : proto.checkValidity.call(form)
         if (!formValid) {
-          const fields = Array.from(form.elements).filter((el: any) => el.willValidate && !el.validity.valid).slice(0, 20).map((el: any) => String(el.name || el.id || el.tagName).slice(0, 100))
-          return { error: 'The submit button is disabled and the form is invalid. Correct invalid fields before retrying: ' + fields.join(', ') }
+          const fields = Array.from(form.elements).filter((el) => el.willValidate && !el.validity.valid).slice(0, 20).map((el) => String(el.name || el.id || el.tagName).slice(0, 100))
+          return { error: 'The submit button is disabled and the form is invalid. Fill these fields first, then retry: ' + (fields.join(', ') || '(form-level validation error)') }
         }
         submitterDisabled = true
       }
@@ -69,7 +89,15 @@ export const submitForm = defineTool<SubmitInput, unknown>({
     `
     const read = async (body: string): Promise<{ error?: string; action: string; method: string }> => {
       const raw = await ctx.cdp.evaluate(`(()=>{${setup}\n${body}})()`)
-      const result = JSON.parse(raw) as { error?: string; action: string; method: string }
+      let result: { error?: string; action: string; method: string }
+      try {
+        result = JSON.parse(raw) as { error?: string; action: string; method: string }
+      } catch {
+        throw new ToolExecError(
+          `submit_form: page returned a non-JSON result (${String(raw).slice(0, 200)}). ` +
+            'The page may have navigated or reloaded — inspect it with get_page_info / list_forms and retry.'
+        )
+      }
       if (result.error) throw new ToolExecError(result.error)
       return result
     }
@@ -78,22 +106,23 @@ export const submitForm = defineTool<SubmitInput, unknown>({
     return read(`
       const expected=${JSON.stringify(target)};
       const unchanged=()=>{const current=destination();return current.action===expected.action && current.method===expected.method};
-      if(!unchanged()) return {error:'Form destination changed before submission. Inspect the form again.'};
+      if(!unchanged()) return {error:'Form destination changed before submission. The page re-rendered — re-read the form with list_forms and retry.'};
       if(!Object.getOwnPropertyDescriptor(proto,'noValidate').get.call(form) && !(button && button.formNoValidate) && !proto.reportValidity.call(form)) {
         const fields=Array.from(form.elements).filter(el=>el.willValidate && !el.validity.valid).slice(0,20).map(el=>String(el.name||el.id||el.tagName).slice(0,100));
-        return {error:'Form validation failed. Correct invalid fields before retrying: '+fields.join(', ')};
+        return {error:'Form validation failed. Fill these fields first (fill), then retry submit_form: '+(fields.join(', ')||'(form-level validation error)')};
       }
-      if(!unchanged()) return {error:'Form destination changed during validation. Inspect the form again.'};
+      if(!unchanged()) return {error:'Form destination changed during validation. The page re-rendered — re-read the form with list_forms and retry.'};
       let event;
       const observe=e=>{if(e.target===form)event=e};
       window.addEventListener('submit',observe,{capture:true});
       let submitError=null;
       try { proto.requestSubmit.call(form,...(button && !submitterDisabled?[button]:[])); }
-      catch(e){ submitError=e && (e as Error).message ? (e as Error).message : String(e); }
+      catch(e){ submitError=e && e.message ? e.message : String(e); }
       finally { window.removeEventListener('submit',observe,{capture:true}); }
-      if(submitError) return {error:'requestSubmit failed: '+submitError};
-      if(!event) return {error:'No submit event was observed. Check form validation and page state before retrying.'};
-      return {ok:true,status:event.defaultPrevented?'handled_by_page':'submission_requested',action:target.action,method:target.method,serverResponseVerified:false,submitterDisabled};
+      if(submitError) return {error:'requestSubmit failed: '+submitError+'. Check form validation and page state, then retry.'};
+      if(!event) return {error:'No submit event was observed. Check form validation and page state (the form may have been replaced or navigation blocked) before retrying.'};
+      return {ok:true,status:event.defaultPrevented?'handled_by_page':'submission_requested',action:target.action,method:target.method,serverResponseVerified:false,submitterDisabled,
+        note:'Submission was requested, not confirmed. Inspect the outcome with get_network_log (or get_request on the new entry) before claiming success.'};
     `)
   }
 })

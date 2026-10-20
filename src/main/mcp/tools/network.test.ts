@@ -311,3 +311,50 @@ describe('replay_batch sweeps many variants in one call', () => {
     expect(sent).toHaveLength(3)
   })
 })
+
+describe('network input validation is reported as TOOL_INPUT, not TOOL_EXEC', () => {
+  it('rejects a non-array variants field as an input error', async () => {
+    const res = await invokeTool(
+      tool('replay_batch'),
+      { base: { url: 'https://app.example.com/' }, variants: 'nope' },
+      ctxWith([]),
+      audit
+    )
+    expect(res.ok).toBe(false)
+    expect(res.error?.code).toBe('TOOL_INPUT')
+  })
+
+  it('rejects a malformed variant entry as an input error with its index', async () => {
+    const res = await invokeTool(
+      tool('replay_batch'),
+      { base: { url: 'https://app.example.com/' }, variants: [{ headers: { a: 1 } }] },
+      ctxWith([]),
+      audit
+    )
+    expect(res.ok).toBe(false)
+    expect(res.error?.code).toBe('TOOL_INPUT')
+    expect(res.error?.message).toContain('variants[0]')
+  })
+
+  it('rejects a non-string header value in base as an input error', async () => {
+    const res = await invokeTool(
+      tool('replay_request'),
+      { base: { url: 'https://app.example.com/', headers: { a: 1 } } },
+      ctxWith([]),
+      audit
+    )
+    expect(res.ok).toBe(false)
+    expect(res.error?.code).toBe('TOOL_INPUT')
+  })
+
+  it('rejects a non-http(s) override url as an input error before sending', async () => {
+    const res = await invokeTool(
+      tool('replay_request'),
+      { base: { url: 'https://app.example.com/' }, overrides: { url: 'file:///etc/passwd' } },
+      ctxWith([]),
+      audit
+    )
+    expect(res.ok).toBe(false)
+    expect(res.error?.code).toBe('TOOL_INPUT')
+  })
+})

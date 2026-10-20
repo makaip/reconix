@@ -12,18 +12,24 @@ async function evalJson<T>(ctx: ToolContext, expression: string): Promise<T> {
   try {
     return JSON.parse(raw) as T
   } catch {
-    throw new ToolExecError(`page returned non-JSON result: ${raw.slice(0, 200)}`)
+    throw new ToolExecError(
+      `page returned non-JSON result: ${raw.slice(0, 200)} — ` +
+        'the page may still be loading; check get_page_info or navigate and retry'
+    )
   }
 }
 
 // Walks document.forms into a plain, serializable shape. Password values are
-// never read back. Shared by get_dom_extract and list_forms.
+// never read back. Shared by get_dom_extract and list_forms. `method` is read
+// off the IDL property (not the attribute) so a form with no method attribute —
+// or an invalid one — reports 'get', exactly as submit_form will send it.
 const FORMS_EXPR = `[...document.forms].map((f,i)=>({
   index:i,
+  selector:f.id ? '#'+CSS.escape(f.id) : (f.getAttribute('name') ? 'form[name='+JSON.stringify(f.getAttribute('name'))+']' : null),
   name:f.getAttribute('name')||null,
   id:f.id||null,
   action:f.action||null,
-  method:(f.getAttribute('method')||'get').toLowerCase(),
+  method:(f.method||'get').toLowerCase(),
   enctype:f.enctype||null,
   fields:[...f.elements].filter(e=>e.name||e.id).map(e=>({
     name:e.getAttribute('name')||null,
@@ -91,8 +97,8 @@ const screenshot = defineTool<{ fullPage?: boolean }, unknown>({
     const r = raw as { fullPage?: unknown }
     return typeof r?.fullPage === 'boolean' ? { fullPage: r.fullPage } : {}
   },
-  execute: async (_i, ctx) => {
-    const png = await ctx.cdp.screenshot()
+  execute: async (i, ctx) => {
+    const png = await ctx.cdp.screenshot(i.fullPage)
     return { traceRef: await ctx.traces.save('screenshot', png) }
   }
 })
@@ -143,12 +149,20 @@ const get_dom_extract = defineTool<Record<string, never>, unknown>({
     const forms = capArray(raw.forms, 40)
     const links = capArray(raw.links, 80)
     const endpoints = capArray(raw.endpoints, 80)
+    const truncated = forms.omitted > 0 || links.omitted > 0 || endpoints.omitted > 0
     return {
       ...raw,
       forms: forms.items,
       links: links.items,
       endpoints: endpoints.items,
-      omitted: { forms: forms.omitted, links: links.omitted, endpoints: endpoints.omitted }
+      omitted: { forms: forms.omitted, links: links.omitted, endpoints: endpoints.omitted },
+      returned: { forms: forms.items.length, links: links.items.length, endpoints: endpoints.items.length },
+      truncated,
+      note: truncated
+        ? `extract capped to fit context — forms ${forms.items.length}/${raw.forms.length}, ` +
+          `links ${links.items.length}/${raw.links.length}, endpoints ${endpoints.items.length}/${raw.endpoints.length}. ` +
+          'Use query_dom or list_links for the omitted items.'
+        : undefined
     }
   }
 })
@@ -163,7 +177,19 @@ const list_forms = defineTool<Record<string, never>, unknown>({
   execute: async (_i, ctx) => {
     const all = await evalJson<unknown[]>(ctx, `(()=>(${FORMS_EXPR}))()`)
     const { items, omitted } = capArray(all, 40)
-    return { forms: items, total: all.length, omitted }
+    return {
+      forms: items,
+      total: all.length,
+      returned: items.length,
+      omitted,
+      truncated: omitted > 0,
+      note:
+        all.length === 0
+          ? 'no forms found on this page — forms may be rendered later or live in an iframe; try get_dom_extract or query_dom("form") after the page settles'
+          : omitted > 0
+            ? `only the first ${items.length} of ${all.length} forms are included; refine with query_dom`
+            : undefined
+    }
   }
 })
 
@@ -185,7 +211,15 @@ const list_links = defineTool<Record<string, never>, unknown>({
     return {
       links: items.map((url) => ({ url, inScope: ctx.scope.isInScope(url) })),
       total: hrefs.length,
-      omitted
+      returned: items.length,
+      omitted,
+      truncated: omitted > 0,
+      note:
+        hrefs.length === 0
+          ? 'no links found on this page — check the page finished loading, or crawl from here with crawl_start'
+          : omitted > 0
+            ? `only the first ${items.length} of ${hrefs.length} links are included; narrow the page or paginate with crawl_start`
+            : undefined
     }
   }
 })
@@ -206,23 +240,41 @@ const get_headers = defineTool<Record<string, never>, unknown>({
     // back to the newest entry carrying response headers for that URL.
     // Electron's webRequest tags the top document 'mainFrame'; CDP/other
     // sources may say 'document' — accept either.
-    const forUrl = entries.filter((e) => e.url === url && e.responseHeaders)
+    // Hash-fragment routes (`/#/login`) never reach the server, so captured
+    // request URLs omit the fragment; compare without it or every SPA route
+    // misses its own document response.
+    const pageUrl = url.split('#')[0]
+    const forUrl = entries.filter(
+      (e) => (e.url === pageUrl || e.url === url || e.url.split('#')[0] === pageUrl) && e.responseHeaders
+    )
     const match =
       [...forUrl].reverse().find((e) => /mainframe|document|main_frame/i.test(e.resourceType)) ??
       forUrl[forUrl.length - 1]
     if (!match) {
       throw new ToolExecError(
         `no captured response headers for the current document (${url}) — ` +
-          `the page may predate capture, or be a non-http document; navigate to refresh`
+          `the page may predate capture, or be a non-http document; navigate to refresh, ` +
+          `then retry or inspect raw entries with get_network_log`,
+        true
       )
     }
+    const headers = match.responseHeaders ?? {}
     return {
       url: match.url,
       statusCode: match.statusCode,
-      headers: match.responseHeaders
+      headers,
+      note:
+        Object.keys(headers).length === 0
+          ? 'the captured document response carried no headers — it may have been served from cache or truncated before capture'
+          : undefined
     }
   }
 })
+
+// Per-value ceiling for storage dumps. A single localStorage entry holding a
+// big JWT/state blob is common; without a per-value clamp the whole result blows
+// the context budget and the server-level clamp cuts the JSON mid-object.
+const STORAGE_VALUE_MAX = 2000
 
 const get_storage = defineTool<Record<string, never>, unknown>({
   name: 'get_storage',
@@ -232,31 +284,108 @@ const get_storage = defineTool<Record<string, never>, unknown>({
   outputSchema: { type: 'object' },
   parse: () => ({}),
   execute: async (_i, ctx) => {
-    const data = await evalJson<Record<string, unknown>>(ctx, `(()=>{
+    const data = await evalJson<{
+      localStorage?: Record<string, string | null>
+      sessionStorage?: Record<string, string | null>
+    }>(ctx, `(()=>{
       const ls={}; for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i); ls[k]=localStorage.getItem(k);}
       const ss={}; for(let i=0;i<sessionStorage.length;i++){const k=sessionStorage.key(i); ss[k]=sessionStorage.getItem(k);}
       return {localStorage:ls, sessionStorage:ss};
     })()`)
-    return data
+    const clamp = (
+      store: Record<string, string | null> | undefined
+    ): { values: Record<string, string | null>; truncated: string[] } => {
+      const values: Record<string, string | null> = {}
+      const truncated: string[] = []
+      for (const [k, v] of Object.entries(store ?? {})) {
+        if (typeof v === 'string' && v.length > STORAGE_VALUE_MAX) {
+          values[k] = `${v.slice(0, STORAGE_VALUE_MAX)}…[+${v.length - STORAGE_VALUE_MAX} chars]`
+          truncated.push(k)
+        } else {
+          values[k] = v
+        }
+      }
+      return { values, truncated }
+    }
+    const ls = clamp(data.localStorage)
+    const ss = clamp(data.sessionStorage)
+    const omittedChars = (store: Record<string, string | null> | undefined): number =>
+      Object.values(store ?? {}).reduce(
+        (n, v) => (typeof v === 'string' && v.length > STORAGE_VALUE_MAX ? n + (v.length - STORAGE_VALUE_MAX) : n),
+        0
+      )
+    const counts = {
+      localStorage: {
+        total: Object.keys(ls.values).length,
+        returned: Object.keys(ls.values).length,
+        truncatedValues: ls.truncated.length,
+        omittedChars: omittedChars(data.localStorage)
+      },
+      sessionStorage: {
+        total: Object.keys(ss.values).length,
+        returned: Object.keys(ss.values).length,
+        truncatedValues: ss.truncated.length,
+        omittedChars: omittedChars(data.sessionStorage)
+      }
+    }
+    const anyTruncated = ls.truncated.length + ss.truncated.length > 0
+    return {
+      localStorage: ls.values,
+      sessionStorage: ss.values,
+      // Keys whose value was cut, so the agent re-reads deliberately rather than
+      // reasoning on a partial token as if it were complete.
+      truncated: { localStorage: ls.truncated, sessionStorage: ss.truncated },
+      // Explicit boolean + counts: `truncated` above names the keys, so a plain
+      // truthiness check on it can never answer "was anything cut?".
+      truncatedAny: anyTruncated,
+      counts,
+      maxValueChars: STORAGE_VALUE_MAX,
+      note: anyTruncated
+        ? `some values were cut at ${STORAGE_VALUE_MAX} chars (see truncated.localStorage / truncated.sessionStorage); ` +
+          'keys listed there are partial — re-read them deliberately (e.g. via eval_in_page) before trusting them'
+        : undefined
+    }
   }
 })
 
 const extract_js_routes = defineTool<Record<string, never>, unknown>({
   name: 'extract_js_routes',
-  description: 'Extract candidate API routes/endpoints from inline and external script tags on the current page.',
+  description:
+    'Extract candidate API routes/endpoints from INLINE <script> blocks on the current page. ' +
+    'External scripts (script[src]) are not fetched — their bodies are not available to the page ' +
+    'DOM — so bundles served from src are skipped; `externalScripts` reports how many were skipped. ' +
+    'For those, use get_network_log / get_request on the bundle responses.',
   riskTier: 'R',
   inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   outputSchema: { type: 'object' },
   parse: () => ({}),
   execute: async (_i, ctx) => {
-    const data = await evalJson<{ routes: string[] }>(ctx, `(()=>{
+    const data = await evalJson<{ routes: string[]; total: number; externalScripts: number }>(ctx, `(()=>{
       const src = Array.from(document.querySelectorAll('script')).map(s=>s.textContent||'').join('\\n');
       const re = /["'\`](\\/[a-zA-Z0-9_\\-./?=&%]+)["'\`]/g;
       const set = new Set(); let m;
       while((m=re.exec(src))!==null){ if(m[1].length>2 && m[1].length<200) set.add(m[1]); }
-      return {routes:[...set].slice(0,200)};
+      return {routes:[...set].slice(0,200), total:set.size, externalScripts:document.querySelectorAll('script[src]').length};
     })()`)
-    return data
+    // TODO: optionally fetch same-origin script src and scan their bodies too
+    // (would need a scope-checked read through ctx.cdp + its own budget cap).
+    const truncated = data.total > data.routes.length
+    return {
+      routes: data.routes,
+      total: data.total,
+      returned: data.routes.length,
+      omitted: data.total - data.routes.length,
+      truncated,
+      externalScripts: data.externalScripts,
+      externalScriptsScanned: false,
+      note: truncated
+        ? `${data.externalScripts > 0 ? `${data.externalScripts} external script(s) skipped — ` : ''}` +
+          `routes capped at ${data.routes.length} of ${data.total}; ` +
+          'only inline script bodies were scanned. Use get_network_log / get_request on bundle responses for more.'
+        : data.externalScripts > 0
+          ? `${data.externalScripts} external script(s) skipped — only inline script bodies were scanned.`
+          : 'No external scripts on this page; only inline script bodies were scanned.'
+    }
   }
 })
 

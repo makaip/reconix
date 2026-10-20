@@ -25,7 +25,12 @@ const get_trace = defineTool<{ ref: string }, unknown>({
   parse: (raw) => ({ ref: str(raw, 'ref') }),
   execute: async (i, ctx) => {
     const trace = ctx.traces.get(i.ref)
-    if (!trace) throw new ToolExecError(`No trace stored for ref ${i.ref}`)
+    if (!trace) {
+      throw new ToolExecError(
+        `No trace stored for ref ${i.ref} — capture evidence first (screenshot/collect_evidence), ` +
+          'or resolve a ref returned by an earlier tool via get_trace'
+      )
+    }
 
     const bytes = trace.data.length
     const truncated = bytes > MAX_INLINE_BYTES
@@ -35,9 +40,19 @@ const get_trace = defineTool<{ ref: string }, unknown>({
       kind: trace.kind,
       ts: trace.ts,
       bytes,
+      total: bytes,
+      // When over the cap no contents are inlined, so `returned` is 0 and the
+      // whole trace counts as omitted.
+      returned: truncated ? 0 : bytes,
+      omitted: truncated ? bytes : 0,
+      maxInlineBytes: MAX_INLINE_BYTES,
       encoding,
       data: truncated ? null : Buffer.from(trace.data).toString(encoding === 'base64' ? 'base64' : 'utf8'),
-      truncated
+      truncated,
+      note: truncated
+        ? `trace is ${bytes} bytes, over the ${MAX_INLINE_BYTES}-byte inline cap — contents were not included. ` +
+          'Use the trace metadata (kind/bytes) or a smaller capture (e.g. screenshot without fullPage) instead.'
+        : undefined
     }
   }
 })

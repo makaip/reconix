@@ -4,7 +4,7 @@
 // rate-limited proxy. A custom tool must never egress on its own; it routes here.
 import { defineTool, type Tool } from '../tool'
 import { optStr, str, urlString } from '../validate'
-import { ToolExecError } from '../errors'
+import { ToolExecError, ToolInputError } from '../errors'
 import { MAX_LIST_ITEMS, clampString } from '../limits'
 import type { HttpRequestSpec } from '../cdp'
 import type { CapturedRequest } from '../../../shared/tabs'
@@ -36,31 +36,31 @@ const HEADER_NAME_RE = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/
 
 function parseJwtOverride(value: unknown): JwtOverride {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    throw new ToolExecError('"overrides.jwt" must be an object: { token, headerName?, scheme? }')
+    throw new ToolInputError('"overrides.jwt" must be an object: { token, headerName?, scheme? }')
   }
   const j = value as Record<string, unknown>
 
   if (typeof j.token !== 'string' || j.token.trim().length === 0) {
-    throw new ToolExecError('"overrides.jwt.token" must be a non-empty string')
+    throw new ToolInputError('"overrides.jwt.token" must be a non-empty string')
   }
   // The token is pasted verbatim into a header value; CR/LF would split it into
   // an extra header (request smuggling), so reject rather than sanitize.
   if (/[\r\n]/.test(j.token)) {
-    throw new ToolExecError('"overrides.jwt.token" must not contain CR/LF')
+    throw new ToolInputError('"overrides.jwt.token" must not contain CR/LF')
   }
 
   const headerName = j.headerName === undefined ? 'Authorization' : j.headerName
   if (typeof headerName !== 'string' || !HEADER_NAME_RE.test(headerName)) {
-    throw new ToolExecError('"overrides.jwt.headerName" must be a valid HTTP header name')
+    throw new ToolInputError('"overrides.jwt.headerName" must be a valid HTTP header name')
   }
 
   let scheme: string | null
   if (j.scheme === undefined) scheme = 'Bearer'
   else if (j.scheme === null) scheme = null
   else if (typeof j.scheme !== 'string') {
-    throw new ToolExecError('"overrides.jwt.scheme" must be a string, or null/empty for a bare token')
+    throw new ToolInputError('"overrides.jwt.scheme" must be a string, or null/empty for a bare token')
   } else {
-    if (/[\r\n]/.test(j.scheme)) throw new ToolExecError('"overrides.jwt.scheme" must not contain CR/LF')
+    if (/[\r\n]/.test(j.scheme)) throw new ToolInputError('"overrides.jwt.scheme" must not contain CR/LF')
     const trimmed = j.scheme.trim()
     scheme = trimmed.length === 0 ? null : trimmed
   }
@@ -72,11 +72,11 @@ function parseHeaderMap(obj: Record<string, unknown>, key: string): Record<strin
   const h = obj[key]
   if (h === undefined) return undefined
   if (typeof h !== 'object' || h === null || Array.isArray(h)) {
-    throw new ToolExecError(`"${key}" must be an object of string header values`)
+    throw new ToolInputError(`"${key}" must be an object of string header values`)
   }
   const out: Record<string, string> = {}
   for (const [name, value] of Object.entries(h as Record<string, unknown>)) {
-    if (typeof value !== 'string') throw new ToolExecError(`header "${name}" must be a string`)
+    if (typeof value !== 'string') throw new ToolInputError(`header "${name}" must be a string`)
     out[name] = value
   }
   return out
@@ -84,7 +84,7 @@ function parseHeaderMap(obj: Record<string, unknown>, key: string): Record<strin
 
 function parseRequestSpec(raw: unknown, key: string): RequestSpec {
   const v = (raw as Record<string, unknown>)?.[key]
-  if (typeof v !== 'object' || v === null) throw new ToolExecError(`"${key}" must be an object`)
+  if (typeof v !== 'object' || v === null) throw new ToolInputError(`"${key}" must be an object`)
   const spec = v as Record<string, unknown>
   return {
     url: urlString(spec, 'url'), // http(s) only, before scope check
@@ -98,7 +98,7 @@ function parseOverrides(raw: unknown): RequestOverrides | undefined {
   const o = (raw as Record<string, unknown>)?.overrides
   if (o === undefined) return undefined
   if (typeof o !== 'object' || o === null || Array.isArray(o)) {
-    throw new ToolExecError('"overrides" must be an object')
+    throw new ToolInputError('"overrides" must be an object')
   }
   const ov = o as Record<string, unknown>
   const out: RequestOverrides = {}
@@ -106,12 +106,12 @@ function parseOverrides(raw: unknown): RequestOverrides | undefined {
   if (ov.method !== undefined) out.method = optStr(ov, 'method')
   if (ov.headers !== undefined) {
     if (typeof ov.headers !== 'object' || ov.headers === null || Array.isArray(ov.headers)) {
-      throw new ToolExecError('"overrides.headers" must be an object')
+      throw new ToolInputError('"overrides.headers" must be an object')
     }
     const hdrs: Record<string, string | null> = {}
     for (const [k, val] of Object.entries(ov.headers as Record<string, unknown>)) {
       if (val !== null && typeof val !== 'string') {
-        throw new ToolExecError(`override header "${k}" must be a string, or null to remove it`)
+        throw new ToolInputError(`override header "${k}" must be a string, or null to remove it`)
       }
       hdrs[k] = val as string | null
     }
@@ -119,7 +119,7 @@ function parseOverrides(raw: unknown): RequestOverrides | undefined {
   }
   if ('body' in ov) {
     if (ov.body !== null && typeof ov.body !== 'string') {
-      throw new ToolExecError('"overrides.body" must be a string, or null to drop the body')
+      throw new ToolInputError('"overrides.body" must be a string, or null to drop the body')
     }
     out.body = ov.body as string | null
   }
@@ -229,6 +229,8 @@ const replay_request = defineTool<{ base: RequestSpec; overrides?: RequestOverri
       'reqresp',
       JSON.stringify({ request: spec, response: result })
     )
+    const body = clampString(result.body)
+    const bodyTruncated = body.length < result.body.length
     return {
       response: {
         status: result.status,
@@ -236,9 +238,13 @@ const replay_request = defineTool<{ base: RequestSpec; overrides?: RequestOverri
         headers: result.headers,
         durationMs: result.durationMs,
         bodyBytes: result.bodyBytes,
-        body: clampString(result.body)
+        body,
+        bodyTruncated
       },
-      bodyRef
+      bodyRef,
+      note: bodyTruncated
+        ? `inline body shows the first ${body.length} chars of ${result.body.length}; read the full response from bodyRef (get_trace) if needed`
+        : undefined
     }
   }
 })
@@ -292,7 +298,7 @@ async function mapWithConcurrency<T, R>(
 function parseVariants(raw: unknown): RequestOverrides[] {
   const v = (raw as Record<string, unknown>)?.variants
   if (!Array.isArray(v) || v.length === 0) {
-    throw new ToolExecError('"variants" must be a non-empty array of override objects')
+    throw new ToolInputError('"variants" must be a non-empty array of override objects')
   }
   // The size cap is enforced in execute against the engagement policy
   // (Policy.maxReplayBatch) — parse has no access to the context.
@@ -301,7 +307,7 @@ function parseVariants(raw: unknown): RequestOverrides[] {
       // Reuse the single-request override parser by wrapping each item.
       return parseOverrides({ overrides: item }) ?? {}
     } catch (e) {
-      throw new ToolExecError(`variants[${idx}]: ${(e as Error).message}`)
+      throw new ToolInputError(`variants[${idx}]: ${(e as Error).message}`)
     }
   })
 }
@@ -363,7 +369,7 @@ const replay_batch = defineTool<{ base: RequestSpec; variants: RequestOverrides[
   execute: async (i, ctx) => {
     const cap = ctx.policy?.maxReplayBatch ?? DEFAULT_MAX_REPLAY_BATCH
     if (i.variants.length > cap) {
-      throw new ToolExecError(
+      throw new ToolInputError(
         `batch has ${i.variants.length} variants; max ${cap} per call (engagement policy). ` +
           'Split the sweep, or raise Policy.maxReplayBatch.'
       )
@@ -406,15 +412,31 @@ const replay_batch = defineTool<{ base: RequestSpec; variants: RequestOverrides[
     const baseline = results.find((r): r is Extract<BatchRow, { status: number }> => 'status' in r)
     const statuses: Record<string, number> = {}
     let errors = 0
+    let outOfScope = 0
     for (const r of results) {
       if ('status' in r) {
         statuses[r.status] = (statuses[r.status] ?? 0) + 1
         if (baseline) r.anomalous = r.status !== baseline.status || r.bodyBytes !== baseline.bodyBytes
       } else {
         errors++
+        if (r.error === 'out of scope — not sent') outOfScope++
       }
     }
-    return { count: results.length, results, summary: { statuses, errors } }
+    const sent = results.length - errors
+    const firstError = results.find((r): r is Extract<BatchRow, { error: string }> => 'error' in r)?.error
+    return {
+      count: results.length,
+      results,
+      summary: { statuses, errors, sent, outOfScope },
+      note:
+        results.length > 0 && sent === 0
+          ? outOfScope === results.length
+            ? `no variants were sent: all ${results.length} URLs were out of scope — check base.url/variants against the engagement scope`
+            : `no variants were sent: every request failed — inspect the per-row errors (first: ${firstError ?? 'unknown'})`
+          : errors > 0
+            ? `${errors} of ${results.length} variants failed; inspect their error rows before drawing conclusions`
+            : undefined
+    }
   }
 })
 
@@ -469,11 +491,22 @@ const get_network_log = defineTool<{ sinceId?: string }, unknown>({
     // entries were dropped so it knows to paginate rather than assume it saw all.
     const all = ctx.network.list(i.sinceId)
     const entries = all.slice(-MAX_LIST_ITEMS).map(toRow)
+    const omitted = Math.max(0, all.length - entries.length)
     return {
       entries,
       total: all.length,
-      omitted: Math.max(0, all.length - entries.length),
-      nextCursor: entries.length > 0 ? entries[entries.length - 1].id : (i.sinceId ?? null)
+      returned: entries.length,
+      omitted,
+      truncated: omitted > 0,
+      nextCursor: entries.length > 0 ? entries[entries.length - 1].id : (i.sinceId ?? null),
+      note:
+        all.length === 0
+          ? i.sinceId
+            ? `no new requests since "${i.sinceId}" — the page may predate capture or the action produced no traffic`
+            : 'no requests captured for this tab yet — the page may predate capture; navigate or reload to start recording'
+          : omitted > 0
+            ? `only the most recent ${entries.length} of ${all.length} entries are included; page back with sinceId for older ones`
+            : undefined
     }
   }
 })
@@ -492,7 +525,12 @@ const get_request = defineTool<{ id: string }, unknown>({
   parse: (raw) => ({ id: str(raw, 'id') }),
   execute: async (i, ctx) => {
     const req = ctx.network.get(i.id)
-    if (!req) throw new ToolExecError(`no request with id "${i.id}" (it may have aged out)`)
+    if (!req) {
+      throw new ToolExecError(
+        `no request with id "${i.id}" (it may have aged out) — ` +
+          'list recent ids with get_network_log and retry with one of its entries'
+      )
+    }
     // Clamp long header values (cookies, tokens) so one row stays within budget
     // and serializes as valid JSON rather than being cut mid-object upstream.
     const trimValues = <V>(h: Record<string, V> | undefined): Record<string, V> | undefined =>
@@ -511,22 +549,35 @@ const get_request = defineTool<{ id: string }, unknown>({
   }
 })
 
+// WebSocket *messages* are captured over CDP (Network.webSocketFrame*) by
+// src/main/websocket.ts, but that capture is owned by the inspector and is not
+// exposed on ToolContext — so this tool cannot read frames yet. What IS
+// available is the handshake URL from the network reader (webRequest sees the
+// upgrade request as resourceType 'websocket', never the frames). Report that
+// honestly instead of pretending to return messages.
 const get_websocket_messages = defineTool<Record<string, never>, unknown>({
   name: 'get_websocket_messages',
-  description: 'Best-effort: list WebSocket URLs observed on the current page.',
+  description:
+    'List WebSocket handshake URLs observed in the network log. Frame/message capture is not ' +
+    'exposed to MCP tools yet — `messages` is always empty; do not infer traffic from it.',
   riskTier: 'R',
   inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   outputSchema: { type: 'object' },
   parse: () => ({}),
   execute: async (_i, ctx) => {
-    try {
-      const raw = await ctx.cdp.evaluate(
-        'JSON.stringify([...new Set(performance.getEntriesByType("resource").filter(e=>String(e.name).startsWith("ws")).map(e=>e.name))])'
-      )
-      const urls = JSON.parse(raw)
-      return { urls: Array.isArray(urls) ? urls : [] }
-    } catch {
-      return { urls: [] }
+    const handshakes = ctx.network
+      .list()
+      .filter((r) => /websocket/i.test(r.resourceType) || /^wss?:/i.test(r.url))
+    const urls = [...new Set(handshakes.map((r) => r.url))]
+    return {
+      urls,
+      connections: urls.length,
+      messages: [],
+      messagesSupported: false,
+      note:
+        urls.length > 0
+          ? 'urls come from the network log handshake. Message/frame payloads are not implemented for MCP tools (CDP frame capture exists in the app UI only).'
+          : 'No WebSocket handshakes in the network log. Message/frame payloads are not implemented for MCP tools (CDP frame capture exists in the app UI only).'
     }
   }
 })
@@ -545,12 +596,25 @@ export const networkTools: Tool[] = [
     outputSchema: { type: 'object' },
     parse: (raw) => {
       const r = raw as { raw?: unknown }
-      return { raw: r?.raw }
+      if (typeof r?.raw !== 'object' || r.raw === null || Array.isArray(r.raw)) {
+        throw new ToolInputError('"raw" must be an object (the intercept rule)')
+      }
+      return { raw: r.raw }
     },
     execute: async (i, ctx) => {
-      if (!ctx.interceptor) throw new ToolExecError('interceptor not available')
+      if (!ctx.interceptor) {
+        throw new ToolExecError(
+          'interceptor not available in this build/surface — inspect traffic with get_network_log/get_request instead'
+        )
+      }
       const rule = ctx.interceptor.save(i.raw)
-      if (rule === null) throw new ToolExecError('set_intercept_rule: invalid rule payload', false)
+      if (rule === null) {
+        throw new ToolExecError(
+          'set_intercept_rule: invalid rule payload — expected { urlPattern/match, replacement?, enabled? }; ' +
+            'check the existing rules via the interceptor UI',
+          false
+        )
+      }
       return { rule }
     }
   }) as Tool

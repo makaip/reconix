@@ -37,12 +37,16 @@ function bridge(cap: CapabilityTool<unknown, unknown>): Tool {
   return defineTool<unknown, unknown>({
     name: cap.name,
     description: cap.description,
-    riskTier: (cap.riskTier as 'R') ?? 'R',
+    riskTier: (cap.riskTier === 'processing' ? 'R' : cap.riskTier) as 'R' | 'P' | 'M' | 'D',
     inputSchema: cap.inputSchema,
     outputSchema: cap.outputSchema ?? { type: 'object' },
     parse: (raw) => {
       const res = cap.validateInput(raw)
-      if (!res.ok) throw new ToolInputError(res.errors.join('; '))
+      if (!res.ok) {
+        throw new ToolInputError(
+          `${res.errors.join('; ')} — check the tool's inputSchema for required fields and types`
+        )
+      }
       return res.value
     },
     execute: async (input) => cap.handler(input)

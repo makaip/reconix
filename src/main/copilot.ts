@@ -741,6 +741,15 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
   // currentId() feeds attribution (findings/traces/tool_calls/ctx), so a
   // started run's rows are attributed consistently without rewiring per call.
   const engagementStore = createEngagementStore(db, win, { defaultPolicy: POLICY })
+  // Every persisted row (tool_calls, findings, traces, raw_events) is attributed
+  // through this id. A chat can begin before the user starts an engagement, and
+  // silently writing null-attributed rows makes the activity log unusable — so
+  // open a lightweight session engagement on first use if none is active.
+  const ensureEngagement = (): string | null => {
+    const active = engagementStore.currentId()
+    if (active) return active
+    return engagementStore.start({ goal: 'Copilot session' }).id
+  }
   const getEngagementId = (): string | null => engagementStore.currentId()
   const findingsStore = createFindingsStore(db, win, { getEngagementId })
   // Trace bytes live as files on disk (§6.4); the DB keeps only ref + path.
@@ -1258,6 +1267,7 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
     responseStartedAt = performance.now()
     firstOutputSeen = false
     try {
+      ensureEngagement()
       const c = await ensureConnector()
       const prefix = buildContextPrefix()
       // Hand the agent the user's engagement restrictions once per session,

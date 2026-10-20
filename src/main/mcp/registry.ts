@@ -62,6 +62,11 @@ export class ToolRegistry {
     if (this.CACHEABLE.has(name)) {
       const cached = this.cache.get(key)
       if (cached && Date.now() - cached.ts < this.CACHE_TTL_MS) {
+        // A cache hit is still a tool call by the agent. Skipping the audit
+        // write here would leave the trail with no row for a read that plainly
+        // happened (ARCHITECTURE §6.4: "nothing acts without an audit row"), so
+        // the hit is recorded as intent + outcome like any other call.
+        await this.auditCacheHit(tool, rawParams, ctx, audit, cached.value)
         return cached.value
       }
     } else {
@@ -73,5 +78,41 @@ export class ToolRegistry {
       this.cache.set(key, { value: result, ts: Date.now() })
     }
     return result
+  }
+
+  /** Write the audit rows for a cache hit: intent (resolved params + target +
+   *  tier) before returning, then the outcome. The execution is skipped, not
+   *  the bookkeeping. */
+  private async auditCacheHit(
+    tool: Tool,
+    rawParams: unknown,
+    ctx: ToolContext,
+    audit: AuditLogger,
+    cached: ToolCallResult
+  ): Promise<void> {
+    // parse() is pure and already succeeded when the entry was cached; fall
+    // back to the raw params rather than dropping the row if that ever changes.
+    let input: unknown = rawParams
+    let target: string | undefined
+    try {
+      const parsed = tool.parse(rawParams)
+      input = parsed
+      target = tool.target?.(parsed)
+    } catch {
+      /* keep raw params / no target — the row is still written */
+    }
+    const toolCallId = await audit.recordIntent({
+      engagementId: ctx.engagementId,
+      tool: tool.name,
+      params: input,
+      target,
+      riskTier: tool.riskTier
+    })
+    await audit.recordOutcome(
+      toolCallId,
+      cached.ok
+        ? { ok: true, resultRef: cached.resultRef }
+        : { ok: false, error: cached.error?.message ?? 'cached failure' }
+    )
   }
 }

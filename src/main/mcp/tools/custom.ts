@@ -3,6 +3,7 @@
 // bridged from src/tools via capabilities.ts to keep a single source of truth.
 import { defineTool, type Tool } from '../tool'
 import { str, enumOf } from '../validate'
+import { ToolInputError } from '../errors'
 
 const mutate_payload = defineTool<
   { seed: string; strategy: 'case' | 'insert' | 'truncate' | 'repeat' },
@@ -19,7 +20,7 @@ const mutate_payload = defineTool<
   },
   outputSchema: { type: 'object', properties: { variants: { type: 'array' } } },
   parse: (raw) => ({
-    seed: str(raw, 'seed'),
+    seed: str(raw, 'seed', 4096),
     strategy: enumOf(raw, 'strategy', ['case', 'insert', 'truncate', 'repeat'] as const)
   }),
   execute: async (i) => {
@@ -33,6 +34,12 @@ const mutate_payload = defineTool<
         return { variants: [s.slice(0, Math.ceil(s.length / 2)), s.slice(0, 1), ''] }
       case 'repeat':
         return { variants: [s + s, s.repeat(8), s.repeat(64)] }
+      default:
+        // Unreachable through parse(), but keeps the failure actionable if the
+        // contract is ever bypassed.
+        throw new ToolInputError(
+          `unknown strategy "${String((i as { strategy?: unknown }).strategy)}" — use one of: case, insert, truncate, repeat`
+        )
     }
   }
 })
