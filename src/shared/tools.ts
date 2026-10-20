@@ -6,16 +6,16 @@
 // `schema-validate → scope-check → audit → tier` pipeline — here we only own
 // the schema-validate step (input is treated as hostile, §5.C rule 2) since
 // there is no scope to check and nothing to audit-write for pure compute.
-//
-// RiskTier is frozen in src/shared/agent.ts (Dev 2/owner of that file) and is
-// reused here, never redefined — these tools are tier 'read-only' (R) or the
-// 'processing' tier (P) per §5.E ("pure-compute (tier R or P)").
 
-import type { RiskTier } from './agent'
 import type { JsonSchema } from '../tools/schema'
 
+// Legacy tier vocabulary from the removed mock session manager (§5.E): capability
+// tools declare these string tiers, and ToolTier adds the pure-compute 'processing'
+// tier. Kept local now that src/shared/agent.ts is gone.
+export type CapabilityRiskTier = 'read-only' | 'mutating' | 'destructive'
+
 /** The tier vocabulary §5.E allows for pure-compute tools: R (read-only) or P (processing). */
-export type ToolTier = RiskTier | 'processing'
+export type ToolTier = CapabilityRiskTier | 'processing'
 
 /** Result of validating an untrusted input value against a tool's input schema. */
 export type ValidationResult<T> =

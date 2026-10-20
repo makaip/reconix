@@ -13,7 +13,6 @@ import { createCrawler, createCrawlCore, type CrawlCore } from './crawler'
 import { createReplay } from './replay'
 import { createRepeater, createRepeaterCore, type RepeaterCore } from './repeater'
 import { proxyStatus } from './runtime'
-import { createSessionManager } from './session'
 import { runSmoke } from './smoke'
 import { createTabManager } from './tabs'
 import { checkForUpdatesOnStartup, initAutoUpdater } from './updates'
@@ -310,7 +309,6 @@ function createWindow(): void {
   // with the copilot's MCP tools so the agent can drive the same crawl.
   crawlCore = createCrawlCore(replayer)
   createCrawler(mainWindow, replayer, crawlCore)
-  createSessionManager(mainWindow)
 
   // Auto-update (electron-updater): background download, install on quit, plus
   // the app:check-for-updates / app:quit-and-install IPC surface for the UI.

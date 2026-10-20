@@ -1,15 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type {
-  AgentEvent,
-  AgentSessionState,
-  AgentTask,
-  ApprovalDecision,
-  ApprovalRequest,
-  Finding,
-  SendMessageParams,
-  StartAgentParams,
-  ToolDescriptor
-} from '../shared/agent'
+import type { Finding } from '../shared/findings'
 import type {
   CdpNode,
   ConsoleEntry,
@@ -39,10 +29,8 @@ import type {
   WsConnection
 } from '../shared/tabs'
 import type { DiffResponsesOutput } from '../shared/tools'
-// Aliased: shared/agent.ts already exports a (differently-shaped) AgentEvent/
-// ApprovalDecision, imported above for the `agent` namespace. TODO: these are
-// two parallel event/approval shapes for what's conceptually the same
-// concept — worth reconciling once `agent.*` vs `copilot.*` below gets sorted out.
+// shared/contracts.ts owns the copilot-side event/approval shapes. The Copilot*
+// aliases keep them visually distinct from the `copilot.*` namespace below.
 import type {
   AgentEvent as CopilotAgentEvent,
   ApprovalDecision as CopilotApprovalDecision,
@@ -338,36 +326,6 @@ const api = {
       ipcRenderer.on('devtools:event', listener)
       return () => ipcRenderer.removeListener('devtools:event', listener)
     }
-  },
-  agent: {
-    start: (params: StartAgentParams): Promise<AgentSessionState> =>
-      ipcRenderer.invoke('agent:start', params),
-    pause: (): Promise<void> => ipcRenderer.invoke('agent:pause'),
-    resume: (): Promise<void> => ipcRenderer.invoke('agent:resume'),
-    getState: (): Promise<AgentSessionState> => ipcRenderer.invoke('agent:get-state'),
-    listTools: (): Promise<ToolDescriptor[]> => ipcRenderer.invoke('tool:list'),
-    // §6.1 sendMessage {text}: a user message into the agent session.
-    sendMessage: (params: SendMessageParams): Promise<void> =>
-      ipcRenderer.invoke('sendMessage', params),
-    // §6.1 respondApproval {approvalId, decision, editedParams?}. No code string crosses
-    // the bridge — editedParams is a plain text key/value map only.
-    respondApproval: (decision: ApprovalDecision): Promise<void> =>
-      ipcRenderer.invoke('respondApproval', decision),
-    // Legacy alias kept for backward-compat with earlier consumers.
-    respondToApproval: (decision: ApprovalDecision): Promise<void> =>
-      ipcRenderer.invoke('approval:respond', decision),
-    // §6.1 agent:event: the one transcript stream (user / reasoning / tool-call /
-    // tool-result / inline approval). Returns an unsubscribe function.
-    onEvent: (callback: (event: AgentEvent) => void): (() => void) =>
-      subscribe('agent:event', callback),
-    onState: (callback: (state: AgentSessionState) => void): (() => void) =>
-      subscribe('agent:state', callback),
-    onPlanUpdate: (callback: (tasks: AgentTask[]) => void): (() => void) =>
-      subscribe('plan:update', callback),
-    onApprovalRequest: (callback: (request: ApprovalRequest) => void): (() => void) =>
-      subscribe('approval:request', callback),
-    onFinding: (callback: (finding: Finding) => void): (() => void) =>
-      subscribe('finding:new', callback)
   },
   copilot: {
     // Resolves once OpenCode has durably admitted the message; the reply
