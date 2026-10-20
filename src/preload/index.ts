@@ -68,6 +68,62 @@ export type UpdateCheckResult = {
   error?: string
 }
 
+// Model/provider configuration edited from the Settings panel. This is the
+// renderer-side mirror of main's modelSettings module (kept structural so the
+// preload bundle never pulls in node-only main code): one target per agent role
+// plus user-added OpenAI-compatible backends.
+export type ReasoningEffort = 'off' | 'low' | 'medium' | 'high'
+
+/** One selectable model: OpenCode addresses these as `<provider>/<model>`. */
+export interface ModelTarget {
+  provider: string
+  model: string
+  /** Optional per-target endpoint override (custom OpenAI-compatible servers). */
+  baseUrl?: string | null
+  /** Optional per-target key override. Never logged. */
+  apiKey?: string | null
+}
+
+/** A user-added OpenAI-compatible backend, mirrored into opencode.json. */
+export interface CustomBackend {
+  id: string
+  baseUrl: string
+  apiKey: string
+  model: string
+}
+
+export type ModelRole = 'orchestrator' | 'domAnalyzer'
+
+export type ModelSettings = {
+  orchestrator: ModelTarget
+  domAnalyzer: ModelTarget
+  reasoning: ReasoningEffort
+  customBackends: CustomBackend[]
+}
+
+// Connection probe target: a role name (probe that role's saved target) or an
+// ad-hoc endpoint the user is still editing in the form.
+export type SettingsTestTarget =
+  | ModelRole
+  | {
+      provider?: string
+      baseUrl?: string | null
+      apiKey?: string | null
+      model?: string
+    }
+
+export type SettingsSetResult = {
+  ok: boolean
+  error?: string
+}
+
+export type SettingsTestResult = {
+  ok: boolean
+  error?: string
+  /** Model ids reported by the endpoint when the probe succeeded. */
+  models?: string[]
+}
+
 // Reads the app version from main synchronously at preload time so the Settings
 // panel renders it without a placeholder flash. Falls back to '' if the channel
 // isn't up yet (the UI degrades to "unknown version").
@@ -109,6 +165,17 @@ const api = {
     // Fires once a background update finishes downloading; returns an unsubscribe.
     onUpdateDownloaded: (callback: (payload: { version: string }) => void): (() => void) =>
       subscribe('app:update-downloaded', callback)
+  },
+  settings: {
+    // Persisted model/provider settings (readback on mount).
+    get: (): Promise<ModelSettings> => ipcRenderer.invoke('settings:get'),
+    // Persist the full settings object. Never throws; reports failure in-band.
+    set: (settings: ModelSettings): Promise<SettingsSetResult> =>
+      ipcRenderer.invoke('settings:set', settings),
+    // Probe a provider endpoint without saving it. Returns the model list on
+    // success so the UI can offer a picker.
+    testConnection: (target: SettingsTestTarget): Promise<SettingsTestResult> =>
+      ipcRenderer.invoke('settings:test-connection', target)
   },
   target: {
     setBounds: (bounds: Bounds): Promise<void> => ipcRenderer.invoke('target:set-bounds', bounds),
