@@ -3,16 +3,15 @@
 // a command string, so there is no shell-injection surface. The scan is capped at
 // 300s and its raw XML is stored as a trace (the agent reads it back with
 // get_trace), keeping large scan output out of the tool result.
-import { spawn } from 'node:child_process'
 import { defineTool, type Tool } from '../tool'
 import { ScopeError, ToolExecError, ToolInputError } from '../errors'
 import { bool, optStr, str, strArray } from '../validate'
+import { RunToolSpawnError, runTool, type RunToolResult } from './runTool'
 
 const SCAN_TIMEOUT_MS = 300_000
 // Nmap XML for a /24 with -sV is comfortably under 1 MB; cap well above that so
 // a runaway target list can't exhaust memory, while still reporting truncation.
-const MAX_STDOUT_BYTES = 8 * 1024 * 1024
-const MAX_STDERR_BYTES = 256 * 1024
+const MAX_XML_BYTES = 8 * 1024 * 1024
 
 // A single host or address — deliberately NOT a range/CIDR/multiple-host spec:
 // "10.0.0.1-254" or "a,b" cannot be scope-checked as one host, so they would
@@ -133,148 +132,27 @@ function bareHost(host: string): string {
 }
 
 /**
- * Kills the whole process tree: nmap spawns no children today, but a wrapper
- * script on PATH would, and child.kill() only signals the direct child. On
- * POSIX the child is spawned detached (own process group) so a negative pid
- * signals the group. Mirrors the helper in probes.ts (run_tool).
+ * Runs nmap through the shared runner (argv-only, process-tree kill on the
+ * wall-clock cap). A missing binary keeps nmap's actionable install hint.
  */
-function killProcessTree(child: import('node:child_process').ChildProcess): void {
-  const pid = child.pid
-  if (pid === undefined) return
-  if (process.platform === 'win32') {
-    try {
-      spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true }).on(
-        'error',
-        () => {
-          try {
-            child.kill('SIGKILL')
-          } catch {
-            /* already gone */
-          }
-        }
-      )
-    } catch {
-      try {
-        child.kill('SIGKILL')
-      } catch {
-        /* already gone */
-      }
-    }
-    return
-  }
+async function runNmap(args: string[]): Promise<RunToolResult> {
   try {
-    process.kill(-pid, 'SIGKILL')
-  } catch {
-    try {
-      child.kill('SIGKILL')
-    } catch {
-      /* already gone */
+    return await runTool('nmap', args, {
+      timeoutMs: SCAN_TIMEOUT_MS,
+      maxOutputBytes: MAX_XML_BYTES
+    })
+  } catch (err) {
+    if (err instanceof RunToolSpawnError && err.spawnCode === 'ENOENT') {
+      throw new ToolExecError(
+        'nmap_scan: nmap is not installed (binary not found on PATH) — no scan was run. ' +
+          'Install nmap (e.g. `apt install nmap`, `brew install nmap`, or the Windows installer) and retry, ' +
+          'or fall back to passive recon: navigate to the host and inspect get_page_info / get_network_log.'
+      )
     }
+    throw err instanceof RunToolSpawnError
+      ? new ToolExecError(`nmap_scan: nmap failed to spawn — ${err.message}`)
+      : err
   }
-}
-
-interface NmapRun {
-  xml: string
-  stderr: string
-  exitCode: number | null
-  truncated: boolean
-}
-
-function runNmap(args: string[]): Promise<NmapRun> {
-  return new Promise((resolve, reject) => {
-    let child: import('node:child_process').ChildProcess
-    try {
-      child = spawn('nmap', args, {
-        shell: false,
-        stdio: ['ignore', 'pipe', 'pipe'],
-        detached: process.platform !== 'win32',
-        windowsHide: true
-      })
-    } catch (err) {
-      reject(new ToolExecError(`nmap_scan: could not start nmap — ${(err as Error).message}`))
-      return
-    }
-
-    const out: Buffer[] = []
-    const errOut: Buffer[] = []
-    let outBytes = 0
-    let errBytes = 0
-    let truncated = false
-    let timedOut = false
-    let settled = false
-    let grace: NodeJS.Timeout | null = null
-
-    const finish = (code: number | null): void => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      if (grace) clearTimeout(grace)
-      resolve({
-        xml: Buffer.concat(out).toString('utf8'),
-        stderr: Buffer.concat(errOut).toString('utf8'),
-        exitCode: code,
-        truncated
-      })
-    }
-
-    const timer = setTimeout(() => {
-      timedOut = true
-      killProcessTree(child)
-      // A grandchild holding the pipes open can delay 'close' forever.
-      grace = setTimeout(() => finish(null), 1_000)
-      grace.unref?.()
-    }, SCAN_TIMEOUT_MS)
-
-    child.stdout?.on('data', (chunk: Buffer) => {
-      if (outBytes >= MAX_STDOUT_BYTES) {
-        truncated = true
-        return
-      }
-      const take = Math.min(chunk.length, MAX_STDOUT_BYTES - outBytes)
-      if (take < chunk.length) truncated = true
-      out.push(chunk.subarray(0, take))
-      outBytes += take
-    })
-    child.stderr?.on('data', (chunk: Buffer) => {
-      if (errBytes >= MAX_STDERR_BYTES) return
-      const take = Math.min(chunk.length, MAX_STDERR_BYTES - errBytes)
-      errOut.push(chunk.subarray(0, take))
-      errBytes += take
-    })
-    child.on('error', (err) => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      if (grace) clearTimeout(grace)
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-        reject(
-          new ToolExecError(
-            'nmap_scan: nmap is not installed (binary not found on PATH) — no scan was run. ' +
-              'Install nmap (e.g. `apt install nmap`, `brew install nmap`, or the Windows installer) and retry, ' +
-              'or fall back to passive recon: navigate to the host and inspect get_page_info / get_network_log.'
-          )
-        )
-        return
-      }
-      reject(new ToolExecError(`nmap_scan: nmap failed to spawn — ${err.message}`))
-    })
-    child.on('close', (code) => {
-      if (timedOut) {
-        settled = true
-        clearTimeout(timer)
-        if (grace) clearTimeout(grace)
-        reject(
-          new ToolExecError(
-            `nmap_scan: scan timed out after ${SCAN_TIMEOUT_MS / 1000}s (host unresponsive or too many ports). ` +
-              'Retry with a narrower "ports" range or without serviceVersion.',
-            true
-          )
-        )
-        return
-      }
-      finish(code)
-    })
-  })
 }
 
 const nmap_scan = defineTool<NmapInput, Record<string, unknown>>({
@@ -381,9 +259,16 @@ const nmap_scan = defineTool<NmapInput, Record<string, unknown>>({
     args.push('--open', '-oX', '-', i.host)
 
     const run = await runNmap(args)
+    if (run.timedOut) {
+      throw new ToolExecError(
+        `nmap_scan: scan timed out after ${SCAN_TIMEOUT_MS / 1000}s (host unresponsive or too many ports). ` +
+          'Retry with a narrower "ports" range or without serviceVersion.',
+        true
+      )
+    }
     const stderrTail = run.stderr.trim().slice(-1000)
 
-    if (!run.xml.includes('<nmaprun')) {
+    if (!run.stdout.includes('<nmaprun')) {
       // nmap exits non-zero on an unreachable/unauthorized target or a bad
       // argv; without any XML there is nothing to parse and nothing to trace.
       throw new ToolExecError(
@@ -393,12 +278,12 @@ const nmap_scan = defineTool<NmapInput, Record<string, unknown>>({
       )
     }
 
-    const scan = parseNmapXml(run.xml, i.host)
-    const rawRef = await ctx.traces.save('trace', run.xml)
+    const scan = parseNmapXml(run.stdout, i.host)
+    const rawRef = await ctx.traces.save('trace', run.stdout)
 
     const warnings: string[] = []
     if (run.exitCode !== 0 && stderrTail) warnings.push(`nmap exited ${run.exitCode}: ${stderrTail}`)
-    if (run.truncated) warnings.push('XML output was truncated at 8 MB; the rawRef trace is incomplete')
+    if (run.stdoutTruncated) warnings.push('XML output was truncated at 8 MB; the rawRef trace is incomplete')
 
     return {
       host: scan.host,

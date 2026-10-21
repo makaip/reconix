@@ -7,14 +7,13 @@
 // The full NDJSON stream is persisted as a `trace` (rawRef) because the agent
 // only gets a capped slice of results in the reply — the trace is where the
 // complete match list lives.
-import { spawn, type ChildProcess } from 'node:child_process'
 import { constants as fsConstants } from 'node:fs'
 import { access, stat } from 'node:fs/promises'
 import { defineTool, type Tool, type ToolContext } from '../tool'
 import { ToolExecError, ToolInputError } from '../errors'
 import { str, urlString } from '../validate'
 import { MAX_LIST_ITEMS } from '../limits'
-import { killProcessTree } from './probes'
+import { RunToolSpawnError, runTool, type RunToolResult } from './runTool'
 
 const FFUF_TIMEOUT_MS = 300_000
 /** Cap on captured stdout/stderr so a runaway wordlist can't exhaust memory. */
@@ -35,14 +34,6 @@ interface FfufRow {
   status: number
   length: number
   words: number
-}
-
-interface FfufRun {
-  code: number | null
-  stdout: string
-  stderr: string
-  timedOut: boolean
-  truncated: boolean
 }
 
 // ── input helpers ─────────────────────────────────────────────────────────────
@@ -75,84 +66,23 @@ function optCodes(raw: unknown, key: string): number[] | undefined {
 }
 
 // ── ffuf execution ────────────────────────────────────────────────────────────
-function runFfuf(args: string[]): Promise<FfufRun> {
-  return new Promise((resolve, reject) => {
-    const child: ChildProcess = spawn('ffuf', args, {
-      shell: false,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      // POSIX: own process group so the timeout can signal the whole tree.
-      detached: process.platform !== 'win32',
-      windowsHide: true
+/** Runs ffuf through the shared runner, keeping ffuf's install hint on ENOENT. */
+async function runFfuf(args: string[]): Promise<RunToolResult> {
+  try {
+    return await runTool('ffuf', args, {
+      timeoutMs: FFUF_TIMEOUT_MS,
+      maxOutputBytes: FFUF_MAX_CAPTURE
     })
-    const stdoutChunks: Buffer[] = []
-    const stderrChunks: Buffer[] = []
-    let stdoutBytes = 0
-    let stderrBytes = 0
-    let truncated = false
-    let timedOut = false
-    let settled = false
-    let grace: NodeJS.Timeout | null = null
-
-    /** Appends without exceeding the cap; flips `truncated` when bytes are cut. */
-    const collect = (chunks: Buffer[], total: number, chunk: Buffer): number => {
-      if (total >= FFUF_MAX_CAPTURE) {
-        truncated = true
-        return total
-      }
-      const take = Math.min(chunk.length, FFUF_MAX_CAPTURE - total)
-      if (take < chunk.length) truncated = true
-      chunks.push(chunk.subarray(0, take))
-      return total + take
+  } catch (err) {
+    if (err instanceof RunToolSpawnError && err.spawnCode === 'ENOENT') {
+      throw new ToolExecError(
+        'ffuf is not installed or not on PATH — install ffuf (https://github.com/ffuf/ffuf) and retry; no requests were sent'
+      )
     }
-
-    const finish = (code: number | null): void => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      if (grace) clearTimeout(grace)
-      // Decode once, after all chunks are in, so a cap never splits a UTF-8
-      // sequence and turns the tail into mojibake.
-      resolve({
-        code,
-        stdout: Buffer.concat(stdoutChunks).toString('utf8'),
-        stderr: Buffer.concat(stderrChunks).toString('utf8'),
-        timedOut,
-        truncated
-      })
-    }
-
-    const timer = setTimeout(() => {
-      timedOut = true
-      killProcessTree(child)
-      // A grandchild holding the pipes open can delay 'close' forever; report
-      // what was captured rather than leaving the MCP call hanging.
-      grace = setTimeout(() => finish(null), 1_000)
-      grace.unref?.()
-    }, FFUF_TIMEOUT_MS)
-
-    child.stdout?.on('data', (chunk: Buffer) => {
-      stdoutBytes = collect(stdoutChunks, stdoutBytes, chunk)
-    })
-    child.stderr?.on('data', (chunk: Buffer) => {
-      stderrBytes = collect(stderrChunks, stderrBytes, chunk)
-    })
-    child.on('error', (err: NodeJS.ErrnoException) => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      if (grace) clearTimeout(grace)
-      if (err.code === 'ENOENT') {
-        reject(
-          new ToolExecError(
-            'ffuf is not installed or not on PATH — install ffuf (https://github.com/ffuf/ffuf) and retry; no requests were sent'
-          )
-        )
-      } else {
-        reject(new ToolExecError(`ffuf_fuzz: failed to spawn "ffuf": ${err.message}`))
-      }
-    })
-    child.on('close', (code) => finish(code))
-  })
+    throw err instanceof RunToolSpawnError
+      ? new ToolExecError(`ffuf_fuzz: failed to spawn "ffuf": ${err.message}`)
+      : err
+  }
 }
 
 // ── output parsing ────────────────────────────────────────────────────────────
@@ -285,6 +215,7 @@ const ffuf_fuzz = defineTool<FfufInput, unknown>({
 
     const run = await runFfuf(args)
     const { rows, malformed } = parseResults(run.stdout)
+    const truncated = run.stdoutTruncated || run.stderrTruncated
     const rawRef = await ctx.traces.save(
       'trace',
       JSON.stringify({
@@ -292,9 +223,9 @@ const ffuf_fuzz = defineTool<FfufInput, unknown>({
         argv: args,
         url: i.url,
         wordlist: i.wordlist,
-        exitCode: run.code,
+        exitCode: run.exitCode,
         timedOut: run.timedOut,
-        stdoutTruncated: run.truncated,
+        stdoutTruncated: truncated,
         stderr: run.stderr,
         stdout: run.stdout
       })
@@ -302,10 +233,10 @@ const ffuf_fuzz = defineTool<FfufInput, unknown>({
 
     // Nothing parsed and a non-zero/timed-out run: the failure is the useful
     // result (bad wordlist, unreachable target), so surface ffuf's own words.
-    if (rows.length === 0 && (run.timedOut || run.code !== 0)) {
+    if (rows.length === 0 && (run.timedOut || run.exitCode !== 0)) {
       const why = run.timedOut
         ? `ffuf hit the ${FFUF_TIMEOUT_MS / 1000}s wall-clock cap before returning a match`
-        : `ffuf exited with code ${String(run.code)} and returned no matches`
+        : `ffuf exited with code ${String(run.exitCode)} and returned no matches`
       const detail = stderrTail(run.stderr)
       throw new ToolExecError(`${why}${detail ? ` — ${detail}` : ''} (raw output: ${rawRef})`)
     }
@@ -331,7 +262,7 @@ const ffuf_fuzz = defineTool<FfufInput, unknown>({
       truncated: omitted > 0,
       omitted,
       timedOut: run.timedOut,
-      exitCode: run.code,
+      exitCode: run.exitCode,
       malformedLines: malformed,
       note
     }

@@ -7,16 +7,14 @@
 // path, or put `nuclei` on PATH; otherwise the tool fails with an actionable
 // message. Argv-only, no shell: template/tag/severity values are validated
 // before they can reach argv, so a value can never smuggle in another flag.
-import { spawn, type ChildProcess } from 'node:child_process'
 import { defineTool, type Tool } from '../tool'
 import { ScopeError, ToolExecError, ToolInputError } from '../errors'
 import { urlString } from '../validate'
+import { RunToolSpawnError, runTool, type RunToolResult } from './runTool'
 
 const NUCLEI_TIMEOUT_MS = 300_000
 /** Cap on captured stdout — nuclei JSONL is verbose on big template sets. */
 const NUCLEI_MAX_OUTPUT = 8 * 1024 * 1024
-/** Grace period after the kill signal for the pipes to drain. */
-const KILL_GRACE_MS = 1_000
 
 // Only these shapes are allowed in -tags/-severity/-t values. No leading "-"
 // (so a value can never become a flag), no commas (values are comma-joined),
@@ -43,144 +41,32 @@ export interface NucleiScanInput {
   templates?: string[]
 }
 
-export interface NucleiRunResult {
-  stdout: string
-  stderr: string
-  code: number | null
-  timedOut: boolean
-  truncated: boolean
-}
-
 function nucleiBin(): string {
   const override = (process.env.RECONIX_NUCLEI_BIN ?? '').trim()
   return override === '' ? 'nuclei' : override
 }
 
-/** Kills the whole process tree: a bare kill() leaves grandchildren running. */
-function killProcessTree(child: ChildProcess): void {
-  const pid = child.pid
-  if (pid === undefined) return
-  if (process.platform === 'win32') {
-    try {
-      const killer = spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true })
-      killer.on('error', () => {
-        try {
-          child.kill('SIGKILL')
-        } catch {
-          /* already gone */
-        }
-      })
-    } catch {
-      try {
-        child.kill('SIGKILL')
-      } catch {
-        /* already gone */
-      }
-    }
-    return
-  }
-  try {
-    process.kill(-pid, 'SIGKILL')
-  } catch {
-    try {
-      child.kill('SIGKILL')
-    } catch {
-      /* already gone */
-    }
-  }
-}
-
 /**
- * Runs nuclei argv-only (no shell) with a hard wall-clock cap. Resolves with
- * whatever was captured even when the run times out, so a long scan still
- * yields the findings it produced before the kill.
+ * Runs nuclei argv-only (no shell) with a hard wall-clock cap through the
+ * shared runner; the missing-binary case keeps its install instructions.
  */
-function runNuclei(args: string[], timeoutMs: number): Promise<NucleiRunResult> {
-  return new Promise((resolve, reject) => {
-    let child: ChildProcess
-    try {
-      child = spawn(nucleiBin(), args, {
-        shell: false,
-        stdio: ['ignore', 'pipe', 'pipe'],
-        // POSIX: own process group so the timeout can signal the whole tree.
-        detached: process.platform !== 'win32',
-        windowsHide: true
-      })
-    } catch (err) {
-      reject(new ToolExecError(`nuclei_scan: failed to spawn "${nucleiBin()}": ${(err as Error).message}`))
-      return
+async function runNuclei(args: string[], timeoutMs: number): Promise<RunToolResult> {
+  try {
+    return await runTool(nucleiBin(), args, { timeoutMs, maxOutputBytes: NUCLEI_MAX_OUTPUT })
+  } catch (err) {
+    if (err instanceof RunToolSpawnError && err.spawnCode === 'ENOENT') {
+      throw new ToolExecError(
+        `nuclei_scan: "${nucleiBin()}" was not found. Install nuclei ` +
+          '(https://github.com/projectdiscovery/nuclei) and put it on PATH, or point ' +
+          'RECONIX_NUCLEI_BIN at the binary. In a locked-down build the binary must also be ' +
+          'on the deployment allowlist (RECONIX_RUN_TOOL_ALLOWLIST for run_tool, plus the ' +
+          'sandbox/broker binary allowlist).'
+      )
     }
-
-    const stdoutChunks: Buffer[] = []
-    const stderrChunks: Buffer[] = []
-    let stdoutBytes = 0
-    let stderrBytes = 0
-    let truncated = false
-    let timedOut = false
-    let settled = false
-    let timer: NodeJS.Timeout | undefined
-    let grace: NodeJS.Timeout | undefined
-
-    const finish = (code: number | null): void => {
-      if (settled) return
-      settled = true
-      if (timer) clearTimeout(timer)
-      if (grace) clearTimeout(grace)
-      resolve({
-        stdout: Buffer.concat(stdoutChunks).toString('utf8'),
-        stderr: Buffer.concat(stderrChunks).toString('utf8'),
-        code,
-        timedOut,
-        truncated
-      })
-    }
-
-    timer = setTimeout(() => {
-      timedOut = true
-      killProcessTree(child)
-      // A grandchild holding the pipes open can delay 'close' forever.
-      grace = setTimeout(() => finish(null), KILL_GRACE_MS)
-      grace.unref?.()
-    }, timeoutMs)
-
-    child.stdout?.on('data', (chunk: Buffer) => {
-      if (stdoutBytes >= NUCLEI_MAX_OUTPUT) {
-        truncated = true
-        return
-      }
-      const take = Math.min(chunk.length, NUCLEI_MAX_OUTPUT - stdoutBytes)
-      if (take < chunk.length) truncated = true
-      stdoutChunks.push(chunk.subarray(0, take))
-      stdoutBytes += take
-    })
-    // stderr is only used to explain a failure; a small tail is plenty.
-    child.stderr?.on('data', (chunk: Buffer) => {
-      if (stderrBytes >= 8_192) return
-      const take = Math.min(chunk.length, 8_192 - stderrBytes)
-      stderrChunks.push(chunk.subarray(0, take))
-      stderrBytes += take
-    })
-    child.on('error', (err: NodeJS.ErrnoException) => {
-      if (settled) return
-      settled = true
-      if (timer) clearTimeout(timer)
-      if (grace) clearTimeout(grace)
-      if (err.code === 'ENOENT') {
-        reject(
-          new ToolExecError(
-            `nuclei_scan: "${nucleiBin()}" was not found. Install nuclei ` +
-              '(https://github.com/projectdiscovery/nuclei) and put it on PATH, or point ' +
-              'RECONIX_NUCLEI_BIN at the binary. In a locked-down build the binary must also be ' +
-              'on the deployment allowlist (RECONIX_RUN_TOOL_ALLOWLIST for run_tool, plus the ' +
-              'sandbox/broker binary allowlist).'
-          )
-        )
-        return
-      }
-      reject(new ToolExecError(`nuclei_scan: failed to spawn "${nucleiBin()}": ${err.message}`))
-    })
-    child.on('close', (code) => finish(code))
-  })
+    throw err instanceof RunToolSpawnError
+      ? new ToolExecError(`nuclei_scan: failed to spawn "${nucleiBin()}": ${err.message}`)
+      : err
+  }
 }
 
 /** Parses `-jsonl` output (one JSON object per line); junk lines are skipped. */
@@ -323,10 +209,10 @@ const nuclei_scan = defineTool<NucleiScanInput, unknown>({
         true
       )
     }
-    if (findings.length === 0 && !result.timedOut && result.code !== 0) {
+    if (findings.length === 0 && !result.timedOut && result.exitCode !== 0) {
       const tail = result.stderr.trim().split(/\r?\n/).slice(-3).join(' | ')
       throw new ToolExecError(
-        `nuclei_scan: nuclei exited with code ${result.code}${tail ? `: ${tail}` : ''} (rawRef ${rawRef}). ` +
+        `nuclei_scan: nuclei exited with code ${result.exitCode}${tail ? `: ${tail}` : ''} (rawRef ${rawRef}). ` +
           'Check the target is reachable and inside scope, and that the requested tags/templates exist.',
         false
       )

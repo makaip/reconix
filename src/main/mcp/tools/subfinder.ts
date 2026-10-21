@@ -2,12 +2,12 @@
 // Wraps the external binary argv-only (no shell), with a hard 120s cap and the
 // raw stdout/stderr kept as a trace so the agent can re-read exactly what the
 // tool saw instead of trusting the parsed summary.
-import { spawn } from 'node:child_process'
 import { defineTool, type Tool, type ToolContext } from '../tool'
 import { ScopeError, ToolExecError, ToolInputError } from '../errors'
 import { bool, str, strArray } from '../validate'
 import { clampString } from '../limits'
 import type { ScopeConfig } from '../../../shared/contracts'
+import { RunToolSpawnError, runTool } from './runTool'
 
 const SUBFINDER_TIMEOUT_MS = 120_000
 /** Inline list cap — the full set always lands in the trace, and a passive
@@ -127,8 +127,8 @@ interface RunResult {
   timedOut: boolean
 }
 
-function spawnFailure(err: NodeJS.ErrnoException): ToolExecError {
-  if (err.code === 'ENOENT') {
+function spawnFailure(err: unknown): ToolExecError {
+  if (err instanceof RunToolSpawnError && err.spawnCode === 'ENOENT') {
     return new ToolExecError(
       'subfinder binary not found on PATH — install it ' +
         '(go install github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest) ' +
@@ -136,78 +136,15 @@ function spawnFailure(err: NodeJS.ErrnoException): ToolExecError {
         'with navigate + list_links or skip the subdomain step.'
     )
   }
-  return new ToolExecError(`subfinder failed to start: ${err.message}`)
-}
-
-function appendCapped(chunks: Buffer[], total: number, chunk: Buffer): number {
-  if (total >= MAX_CAPTURE_BYTES) return total
-  const take = Math.min(chunk.length, MAX_CAPTURE_BYTES - total)
-  chunks.push(chunk.subarray(0, take))
-  return total + take
+  return new ToolExecError(`subfinder failed to start: ${(err as Error)?.message ?? String(err)}`)
 }
 
 function runSubfinder(args: readonly string[]): Promise<RunResult> {
-  return new Promise<RunResult>((resolve, reject) => {
-    let child: ReturnType<typeof spawn>
-    try {
-      child = spawn('subfinder', [...args], {
-        shell: false, // argv only — no shell, no interpolation
-        stdio: ['ignore', 'pipe', 'pipe'],
-        windowsHide: true
-      })
-    } catch (err) {
-      reject(spawnFailure(err as NodeJS.ErrnoException))
-      return
-    }
-
-    const stdoutChunks: Buffer[] = []
-    const stderrChunks: Buffer[] = []
-    let stdoutBytes = 0
-    let stderrBytes = 0
-    let timedOut = false
-    let settled = false
-    let grace: NodeJS.Timeout | null = null
-
-    const settle = (exitCode: number | null): void => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      if (grace) clearTimeout(grace)
-      resolve({
-        stdout: Buffer.concat(stdoutChunks).toString('utf8'),
-        stderr: Buffer.concat(stderrChunks).toString('utf8'),
-        exitCode,
-        timedOut
-      })
-    }
-
-    const timer = setTimeout(() => {
-      timedOut = true
-      try {
-        child.kill('SIGKILL')
-      } catch {
-        /* already gone */
-      }
-      // A killed child normally emits 'close' promptly; don't hang the MCP call
-      // if it doesn't, report the partial capture instead.
-      grace = setTimeout(() => settle(null), 1_000)
-      grace.unref?.()
-    }, SUBFINDER_TIMEOUT_MS)
-
-    child.stdout?.on('data', (chunk: Buffer) => {
-      stdoutBytes = appendCapped(stdoutChunks, stdoutBytes, chunk)
-    })
-    child.stderr?.on('data', (chunk: Buffer) => {
-      stderrBytes = appendCapped(stderrChunks, stderrBytes, chunk)
-    })
-    child.on('error', (err: NodeJS.ErrnoException) => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      if (grace) clearTimeout(grace)
-      reject(spawnFailure(err))
-    })
-    child.on('close', (code) => settle(code))
+  return runTool('subfinder', args, {
+    timeoutMs: SUBFINDER_TIMEOUT_MS,
+    maxOutputBytes: MAX_CAPTURE_BYTES
+  }).catch((err: unknown) => {
+    throw spawnFailure(err)
   })
 }
 
