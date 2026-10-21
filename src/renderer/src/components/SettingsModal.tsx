@@ -47,8 +47,8 @@ const FALLBACK_ORCHESTRATOR_GROUPS: ModelGroup[] = [
 ]
 
 const FALLBACK_DOM_ANALYZER_GROUPS: ModelGroup[] = [
-  { provider: 'Gemini', options: [{ id: 'gemini/gemini-flash-lite-latest', label: 'Gemini Flash Lite (latest) (default)' }] },
-  { provider: 'OpenCode', options: [{ id: 'opencode/grok-code', label: 'Grok Code' }] }
+  { provider: 'OpenCode', options: [{ id: 'opencode/glm-5.3-flash-free', label: 'GLM 5.3 Flash (free) (default)' }] },
+  { provider: 'Gemini', options: [{ id: 'gemini/gemini-flash-lite-latest', label: 'Gemini Flash Lite (latest)' }] }
 ]
 
 const REASONING_LEVELS: ReasoningEffort[] = ['off', 'low', 'medium', 'high']

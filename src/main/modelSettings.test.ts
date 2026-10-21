@@ -16,7 +16,7 @@ const tempDir = (): string => mkdtempSync(join(tmpdir(), 'reconix-settings-'))
 
 const configured: ModelSettings = {
   orchestrator: { provider: 'gemini', model: 'gemini-2.5-pro' },
-  domAnalyzer: { provider: 'gemini', model: 'gemini-flash-lite-latest' },
+  domAnalyzer: { provider: 'opencode', model: 'glm-5.3-flash-free' },
   reasoning: 'high',
   customBackends: [
     { id: 'my-openai', baseUrl: 'https://api.example.test/v1', apiKey: 'sk-secret', model: 'gpt-4o' }
@@ -28,7 +28,7 @@ describe('modelSettings', () => {
     const settings = await load(tempDir())
     expect(settings).toEqual(DEFAULT_MODEL_SETTINGS)
     expect(getModelSpec(settings, 'orchestrator')).toBe('vllm-orchestrator/orchestrator-model')
-    expect(getModelSpec(settings, 'domAnalyzer')).toBe('gemini/gemini-flash-lite-latest')
+    expect(getModelSpec(settings, 'domAnalyzer')).toBe('opencode/glm-5.3-flash-free')
   })
 
   it('falls back to defaults on corrupt JSON instead of throwing', async () => {

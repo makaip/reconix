@@ -57,7 +57,7 @@ const SETTINGS_FILE = 'model-settings.json'
  *  install with no settings file behaves identically. */
 export const DEFAULT_MODEL_SETTINGS: ModelSettings = {
   orchestrator: { provider: 'vllm-orchestrator', model: 'orchestrator-model' },
-  domAnalyzer: { provider: 'gemini', model: 'gemini-flash-lite-latest' },
+  domAnalyzer: { provider: 'opencode', model: 'glm-5.3-flash-free' },
   reasoning: 'medium',
   customBackends: []
 }
@@ -206,7 +206,7 @@ export async function load(userDataPath: string): Promise<ModelSettings> {
   // longer routable through OpenCode Zen. Move installs that never changed it
   // onto a working default so the DomSummaryWatcher stops failing every page.
   if (settings.domAnalyzer.provider === 'opencode' && settings.domAnalyzer.model === 'grok-code') {
-    settings.domAnalyzer = { provider: 'gemini', model: 'gemini-flash-lite-latest' }
+    settings.domAnalyzer = { provider: 'opencode', model: 'glm-5.3-flash-free' }
   }
   return settings
 }

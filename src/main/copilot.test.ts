@@ -33,13 +33,13 @@ describe('copilot model resolution', () => {
     process.env.RECONIX_TEST_USERDATA = dir
     writeSettings(dir, {
       orchestrator: { provider: 'gemini', model: 'gemini-2.5-pro' },
-      domAnalyzer: { provider: 'gemini', model: 'gemini-flash-lite-latest' },
+      domAnalyzer: { provider: 'opencode', model: 'glm-5.3-flash-free' },
       reasoning: 'medium',
       customBackends: []
     })
 
     expect(await getOrchestratorModel()).toBe('gemini/gemini-2.5-pro')
-    expect(await getDomAnalyzerModel()).toBe('gemini/gemini-flash-lite-latest')
+    expect(await getDomAnalyzerModel()).toBe('opencode/glm-5.3-flash-free')
   })
 
   it('returns the legacy hardcoded model when no settings file exists', async () => {
@@ -52,7 +52,7 @@ describe('copilot model resolution', () => {
     process.env.RECONIX_TEST_USERDATA = dir
     writeSettings(dir, {
       orchestrator: { provider: 'vllm-orchestrator', model: 'orchestrator-model' },
-      domAnalyzer: { provider: 'gemini', model: 'gemini-flash-lite-latest' },
+      domAnalyzer: { provider: 'opencode', model: 'glm-5.3-flash-free' },
       reasoning: 'low',
       customBackends: []
     })
@@ -60,7 +60,7 @@ describe('copilot model resolution', () => {
 
     writeSettings(dir, {
       orchestrator: { provider: 'openrouter', model: 'dolphin3-mistral-24b' },
-      domAnalyzer: { provider: 'gemini', model: 'gemini-flash-lite-latest' },
+      domAnalyzer: { provider: 'opencode', model: 'glm-5.3-flash-free' },
       reasoning: 'low',
       customBackends: []
     })
