@@ -11,8 +11,9 @@ import { constants as fsConstants } from 'node:fs'
 import { access, stat } from 'node:fs/promises'
 import { defineTool, type Tool, type ToolContext } from '../tool'
 import { ToolExecError, ToolInputError } from '../errors'
-import { str, urlString } from '../validate'
+import { bool, str, urlString } from '../validate'
 import { MAX_LIST_ITEMS } from '../limits'
+import { jobStore } from '../jobs'
 import { RunToolSpawnError, runTool, type RunToolResult } from './runTool'
 
 const FFUF_TIMEOUT_MS = 120_000
@@ -27,7 +28,12 @@ interface FfufInput {
   matchCodes?: number[]
   filterCodes?: number[]
   threads: number
+  /** Run detached and return a jobId instead of blocking (see jobs.ts). */
+  background?: boolean
 }
+
+/** Returned in place of the scan result when `background: true`. */
+type BackgroundHandle = { jobId: string; status: string; target?: string }
 
 interface FfufRow {
   url: string
@@ -67,11 +73,12 @@ function optCodes(raw: unknown, key: string): number[] | undefined {
 
 // ── ffuf execution ────────────────────────────────────────────────────────────
 /** Runs ffuf through the shared runner, keeping ffuf's install hint on ENOENT. */
-async function runFfuf(args: string[]): Promise<RunToolResult> {
+async function runFfuf(args: string[], signal?: AbortSignal): Promise<RunToolResult> {
   try {
     return await runTool('ffuf', args, {
       timeoutMs: FFUF_TIMEOUT_MS,
-      maxOutputBytes: FFUF_MAX_CAPTURE
+      maxOutputBytes: FFUF_MAX_CAPTURE,
+      signal
     })
   } catch (err) {
     if (err instanceof RunToolSpawnError && err.spawnCode === 'ENOENT') {
@@ -144,10 +151,93 @@ function stderrTail(stderr: string, max = 400): string {
 }
 
 // ── ffuf_fuzz ─────────────────────────────────────────────────────────────────
+/**
+ * The blocking body of ffuf_fuzz. Extracted so the tool can hand it to the job
+ * store when `background: true` is set, and run it inline otherwise. `signal`
+ * aborts the spawned process tree when the job is cancelled.
+ */
+async function runHeavy(
+  i: FfufInput,
+  ctx: ToolContext,
+  signal?: AbortSignal
+): Promise<Record<string, unknown>> {
+  // Defense in depth: the pipeline already checked `target`, but the argv is
+  // built here and a URL with FUZZ in the host would change the resolved host.
+  if (!ctx.scope.isInScope(i.url)) throw new ToolExecError('target out of scope — ffuf not started')
+
+  try {
+    await access(i.wordlist, fsConstants.R_OK)
+    const info = await stat(i.wordlist)
+    if (!info.isFile()) throw new Error('not a file')
+  } catch {
+    throw new ToolInputError(`"wordlist" is not a readable file: ${i.wordlist}`)
+  }
+
+  const args = ['-u', i.url, '-w', i.wordlist, '-json']
+  if (i.matchCodes) args.push('-mc', i.matchCodes.join(','))
+  if (i.filterCodes) args.push('-fc', i.filterCodes.join(','))
+  args.push('-t', String(i.threads))
+  args.push('-maxtime', String(Math.ceil(FFUF_TIMEOUT_MS / 1000)))
+
+  const run = await runFfuf(args, signal)
+  const { rows, malformed } = parseResults(run.stdout)
+  const truncated = run.stdoutTruncated || run.stderrTruncated
+  const rawRef = await ctx.traces.save(
+    'trace',
+    JSON.stringify({
+      tool: 'ffuf_fuzz',
+      argv: args,
+      url: i.url,
+      wordlist: i.wordlist,
+      exitCode: run.exitCode,
+      timedOut: run.timedOut,
+      stdoutTruncated: truncated,
+      stderr: run.stderr,
+      stdout: run.stdout
+    })
+  )
+
+  // Nothing parsed and a non-zero/timed-out run: the failure is the useful
+  // result (bad wordlist, unreachable target), so surface ffuf's own words.
+  if (rows.length === 0 && (run.timedOut || run.exitCode !== 0)) {
+    const why = run.timedOut
+      ? `ffuf hit the ${FFUF_TIMEOUT_MS / 1000}s wall-clock cap before returning a match`
+      : `ffuf exited with code ${String(run.exitCode)} and returned no matches`
+    const detail = stderrTail(run.stderr)
+    throw new ToolExecError(`${why}${detail ? ` — ${detail}` : ''} (raw output: ${rawRef})`)
+  }
+
+  const returned = rows.slice(0, MAX_LIST_ITEMS)
+  const omitted = rows.length - returned.length
+  const note = run.timedOut
+    ? `ffuf timed out after ${FFUF_TIMEOUT_MS / 1000}s — ${rows.length} match(es) were collected before the cap; narrow the wordlist or reduce threads/filters before retrying`
+    : rows.length === 0
+      ? 'ffuf returned no matches — check that the wordlist and FUZZ placement are right, and that -mc/-fc are not filtering everything out'
+      : omitted > 0
+        ? `showing the first ${returned.length} of ${rows.length} matches; the full list is in rawRef`
+        : malformed > 0
+          ? `${malformed} unparseable output line(s) were skipped — inspect rawRef if a match seems missing`
+          : 'matches are ready to triage — replay interesting hits with replay_request before recording a finding'
+
+  return {
+    url: i.url,
+    results: returned,
+    count: rows.length,
+    rawRef,
+    returned: returned.length,
+    truncated: omitted > 0,
+    omitted,
+    timedOut: run.timedOut,
+    exitCode: run.exitCode,
+    malformedLines: malformed,
+    note
+  }
+}
+
 const ffuf_fuzz = defineTool<FfufInput, unknown>({
   name: 'ffuf_fuzz',
   description:
-    'Content discovery with ffuf: fuzz a FUZZ keyword (path/query/body) against a wordlist and return the matching responses (url/status/length/words). Tier D external binary — argv-only, scope-checked before spawn, 120s wall-clock cap (-maxtime). Prefer small targeted wordlists (<=5000 entries) to avoid long runs; the full match list is kept in the returned rawRef trace.',
+    'Content discovery with ffuf: fuzz a FUZZ keyword (path/query/body) against a wordlist and return the matching responses (url/status/length/words). Tier D external binary — argv-only, scope-checked before spawn, 120s wall-clock cap (-maxtime). Prefer small targeted wordlists (<=5000 entries) to avoid long runs; the full match list is kept in the returned rawRef trace. Set background: true to get a jobId immediately and poll get_job_status / get_job_result instead of blocking.',
   riskTier: 'D',
   inputSchema: {
     type: 'object',
@@ -157,7 +247,8 @@ const ffuf_fuzz = defineTool<FfufInput, unknown>({
       wordlist: { type: 'string', description: 'Path to a wordlist file.' },
       matchCodes: { type: 'array', items: { type: 'number' }, description: 'ffuf -mc: codes to show (100-599).' },
       filterCodes: { type: 'array', items: { type: 'number' }, description: 'ffuf -fc: codes to hide (100-599).' },
-      threads: { type: 'number', minimum: 1, maximum: FFUF_MAX_THREADS, description: `ffuf -t (default ${FFUF_DEFAULT_THREADS}).` }
+      threads: { type: 'number', minimum: 1, maximum: FFUF_MAX_THREADS, description: `ffuf -t (default ${FFUF_DEFAULT_THREADS}).` },
+      background: { type: 'boolean', description: 'Run in the background and return a jobId immediately instead of blocking. Poll get_job_status / get_job_result.' }
     },
     additionalProperties: false
   },
@@ -167,7 +258,11 @@ const ffuf_fuzz = defineTool<FfufInput, unknown>({
       url: { type: 'string' },
       results: { type: 'array', items: { type: 'object' } },
       count: { type: 'number' },
-      rawRef: { type: 'string' }
+      rawRef: { type: 'string' },
+      // Background shape (`background: true`): no results yet, just a handle.
+      jobId: { type: 'string' },
+      status: { type: 'string' },
+      target: { type: 'string' }
     }
   },
   parse: (raw) => {
@@ -191,82 +286,23 @@ const ffuf_fuzz = defineTool<FfufInput, unknown>({
       wordlist,
       matchCodes: optCodes(raw, 'matchCodes'),
       filterCodes: optCodes(raw, 'filterCodes'),
-      threads
+      threads,
+      // Only surfaced when set, so the parsed shape stays minimal.
+      ...(bool(raw, 'background', false) ? { background: true } : {})
     }
   },
   target: (i) => i.url,
-  execute: async (i, ctx: ToolContext) => {
-    // Defense in depth: the pipeline already checked `target`, but the argv is
-    // built here and a URL with FUZZ in the host would change the resolved host.
-    if (!ctx.scope.isInScope(i.url)) throw new ToolExecError('target out of scope — ffuf not started')
-
-    try {
-      await access(i.wordlist, fsConstants.R_OK)
-      const info = await stat(i.wordlist)
-      if (!info.isFile()) throw new Error('not a file')
-    } catch {
-      throw new ToolInputError(`"wordlist" is not a readable file: ${i.wordlist}`)
+  execute: async (i, ctx) => {
+    // The pipeline already scope-checked the target (hook above); this is just
+    // the label recorded on the job so get_job_status is readable.
+    const target = i.url
+    if (i.background === true) {
+      const job = await jobStore.start('ffuf_fuzz', target, async (handle) =>
+        runHeavy(i, ctx, handle.signal)
+      )
+      return { jobId: job.id, status: job.status, target } as BackgroundHandle
     }
-
-    const args = ['-u', i.url, '-w', i.wordlist, '-json']
-    if (i.matchCodes) args.push('-mc', i.matchCodes.join(','))
-    if (i.filterCodes) args.push('-fc', i.filterCodes.join(','))
-    args.push('-t', String(i.threads))
-    args.push('-maxtime', String(Math.ceil(FFUF_TIMEOUT_MS / 1000)))
-
-    const run = await runFfuf(args)
-    const { rows, malformed } = parseResults(run.stdout)
-    const truncated = run.stdoutTruncated || run.stderrTruncated
-    const rawRef = await ctx.traces.save(
-      'trace',
-      JSON.stringify({
-        tool: 'ffuf_fuzz',
-        argv: args,
-        url: i.url,
-        wordlist: i.wordlist,
-        exitCode: run.exitCode,
-        timedOut: run.timedOut,
-        stdoutTruncated: truncated,
-        stderr: run.stderr,
-        stdout: run.stdout
-      })
-    )
-
-    // Nothing parsed and a non-zero/timed-out run: the failure is the useful
-    // result (bad wordlist, unreachable target), so surface ffuf's own words.
-    if (rows.length === 0 && (run.timedOut || run.exitCode !== 0)) {
-      const why = run.timedOut
-        ? `ffuf hit the ${FFUF_TIMEOUT_MS / 1000}s wall-clock cap before returning a match`
-        : `ffuf exited with code ${String(run.exitCode)} and returned no matches`
-      const detail = stderrTail(run.stderr)
-      throw new ToolExecError(`${why}${detail ? ` — ${detail}` : ''} (raw output: ${rawRef})`)
-    }
-
-    const returned = rows.slice(0, MAX_LIST_ITEMS)
-    const omitted = rows.length - returned.length
-    const note = run.timedOut
-      ? `ffuf timed out after ${FFUF_TIMEOUT_MS / 1000}s — ${rows.length} match(es) were collected before the cap; narrow the wordlist or reduce threads/filters before retrying`
-      : rows.length === 0
-        ? 'ffuf returned no matches — check that the wordlist and FUZZ placement are right, and that -mc/-fc are not filtering everything out'
-        : omitted > 0
-          ? `showing the first ${returned.length} of ${rows.length} matches; the full list is in rawRef`
-          : malformed > 0
-            ? `${malformed} unparseable output line(s) were skipped — inspect rawRef if a match seems missing`
-            : 'matches are ready to triage — replay interesting hits with replay_request before recording a finding'
-
-    return {
-      url: i.url,
-      results: returned,
-      count: rows.length,
-      rawRef,
-      returned: returned.length,
-      truncated: omitted > 0,
-      omitted,
-      timedOut: run.timedOut,
-      exitCode: run.exitCode,
-      malformedLines: malformed,
-      note
-    }
+    return runHeavy(i, ctx)
   }
 })
 

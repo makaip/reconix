@@ -3,9 +3,10 @@
 // a command string, so there is no shell-injection surface. The scan is capped at
 // 300s and its raw XML is stored as a trace (the agent reads it back with
 // get_trace), keeping large scan output out of the tool result.
-import { defineTool, type Tool } from '../tool'
+import { defineTool, type Tool, type ToolContext } from '../tool'
 import { ScopeError, ToolExecError, ToolInputError } from '../errors'
 import { bool, optStr, str, strArray } from '../validate'
+import { jobStore } from '../jobs'
 import { RunToolSpawnError, runTool, type RunToolResult } from './runTool'
 
 const SCAN_TIMEOUT_MS = 300_000
@@ -28,7 +29,12 @@ export interface NmapInput {
   ports?: string
   serviceVersion?: boolean
   scripts?: string[]
+  /** Run detached and return a jobId instead of blocking (see jobs.ts). */
+  background?: boolean
 }
+
+/** Returned in place of the scan result when `background: true`. */
+type BackgroundHandle = { jobId: string; status: string; target?: string }
 
 export interface NmapPort {
   port: number
@@ -135,11 +141,12 @@ function bareHost(host: string): string {
  * Runs nmap through the shared runner (argv-only, process-tree kill on the
  * wall-clock cap). A missing binary keeps nmap's actionable install hint.
  */
-async function runNmap(args: string[]): Promise<RunToolResult> {
+async function runNmap(args: string[], signal?: AbortSignal): Promise<RunToolResult> {
   try {
     return await runTool('nmap', args, {
       timeoutMs: SCAN_TIMEOUT_MS,
-      maxOutputBytes: MAX_XML_BYTES
+      maxOutputBytes: MAX_XML_BYTES,
+      signal
     })
   } catch (err) {
     if (err instanceof RunToolSpawnError && err.spawnCode === 'ENOENT') {
@@ -155,10 +162,78 @@ async function runNmap(args: string[]): Promise<RunToolResult> {
   }
 }
 
+/**
+ * The blocking scan body — scope decision, argv build, run, parse. Extracted so
+ * `background: true` can hand it to the job store and the inline path can still
+ * run it directly. `signal` kills the spawned scan when the job is cancelled.
+ */
+async function runHeavy(
+  i: NmapInput,
+  ctx: ToolContext,
+  signal?: AbortSignal
+): Promise<Record<string, unknown>> {
+  const cfg = ctx.scope.config
+  const host = bareHost(i.host)
+  let note: string | undefined
+  if (cfg.allowed_hosts.length === 0 && cfg.denied.length === 0) {
+    // No engagement scope loaded — the app has no host allowlist to check
+    // against. Proceed, but tell the agent the decision was unverified so it
+    // can be recorded as such.
+    note =
+      'no engagement scope loaded (allowed_hosts is empty) — the host could not be verified against an allowlist; confirm written authorization covers it before acting on these results'
+  } else if (!ctx.scope.isInScope(host)) {
+    throw new ScopeError(i.host)
+  }
+
+  const args: string[] = []
+  if (i.serviceVersion) args.push('-sV')
+  if (i.ports) args.push('-p', i.ports)
+  if (i.scripts && i.scripts.length > 0) args.push(`--script=${i.scripts.join(',')}`)
+  args.push('--open', '-oX', '-', i.host)
+
+  const run = await runNmap(args, signal)
+  if (run.timedOut) {
+    throw new ToolExecError(
+      `nmap_scan: scan timed out after ${SCAN_TIMEOUT_MS / 1000}s (host unresponsive or too many ports). ` +
+        'Retry with a narrower "ports" range or without serviceVersion.',
+      true
+    )
+  }
+  const stderrTail = run.stderr.trim().slice(-1000)
+
+  if (!run.stdout.includes('<nmaprun')) {
+    // nmap exits non-zero on an unreachable/unauthorized target or a bad
+    // argv; without any XML there is nothing to parse and nothing to trace.
+    throw new ToolExecError(
+      `nmap_scan: nmap produced no XML output (exit ${run.exitCode ?? 'signal'})` +
+        (stderrTail ? ` — ${stderrTail}` : ' — check the host resolves and is reachable') +
+        '. If the host is down or filtered, results are inconclusive rather than "no open ports".'
+    )
+  }
+
+  const scan = parseNmapXml(run.stdout, i.host)
+  const rawRef = await ctx.traces.save('trace', run.stdout)
+
+  const warnings: string[] = []
+  if (run.exitCode !== 0 && stderrTail) warnings.push(`nmap exited ${run.exitCode}: ${stderrTail}`)
+  if (run.stdoutTruncated) warnings.push('XML output was truncated at 8 MB; the rawRef trace is incomplete')
+
+  return {
+    host: scan.host,
+    address: scan.address,
+    ports: scan.ports,
+    os: scan.os,
+    extraPorts: scan.extraPorts,
+    rawRef,
+    ...(note ? { note } : {}),
+    ...(warnings.length > 0 ? { warning: warnings.join('; ') } : {})
+  }
+}
+
 const nmap_scan = defineTool<NmapInput, Record<string, unknown>>({
   name: 'nmap_scan',
   description:
-    'Run an nmap scan against a single in-scope host (service/version detection, --open). Returns open ports with service+version, OS guess if detected, and a rawRef to the full XML trace. Requires nmap on PATH; capped at 300s.',
+    'Run an nmap scan against a single in-scope host (service/version detection, --open). Returns open ports with service+version, OS guess if detected, and a rawRef to the full XML trace. Requires nmap on PATH; capped at 300s. Set background: true to get a jobId immediately and poll get_job_status / get_job_result instead of blocking.',
   riskTier: 'M',
   inputSchema: {
     type: 'object',
@@ -167,7 +242,8 @@ const nmap_scan = defineTool<NmapInput, Record<string, unknown>>({
       host: { type: 'string', minLength: 1, description: 'Single hostname or IP (no ranges, CIDR, or lists).' },
       ports: { type: 'string', description: 'nmap port spec, e.g. "22,80,443" or "1-1024". Omit for nmap defaults.' },
       serviceVersion: { type: 'boolean', description: 'Add -sV (service/version detection). Slower but richer.' },
-      scripts: { type: 'array', items: { type: 'string' }, description: 'NSE script names/categories, e.g. ["http-title"] or ["default","safe"]. Passed as --script=a,b.' }
+      scripts: { type: 'array', items: { type: 'string' }, description: 'NSE script names/categories, e.g. ["http-title"] or ["default","safe"]. Passed as --script=a,b.' },
+      background: { type: 'boolean', description: 'Run in the background and return a jobId immediately instead of blocking. Poll get_job_status / get_job_result.' }
     },
     additionalProperties: false
   },
@@ -181,9 +257,12 @@ const nmap_scan = defineTool<NmapInput, Record<string, unknown>>({
       extraPorts: { type: 'array' },
       rawRef: { type: 'string' },
       note: { type: 'string' },
-      warning: { type: 'string' }
-    },
-    required: ['host', 'ports', 'rawRef']
+      warning: { type: 'string' },
+      // Background shape (`background: true`): a job handle, no scan result yet.
+      jobId: { type: 'string' },
+      status: { type: 'string' },
+      target: { type: 'string' }
+    }
   },
   parse: (raw) => {
     const host = str(raw, 'host', 253).trim()
@@ -231,7 +310,9 @@ const nmap_scan = defineTool<NmapInput, Record<string, unknown>>({
       host,
       ports,
       serviceVersion: bool(raw, 'serviceVersion', false),
-      scripts
+      scripts,
+      // Only surfaced when set, so the parsed shape stays minimal.
+      ...(bool(raw, 'background', false) ? { background: true } : {})
     }
   },
   // NOTE: no `target` hook on purpose. The pipeline's target hook is
@@ -239,62 +320,15 @@ const nmap_scan = defineTool<NmapInput, Record<string, unknown>>({
   // host allowlist (the active-tab scope is empty until a page is open). The
   // scope decision therefore lives in execute(), where the config is readable.
   execute: async (i, ctx) => {
-    const cfg = ctx.scope.config
-    const host = bareHost(i.host)
-    let note: string | undefined
-    if (cfg.allowed_hosts.length === 0 && cfg.denied.length === 0) {
-      // No engagement scope loaded — the app has no host allowlist to check
-      // against. Proceed, but tell the agent the decision was unverified so it
-      // can be recorded as such.
-      note =
-        'no engagement scope loaded (allowed_hosts is empty) — the host could not be verified against an allowlist; confirm written authorization covers it before acting on these results'
-    } else if (!ctx.scope.isInScope(host)) {
-      throw new ScopeError(i.host)
-    }
-
-    const args: string[] = []
-    if (i.serviceVersion) args.push('-sV')
-    if (i.ports) args.push('-p', i.ports)
-    if (i.scripts && i.scripts.length > 0) args.push(`--script=${i.scripts.join(',')}`)
-    args.push('--open', '-oX', '-', i.host)
-
-    const run = await runNmap(args)
-    if (run.timedOut) {
-      throw new ToolExecError(
-        `nmap_scan: scan timed out after ${SCAN_TIMEOUT_MS / 1000}s (host unresponsive or too many ports). ` +
-          'Retry with a narrower "ports" range or without serviceVersion.',
-        true
+    // No `target` hook (see above), so a background job records no target; the
+    // scope decision stays inside the job body exactly as it does inline.
+    if (i.background === true) {
+      const job = await jobStore.start('nmap_scan', undefined, async (handle) =>
+        runHeavy(i, ctx, handle.signal)
       )
+      return { jobId: job.id, status: job.status } as BackgroundHandle
     }
-    const stderrTail = run.stderr.trim().slice(-1000)
-
-    if (!run.stdout.includes('<nmaprun')) {
-      // nmap exits non-zero on an unreachable/unauthorized target or a bad
-      // argv; without any XML there is nothing to parse and nothing to trace.
-      throw new ToolExecError(
-        `nmap_scan: nmap produced no XML output (exit ${run.exitCode ?? 'signal'})` +
-          (stderrTail ? ` — ${stderrTail}` : ' — check the host resolves and is reachable') +
-          '. If the host is down or filtered, results are inconclusive rather than "no open ports".'
-      )
-    }
-
-    const scan = parseNmapXml(run.stdout, i.host)
-    const rawRef = await ctx.traces.save('trace', run.stdout)
-
-    const warnings: string[] = []
-    if (run.exitCode !== 0 && stderrTail) warnings.push(`nmap exited ${run.exitCode}: ${stderrTail}`)
-    if (run.stdoutTruncated) warnings.push('XML output was truncated at 8 MB; the rawRef trace is incomplete')
-
-    return {
-      host: scan.host,
-      address: scan.address,
-      ports: scan.ports,
-      os: scan.os,
-      extraPorts: scan.extraPorts,
-      rawRef,
-      ...(note ? { note } : {}),
-      ...(warnings.length > 0 ? { warning: warnings.join('; ') } : {})
-    }
+    return runHeavy(i, ctx)
   }
 })
 
