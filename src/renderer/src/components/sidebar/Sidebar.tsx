@@ -1,4 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react'
+import { createPortal } from 'react-dom'
 import plus from '../../assets/icons/plus.svg'
 import { useFindings } from '../../hooks/useFindings'
 import { useEngagement } from '../../hooks/useEngagement'
@@ -7,9 +8,32 @@ import type { ResourceDragItem } from '../../lib/dragTypes'
 import { nextSelection, type SelectMods } from '../../lib/selection'
 import type { SitemapNode } from '../../lib/sitemap'
 import { firstChildIndex, parentIndex, verticalTarget } from '../../lib/treeNav'
+import type { FindingSeverity, FindingStatus } from '../../../../shared/findings'
 import FindingCard from './FindingCard'
+import FindingDetail from './FindingDetail'
 import SectionHeader from './SectionHeader'
 import SitemapRow from './SitemapRow'
+
+/** Triage filters. 'all' is the no-op value for both dropdowns. */
+type StatusFilter = FindingStatus | 'all'
+type SeverityFilter = FindingSeverity | 'all'
+
+const STATUS_FILTER_OPTIONS: { value: StatusFilter; label: string }[] = [
+  { value: 'all', label: 'All statuses' },
+  { value: 'open', label: 'Open' },
+  { value: 'confirmed', label: 'Confirmed' },
+  { value: 'false-positive', label: 'False positive' },
+  { value: 'fixed', label: 'Fixed' }
+]
+
+const SEVERITY_FILTER_OPTIONS: { value: SeverityFilter; label: string }[] = [
+  { value: 'all', label: 'All severities' },
+  { value: 'critical', label: 'Critical' },
+  { value: 'high', label: 'High' },
+  { value: 'medium', label: 'Medium' },
+  { value: 'low', label: 'Low' },
+  { value: 'info', label: 'Info' }
+]
 
 type SidebarProps = {
   style?: CSSProperties
@@ -29,15 +53,37 @@ const toDragItem = (node: SitemapNode): ResourceDragItem => ({ url: node.id, lab
 
 function Sidebar({ style, collapsed = false, dragging = false, onDragStart, onDragEnd, onOpenSource }: SidebarProps): JSX.Element {
   const sitemap = useSitemap()
-  const findings = useFindings()
+  const { findings, updateFinding } = useFindings()
   const engagement = useEngagement()
   const [goalDraft, setGoalDraft] = useState('')
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
+  const [severityFilter, setSeverityFilter] = useState<SeverityFilter>('all')
+  /** Finding whose triage panel is open; null when the panel is closed. */
+  const [selectedFindingId, setSelectedFindingId] = useState<string | null>(null)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [anchor, setAnchor] = useState<string | null>(null)
   const [folded, setFolded] = useState<Set<string>>(new Set())
   /** The keyboard cursor row (VS Code's "focused" item), independent of the selection. */
   const [focus, setFocus] = useState<string | null>(null)
   const treeRef = useRef<HTMLDivElement>(null)
+
+  // Untouched findings omit `status`, which is equivalent to 'open'.
+  const filteredFindings = useMemo(
+    () =>
+      findings.filter(
+        (finding) =>
+          (statusFilter === 'all' || (finding.status ?? 'open') === statusFilter) &&
+          (severityFilter === 'all' || finding.severity === severityFilter)
+      ),
+    [findings, statusFilter, severityFilter]
+  )
+
+  // Resolve from the live list (not a snapshot) so the panel follows triage
+  // writes pushed over `findings:changed`, and closes if the finding disappears.
+  const selectedFinding = selectedFindingId
+    ? findings.find((finding) => finding.id === selectedFindingId) ?? null
+    : null
+
 
   // Rows under a collapsed folder are hidden; nodes are in tree order so a depth cutoff suffices.
   const visible = useMemo(() => {
@@ -220,7 +266,44 @@ function Sidebar({ style, collapsed = false, dragging = false, onDragStart, onDr
           <p className="dt-empty">No findings yet.</p>
         ) : (
           <>
-            {findings.map((finding) => <FindingCard key={finding.id} finding={finding} />)}
+            <div className="finding-filters">
+              <select
+                className="finding-filters__select"
+                aria-label="Filter findings by status"
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
+              >
+                {STATUS_FILTER_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+              <select
+                className="finding-filters__select"
+                aria-label="Filter findings by severity"
+                value={severityFilter}
+                onChange={(e) => setSeverityFilter(e.target.value as SeverityFilter)}
+              >
+                {SEVERITY_FILTER_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            {filteredFindings.length === 0 ? (
+              <p className="dt-empty">No findings match these filters.</p>
+            ) : (
+              filteredFindings.map((finding) => (
+                <FindingCard
+                  key={finding.id}
+                  finding={finding}
+                  selected={finding.id === selectedFindingId}
+                  onOpen={setSelectedFindingId}
+                />
+              ))
+            )}
             <button
               type="button"
               className="sidebar__engagement-btn"
@@ -231,6 +314,7 @@ function Sidebar({ style, collapsed = false, dragging = false, onDragStart, onDr
           </>
         )}
       </div>
+
 
       <div className="sidebar__engagement">
         <SectionHeader label="Engagement" count={engagement.current ? 1 : 0} />
@@ -277,6 +361,18 @@ function Sidebar({ style, collapsed = false, dragging = false, onDragStart, onDr
         <img src={plus} width={13} height={13} alt="" />
         <span>Add note to engagement</span>
       </button>
+
+      {/* Portaled: the sidebar's `contain: paint` + overflow would clip a fixed
+       *  overlay, and the collapsed state translates the whole subtree. */}
+      {selectedFinding &&
+        createPortal(
+          <FindingDetail
+            finding={selectedFinding}
+            onSave={updateFinding}
+            onClose={() => setSelectedFindingId(null)}
+          />,
+          document.body
+        )}
     </aside>
   )
 }

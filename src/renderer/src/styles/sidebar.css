@@ -159,6 +159,219 @@
   color: var(--color-text);
 }
 
+.finding-card--selected,
+.finding-card--selected:hover {
+  background: var(--color-selection);
+}
+
+.finding-card__status {
+  flex: none;
+  padding: 0 5px;
+  border: 1px solid currentColor;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-2xs);
+  line-height: 14px;
+  white-space: nowrap;
+}
+
+.finding-card__status--open {
+  color: var(--color-text-muted);
+}
+
+.finding-card__status--confirmed {
+  color: var(--color-sev-high);
+}
+
+.finding-card__status--false-positive {
+  color: var(--color-text-faint);
+  text-decoration: line-through;
+}
+
+.finding-card__status--fixed {
+  color: var(--color-success);
+}
+
+.finding-card__cvss {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--color-text-muted);
+}
+
+/* --- triage filters --- */
+
+.finding-filters {
+  display: flex;
+  gap: 6px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.finding-filters__select {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 22px;
+  padding: 0 4px;
+  background: var(--color-bg-deep);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  font-size: var(--text-2xs);
+}
+
+.finding-filters__select:focus {
+  outline: none;
+  border-color: var(--color-accent);
+}
+
+/* --- finding detail panel (rendered in a body portal) --- */
+
+.modal.finding-detail {
+  width: 420px;
+  max-width: 100%;
+}
+
+.finding-detail__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  background: var(--color-bg-bar);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.finding-detail__title {
+  flex: 1 1 0;
+  min-width: 0;
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.finding-detail__header .finding-card__severity {
+  width: auto;
+  text-transform: uppercase;
+}
+
+.finding-detail__close {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  font-size: 18px;
+  line-height: 1;
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+
+.finding-detail__close:hover {
+  background: var(--color-hover);
+  color: var(--color-text);
+}
+
+.finding-detail__body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  overflow-y: auto;
+}
+
+.finding-detail__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.finding-detail__label {
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+
+.finding-detail__input {
+  height: 26px;
+  padding: 0 8px;
+  background: var(--color-bg-deep);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  font-size: var(--text-2xs);
+  font-family: inherit;
+  box-sizing: border-box;
+}
+
+.finding-detail__input:focus {
+  outline: none;
+  border-color: var(--color-accent);
+}
+
+.finding-detail__input[aria-invalid='true'] {
+  border-color: var(--color-error);
+}
+
+.finding-detail__notes {
+  height: auto;
+  min-height: 88px;
+  padding: 6px 8px;
+  resize: vertical;
+  line-height: 1.4;
+}
+
+.finding-detail__error {
+  font-size: var(--text-2xs);
+  color: var(--color-error);
+}
+
+.finding-detail__footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+.finding-detail__btn {
+  min-width: 72px;
+  height: 26px;
+  padding: 0 10px;
+  background: var(--color-bg-bar);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  font-size: var(--text-2xs);
+  cursor: pointer;
+}
+
+.finding-detail__btn:hover:not(:disabled) {
+  background: var(--color-bg-raised);
+}
+
+.finding-detail__btn--primary {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: #fff;
+}
+
+.finding-detail__btn--primary:hover:not(:disabled) {
+  background: var(--color-accent);
+  filter: brightness(1.1);
+}
+
+.finding-detail__btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+
 .add-note {
   flex: none;
   display: flex;
