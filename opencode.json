@@ -144,6 +144,16 @@
       "action": "subagent",
       "resource": "*",
       "effect": "allow"
+    },
+    {
+      "action": "reconix_nmap_scan",
+      "resource": "*",
+      "effect": "ask"
+    },
+    {
+      "action": "reconix_subfinder_enum",
+      "resource": "*",
+      "effect": "ask"
     }
   ],
   "agents": {
