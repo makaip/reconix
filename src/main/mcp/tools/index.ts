@@ -14,6 +14,7 @@ import { ffufTools } from './ffuf'
 import { nmapTools } from './nmap'
 import { subfinderTools } from './subfinder'
 import { nucleiTools } from './nuclei'
+import { jobsTools } from './jobs'
 
 // Full catalog (API.md §3). Dev 1's customTools (§3.8) sit in the same list and
 // go through the same pipeline as Dev 3's own tools.
@@ -33,7 +34,8 @@ export const allTools: Tool[] = [
   ...ffufTools,
   ...nucleiTools,
   ...subfinderTools,
-  ...nmapTools
+  ...nmapTools,
+  ...jobsTools
 ]
 
 // The MVP subset the doc's Appendix names — what the spine turns on first.
