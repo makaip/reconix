@@ -9,7 +9,7 @@ import { clampString } from '../limits'
 import type { ScopeConfig } from '../../../shared/contracts'
 import { RunToolSpawnError, runTool } from './runTool'
 
-const SUBFINDER_TIMEOUT_MS = 120_000
+const SUBFINDER_TIMEOUT_MS = 60_000
 /** Inline list cap — the full set always lands in the trace, and a passive
  *  enumeration of a large domain can otherwise blow the context budget. */
 const MAX_SUBDOMAINS = 500
@@ -114,7 +114,7 @@ function assertDomainInScope(ctx: ToolContext, domain: string): void {
 }
 
 function buildArgs(input: SubfinderInput): string[] {
-  const args = ['-d', input.domain, '-json', '-silent']
+  const args = ['-d', input.domain, '-json', '-silent', '-timeout', '10']
   if (input.sources?.length) args.push('-sources', input.sources.join(','))
   if (input.recursive) args.push('-recursive')
   return args
@@ -181,6 +181,7 @@ const subfinder_enum = defineTool<SubfinderInput, SubfinderOutput>({
   name: 'subfinder_enum',
   description:
     'Passively enumerate subdomains of an in-scope domain with subfinder (-json -silent). ' +
+    'Runs with a 60s wall-clock cap and 10s per-source timeout; prefer a small "sources" list to keep it fast. ' +
     'Returns { host, source } pairs, the total count and a rawRef to the full output trace. ' +
     'Only hosts under the engagement scope are enumerated; no traffic is sent to the target itself.',
   riskTier: 'M',

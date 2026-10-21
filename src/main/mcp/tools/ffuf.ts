@@ -15,7 +15,7 @@ import { str, urlString } from '../validate'
 import { MAX_LIST_ITEMS } from '../limits'
 import { RunToolSpawnError, runTool, type RunToolResult } from './runTool'
 
-const FFUF_TIMEOUT_MS = 300_000
+const FFUF_TIMEOUT_MS = 120_000
 /** Cap on captured stdout/stderr so a runaway wordlist can't exhaust memory. */
 const FFUF_MAX_CAPTURE = 4 * 1024 * 1024
 const FFUF_DEFAULT_THREADS = 40
@@ -147,7 +147,7 @@ function stderrTail(stderr: string, max = 400): string {
 const ffuf_fuzz = defineTool<FfufInput, unknown>({
   name: 'ffuf_fuzz',
   description:
-    'Content discovery with ffuf: fuzz a FUZZ keyword (path/query/body) against a wordlist and return the matching responses (url/status/length/words). Tier D external binary — argv-only, scope-checked before spawn, 300s wall-clock cap. The full match list is kept in the returned rawRef trace.',
+    'Content discovery with ffuf: fuzz a FUZZ keyword (path/query/body) against a wordlist and return the matching responses (url/status/length/words). Tier D external binary — argv-only, scope-checked before spawn, 120s wall-clock cap (-maxtime). Prefer small targeted wordlists (<=5000 entries) to avoid long runs; the full match list is kept in the returned rawRef trace.',
   riskTier: 'D',
   inputSchema: {
     type: 'object',
@@ -212,6 +212,7 @@ const ffuf_fuzz = defineTool<FfufInput, unknown>({
     if (i.matchCodes) args.push('-mc', i.matchCodes.join(','))
     if (i.filterCodes) args.push('-fc', i.filterCodes.join(','))
     args.push('-t', String(i.threads))
+    args.push('-maxtime', String(Math.ceil(FFUF_TIMEOUT_MS / 1000)))
 
     const run = await runFfuf(args)
     const { rows, malformed } = parseResults(run.stdout)
