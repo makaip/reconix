@@ -647,6 +647,33 @@ function openCodeGlobalConfigDir(): string {
   return join(homedir(), '.config', 'opencode')
 }
 
+/** Writable root for the config files Reconix rewrites (opencode.json + agent
+ *  frontmatter). In dev this is the repo (the versioned source of truth); in a
+ *  packaged app `app.getAppPath()` lives inside the read-only app.asar, so we
+ *  mirror the bundled files into `<userData>/config` once and write there.
+ *  syncGlobalOpenCodeConfig then copies from this root into OpenCode's global
+ *  config dir, so a packaged build still gets the updated model/agents. */
+async function ensureWritableConfigRoot(): Promise<string> {
+  if (!app.isPackaged) return app.getAppPath()
+  const repoRoot = app.getAppPath()
+  const root = join(app.getPath('userData'), 'config')
+  await mkdir(join(root, '.opencode', 'agents'), { recursive: true })
+  const seedFile = async (src: string, dst: string): Promise<void> => {
+    try {
+      await readFile(dst)
+    } catch {
+      await writeFile(dst, await readFile(src, 'utf8'))
+    }
+  }
+  await seedFile(join(repoRoot, 'opencode.json'), join(root, 'opencode.json'))
+  const agentsSrc = join(repoRoot, '.opencode', 'agents')
+  const agentsDst = join(root, '.opencode', 'agents')
+  for (const f of await readdir(agentsSrc)) {
+    if (f.endsWith('.md')) await seedFile(join(agentsSrc, f), join(agentsDst, f))
+  }
+  return root
+}
+
 /** Copies this repo's opencode.json + .opencode/agents/*.md into OpenCode's
  *  global config dir, so Reconix's agents/mcp entry apply no matter what
  *  directory `opencode serve` is pointed at. Reconix's repo copies stay the
@@ -658,7 +685,7 @@ function openCodeGlobalConfigDir(): string {
  *  dropping oh-my-opencode-slim removed its `orchestrator` agent from the UI
  *  with no error and nothing pointing at Reconix as the cause. */
 async function syncGlobalOpenCodeConfig(): Promise<void> {
-  const repoRoot = app.getAppPath()
+  const repoRoot = await ensureWritableConfigRoot()
   const globalDir = openCodeGlobalConfigDir()
 
   const repoConfig = JSON.parse(await readFile(join(repoRoot, 'opencode.json'), 'utf8')) as JsonObject
@@ -732,7 +759,7 @@ export async function applyModelSettings(
   previous?: ModelSettings
 ): Promise<void> {
   invalidateModelSettingsCache(app.getPath('userData'))
-  const repoRoot = app.getAppPath()
+  const repoRoot = await ensureWritableConfigRoot()
 
   try {
     const configPath = join(repoRoot, 'opencode.json')
