@@ -111,12 +111,22 @@
       "effect": "ask"
     },
     {
+      "action": "reconix_ffuf_fuzz",
+      "resource": "*",
+      "effect": "ask"
+    },
+    {
       "action": "reconix_crawl_start",
       "resource": "*",
       "effect": "ask"
     },
     {
       "action": "reconix_repeater_send",
+      "resource": "*",
+      "effect": "ask"
+    },
+    {
+      "action": "reconix_nuclei_scan",
       "resource": "*",
       "effect": "ask"
     },
@@ -134,6 +144,16 @@
       "action": "subagent",
       "resource": "*",
       "effect": "allow"
+    },
+    {
+      "action": "reconix_nmap_scan",
+      "resource": "*",
+      "effect": "ask"
+    },
+    {
+      "action": "reconix_subfinder_enum",
+      "resource": "*",
+      "effect": "ask"
     }
   ],
   "agents": {

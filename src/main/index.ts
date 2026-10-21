@@ -4,6 +4,12 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { createBodyStore } from './bodies'
 import { applyModelSettings, createCopilotBridge, type CopilotBridge } from './copilot'
 import { loadModelSettings, listModels, save as saveModelSettings, testConnection } from './modelSettings'
+import {
+  loadExternalToolSettings,
+  probeExternalTools,
+  save as saveExternalToolSettings,
+  setExternalToolSettingsPath
+} from './toolSettings'
 import { createActiveOriginScopeChecker, currentScopeStatus, loadScopeChecker } from './engagement'
 import { attachInspector, combineNetworkSinks } from './inspector'
 import { createInterceptor } from './intercept'
@@ -237,6 +243,29 @@ function createWindow(): void {
     return listModels()
   })
 
+  // External-tool broker settings (Settings ▸ External tools). The persisted
+  // allowlist is what run_tool resolves (unioned with RECONIX_RUN_TOOL_ALLOWLIST),
+  // so this is a privilege boundary: same sender guard as the model settings.
+  ipcMain.removeHandler('external-tools:get')
+  ipcMain.handle('external-tools:get', (event) => {
+    if (!settingsAllowed(event)) throw new Error('Unauthorized external-tools:get sender')
+    return loadExternalToolSettings(app.getPath('userData'))
+  })
+  ipcMain.removeHandler('external-tools:set')
+  ipcMain.handle('external-tools:set', (event, raw: unknown) => {
+    if (!settingsAllowed(event)) throw new Error('Unauthorized external-tools:set sender')
+    return saveExternalToolSettings(app.getPath('userData'), raw)
+  })
+  ipcMain.removeHandler('external-tools:probe')
+  ipcMain.handle('external-tools:probe', async (event, candidates: unknown) => {
+    if (!settingsAllowed(event)) throw new Error('Unauthorized external-tools:probe sender')
+    if (!Array.isArray(candidates)) return []
+    // Names only: probeExternalTools re-validates each entry and runs
+    // which/where argv-only, so nothing here can reach a shell.
+    const names = candidates.filter((c): c is string => typeof c === 'string').slice(0, 32)
+    return probeExternalTools(names)
+  })
+
   const bodies = createBodyStore(mainWindow)
   websockets = createWebSocketCapture(mainWindow)
   interceptor = createInterceptor(mainWindow) as typeof interceptor
@@ -348,6 +377,14 @@ app.whenReady().then(async () => {
   // cache. load() never throws, but guard anyway: settings must not block boot.
   await loadModelSettings(app.getPath('userData')).catch((err: unknown) => {
     console.warn('[settings] could not preload model settings:', err)
+  })
+
+  // The MCP tools live in main but never see Electron paths, so hand the
+  // userData dir to toolSettings once: run_tool resolves its allowlist from
+  // there on every call. Warm the cache for the same reason as above.
+  setExternalToolSettingsPath(app.getPath('userData'))
+  await loadExternalToolSettings(app.getPath('userData')).catch((err: unknown) => {
+    console.warn('[settings] could not preload external tool settings:', err)
   })
 
   createWindow()

@@ -4,6 +4,8 @@ import type { UseSettings } from '../hooks/useSettings'
 // speaks in ModelSettings / SettingsTestTarget shapes over IPC.
 import type {
   CustomBackend,
+  ExternalToolProbe,
+  ExternalToolSettings,
   ModelSettings,
   ModelTarget,
   ReasoningEffort,
@@ -536,6 +538,302 @@ function ModelSection(): JSX.Element {
   )
 }
 
+// ---------------------------------------------------------------------------
+// External tools section — persisted allowlist for brokered binaries (§8.6).
+// run_tool resolves this list (unioned with RECONIX_RUN_TOOL_ALLOWLIST), so the
+// panel is the opt-in surface for executing external CLIs.
+// ---------------------------------------------------------------------------
+
+/** Binaries the repo's CLI wrappers already know how to drive. A scan only asks
+ *  `which`/`where` whether each is on PATH — nothing is executed. */
+const KNOWN_EXTERNAL_TOOLS: Array<{ name: string; label: string }> = [
+  { name: 'nmap', label: 'nmap — port/service scan' },
+  { name: 'nuclei', label: 'nuclei — template vuln scan' },
+  { name: 'ffuf', label: 'ffuf — content discovery' },
+  { name: 'subfinder', label: 'subfinder — subdomain enum' },
+  { name: 'sqlmap', label: 'sqlmap — SQL injection' },
+  { name: 'httpx', label: 'httpx — HTTP probe' },
+  { name: 'katana', label: 'katana — crawler' },
+  { name: 'gobuster', label: 'gobuster — directory brute force' }
+]
+
+/** Same rule as main's toolSettings.ts: a PATH-resolved name, never a path. */
+const BINARY_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$/
+
+/** Known tools first, then any allowlisted/extras name the user added. */
+function externalToolRows(
+  allowlist: string[],
+  extras: string[]
+): Array<{ name: string; label: string }> {
+  const rows = [...KNOWN_EXTERNAL_TOOLS]
+  const seen = new Set(rows.map((row) => row.name.toLowerCase()))
+  for (const name of [...allowlist, ...extras]) {
+    const key = name.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    rows.push({ name, label: name })
+  }
+  return rows
+}
+
+function ExternalToolsSection(): JSX.Element {
+  // Optional chaining: a missing bridge degrades to an inline error, never a crash.
+  const api = window.reconix?.externalTools
+  const hasApi = Boolean(api)
+
+  const [config, setConfig] = useState<ExternalToolSettings | null>(null)
+  const [extras, setExtras] = useState<string[]>([])
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [retry, setRetry] = useState(0)
+  const [scanning, setScanning] = useState(false)
+  const [probes, setProbes] = useState<Record<string, ExternalToolProbe>>({})
+  const [scanStatus, setScanStatus] = useState<Feedback | null>(null)
+  const [custom, setCustom] = useState('')
+  const [customError, setCustomError] = useState<string | null>(null)
+  const [saveStatus, setSaveStatus] = useState<Feedback | null>(null)
+
+  useEffect(() => {
+    if (!api?.get) {
+      setLoadError('External tool settings are unavailable in this window.')
+      return
+    }
+    let cancelled = false
+    api
+      .get()
+      .then((next) => {
+        if (cancelled) return
+        setConfig(next)
+        setProbes({})
+        setLoadError(null)
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setLoadError(`Could not load external tool settings: ${(err as Error).message}`)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [retry])
+
+  if (loadError) {
+    return (
+      <section className="settings__section">
+        <h3 className="settings__section-title">External tools</h3>
+        <div className="settings__row settings__row--form">
+          <span className="settings__row-text">
+            <span className={hintClass('error')}>{loadError}</span>
+            {hasApi && <span className="settings__row-hint">Press Retry to read settings again.</span>}
+          </span>
+          {hasApi && (
+            <button
+              type="button"
+              className="settings__button"
+              onClick={() => {
+                setLoadError(null)
+                setRetry((n) => n + 1)
+              }}
+            >
+              Retry
+            </button>
+          )}
+        </div>
+      </section>
+    )
+  }
+
+  if (!config) {
+    return (
+      <section className="settings__section">
+        <h3 className="settings__section-title">External tools</h3>
+        <div className="settings__row settings__row--form">
+          <span className="settings__row-label">Loading external tool settings…</span>
+        </div>
+      </section>
+    )
+  }
+
+  const draft = config
+  const rows = externalToolRows(draft.allowlist, extras)
+
+  const onScan = async (): Promise<void> => {
+    if (!api?.probe) return
+    setScanning(true)
+    setScanStatus(null)
+    try {
+      const results = await api.probe(rows.map((row) => row.name))
+      const next: Record<string, ExternalToolProbe> = {}
+      for (const result of results) next[result.name] = result
+      setProbes(next)
+      const installed = results.filter((result) => result.installed).length
+      setScanStatus({
+        kind: 'ok',
+        message: `${installed} of ${results.length} binaries found on PATH`
+      })
+    } catch (err: unknown) {
+      setScanStatus({ kind: 'error', message: `Scan failed: ${(err as Error).message}` })
+    } finally {
+      setScanning(false)
+    }
+  }
+
+  const toggleTool = (name: string, enabled: boolean): void => {
+    setSaveStatus(null)
+    setConfig((current) => {
+      if (!current) return current
+      if (enabled) {
+        if (current.allowlist.some((entry) => entry.toLowerCase() === name.toLowerCase())) return current
+        return { ...current, allowlist: [...current.allowlist, name] }
+      }
+      return {
+        ...current,
+        allowlist: current.allowlist.filter((entry) => entry.toLowerCase() !== name.toLowerCase())
+      }
+    })
+  }
+
+  const addCustom = (): void => {
+    const name = custom.trim()
+    if (!BINARY_NAME_RE.test(name)) {
+      setCustomError('Use a binary name only — letters, digits, ".", "_", "+", "-" (no paths).')
+      return
+    }
+    if (rows.some((row) => row.name.toLowerCase() === name.toLowerCase())) {
+      setCustomError(`"${name}" is already listed.`)
+      return
+    }
+    setCustom('')
+    setCustomError(null)
+    setSaveStatus(null)
+    setExtras((current) => [...current, name])
+    setConfig((current) =>
+      current ? { ...current, allowlist: [...current.allowlist, name] } : current
+    )
+  }
+
+  const onSave = async (): Promise<void> => {
+    if (!api?.set) return
+    setSaveStatus({ kind: 'busy' })
+    const result = await api.set(draft)
+    if (result.ok) setSaveStatus({ kind: 'ok', message: 'Saved.' })
+    else setSaveStatus({ kind: 'error', message: `Save failed: ${result.error ?? 'unknown error'}` })
+  }
+
+  return (
+    <section className="settings__section">
+      <h3 className="settings__section-title">External tools</h3>
+
+      <div className="settings__row settings__row--form">
+        <span className="settings__row-text">
+          <span className="settings__row-label">Installed binaries</span>
+          {scanStatus && scanStatus.kind !== 'busy' && (
+            <span className={hintClass(scanStatus.kind)}>{scanStatus.message}</span>
+          )}
+          <span className="settings__row-hint">
+            Scans PATH only; binaries are never run to detect them.
+          </span>
+        </span>
+        <button
+          type="button"
+          className="settings__button"
+          onClick={() => void onScan()}
+          disabled={!hasApi || scanning}
+        >
+          {scanning ? 'Scanning…' : 'Scan for tools'}
+        </button>
+      </div>
+
+      {rows.map((row) => {
+        const probe = probes[row.name]
+        const enabled = draft.allowlist.some(
+          (entry) => entry.toLowerCase() === row.name.toLowerCase()
+        )
+        return (
+          <div key={row.name} className="settings__row settings__row--form">
+            <span className="settings__row-text">
+              <span className="settings__row-label">{row.label}</span>
+              <span className="settings__row-hint">
+                {probe
+                  ? probe.installed
+                    ? (probe.resolvedPath ?? 'installed')
+                    : 'not found on PATH'
+                  : enabled
+                    ? 'allowed — not scanned yet'
+                    : 'not allowed'}
+              </span>
+            </span>
+            <span className="settings__row-action">
+              {probe && (
+                <span className={`settings__pill settings__pill--${probe.installed ? 'ok' : 'missing'}`}>
+                  {probe.installed ? 'installed' : 'missing'}
+                </span>
+              )}
+              <input
+                type="checkbox"
+                aria-label={`Allow ${row.name}`}
+                checked={enabled}
+                onChange={(e) => toggleTool(row.name, e.target.checked)}
+              />
+            </span>
+          </div>
+        )
+      })}
+
+      <div className="settings__row settings__row--form">
+        <span className="settings__row-text">
+          <span className="settings__row-label">Custom binary</span>
+          {customError ? (
+            <span className={hintClass('error')}>{customError}</span>
+          ) : (
+            <span className="settings__row-hint">Any other PATH binary name</span>
+          )}
+        </span>
+        <span className="settings__row-action">
+          <input
+            className="settings__select"
+            type="text"
+            placeholder="e.g. whatweb"
+            value={custom}
+            onChange={(e) => {
+              setCustom(e.target.value)
+              setCustomError(null)
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault()
+                addCustom()
+              }
+            }}
+          />
+          <button type="button" className="settings__button" onClick={addCustom}>
+            Add
+          </button>
+        </span>
+      </div>
+
+      <div className="settings__row settings__row--form">
+        <span className="settings__row-text">
+          <span className="settings__row-label">Allowlist</span>
+          <span className="settings__row-hint">
+            Allowlisted binaries run with your user privileges: argv-only, no shell, hard
+            time/output caps. Only add tools you trust. RECONIX_RUN_TOOL_ALLOWLIST is merged in
+            at run time and can’t be removed here.
+          </span>
+          {saveStatus && saveStatus.kind !== 'busy' && (
+            <span className={hintClass(saveStatus.kind)}>{saveStatus.message}</span>
+          )}
+        </span>
+        <button
+          type="button"
+          className="settings__button"
+          onClick={() => void onSave()}
+          disabled={!hasApi || saveStatus?.kind === 'busy'}
+        >
+          {saveStatus?.kind === 'busy' ? 'Saving…' : 'Save'}
+        </button>
+      </div>
+    </section>
+  )
+}
+
 type ToggleRowProps = {
   label: string
   hint?: string
@@ -622,6 +920,8 @@ function SettingsModal({ settings, onClose }: SettingsModalProps): JSX.Element {
           </section>
 
           <ModelSection />
+
+          <ExternalToolsSection />
 
           <section className="settings__section">
             <h3 className="settings__section-title">About</h3>
