@@ -469,7 +469,12 @@ function CopilotPanel({
           onDrop()
         }}
       >
-        {showVirtual ? (
+        {messages.length === 0 ? (
+          <div className="copilot__empty" role="status">
+            <p className="copilot__empty-title">New chat</p>
+            <p className="copilot__empty-hint">Ask about this target, or type / for commands.</p>
+          </div>
+        ) : showVirtual ? (
           <div
             className="copilot__virtual"
             style={{ position: 'relative', flex: 'none', height: virtualizer.getTotalSize() }}
