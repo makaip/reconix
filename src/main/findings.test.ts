@@ -71,6 +71,48 @@ describe('createFindingsStore', () => {
       { id: 'finding_1', title: 'a', severity: 'critical' }
     ])
   })
+
+  it('triages a finding via update and broadcasts the new list', async () => {
+    const store = createFindingsStore(openDatabase(), makeWin())
+    const id = await store.sink.record({ title: 'a', severity: 'high' }, 't')
+
+    expect(store.update(id, { status: 'confirmed', notes: 'reproduced', cvss: 7.5 })).toBe(true)
+    expect(store.list()).toMatchObject([
+      { id, status: 'confirmed', notes: 'reproduced', cvss: 7.5 }
+    ])
+    expect(store.summary()).toEqual([
+      { id, title: 'a', severity: 'high', status: 'confirmed', notes: 'reproduced', cvss: 7.5 }
+    ])
+    expect(sent.at(-1)?.channel).toBe('findings:changed')
+  })
+
+  it('only applies the patched columns and rejects unknown ids/statuses', async () => {
+    const store = createFindingsStore(openDatabase(), makeWin())
+    const id = await store.sink.record({ title: 'a', severity: 'high' }, 't')
+
+    store.update(id, { cvss: 4 })
+    store.update(id, { notes: 'later' })
+    expect(store.list()).toMatchObject([{ status: 'open', notes: 'later', cvss: 4 }])
+
+    expect(store.update('finding_404', { status: 'fixed' })).toBe(false)
+    expect(store.update(id, { status: 'nope' as never })).toBe(false)
+    expect(store.list()).toMatchObject([{ status: 'open', notes: 'later', cvss: 4 }])
+  })
+
+  it('serves findings:update over IPC to the owning window only', async () => {
+    const store = createFindingsStore(openDatabase(), makeWin())
+    const id = await store.sink.record({ title: 'a', severity: 'high' }, 't')
+
+    expect(handlers.get('findings:update')!(id, { status: 'fixed' })).toBe(true)
+    expect(store.list()).toMatchObject([{ status: 'fixed' }])
+  })
+
+  it('drops the findings:update handler on close', () => {
+    const store = createFindingsStore(openDatabase(), makeWin())
+    expect(handlers.has('findings:update')).toBe(true)
+    store.close()
+    expect(handlers.has('findings:update')).toBe(false)
+  })
 })
 
 describe('createFindingsStore persistence', () => {

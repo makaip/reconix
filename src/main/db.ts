@@ -18,6 +18,8 @@ const SCHEMA = `
     schema_json   TEXT NOT NULL,
     evidence_ref  TEXT NOT NULL,
     status        TEXT NOT NULL DEFAULT 'open',
+    notes         TEXT,
+    cvss          REAL,
     ts            INTEGER NOT NULL
   );
   CREATE TABLE IF NOT EXISTS traces (
@@ -66,12 +68,33 @@ const SCHEMA = `
   );
 `
 
+/** Columns added to `findings` after the table shipped. SQLite has no
+ *  `ADD COLUMN IF NOT EXISTS`, so migrate() probes pragma_table_info first and
+ *  only then issues the ALTER — safe to run on every boot. */
+const FINDINGS_ADDED_COLUMNS: ReadonlyArray<readonly [string, string]> = [
+  ['status', "TEXT NOT NULL DEFAULT 'open'"],
+  ['notes', 'TEXT'],
+  ['cvss', 'REAL']
+]
+
 function migrate(db: Database): void {
   // drop legacy traces shape if present
   try {
     const cols = db.all("PRAGMA table_info(traces)") as { name: string }[]
     if (cols.some((c) => c.name === 'data')) {
       db.exec('DROP TABLE traces')
+    }
+  } catch {
+    // ignore
+  }
+
+  // add triage columns to a findings table created before they existed
+  try {
+    const cols = db.all('PRAGMA table_info(findings)') as { name: string }[]
+    if (cols.length === 0) return // table not created yet; SCHEMA below will
+    const present = new Set(cols.map((c) => c.name))
+    for (const [name, type] of FINDINGS_ADDED_COLUMNS) {
+      if (!present.has(name)) db.exec(`ALTER TABLE findings ADD COLUMN ${name} ${type}`)
     }
   } catch {
     // ignore
