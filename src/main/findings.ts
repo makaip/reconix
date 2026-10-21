@@ -6,7 +6,12 @@
 // surface share one source of truth instead of a closure-private array.
 import type { Database } from 'node-sqlite3-wasm'
 import { ipcMain, type BrowserWindow } from 'electron'
-import type { Finding, FindingSeverity } from '../shared/findings'
+import type {
+  Finding,
+  FindingSeverity,
+  FindingStatus,
+  FindingTriagePatch
+} from '../shared/findings'
 import type { FindingSink } from './mcp/tool'
 
 /** One stored row: the agent's opaque schema plus its evidence ref. */
@@ -15,6 +20,10 @@ export interface StoredFinding {
   schema: unknown
   evidenceRef: string
   ts: number
+  /** Triage state; 'open' for rows that were never triaged. */
+  status: FindingStatus
+  notes?: string
+  cvss?: number
 }
 
 export interface FindingsStore {
@@ -24,11 +33,14 @@ export interface FindingsStore {
   list(): StoredFinding[]
   /** Renderer-facing summary rows. */
   summary(): Finding[]
+  /** Triage a finding (status/notes/cvss). Broadcasts; false when the id is unknown. */
+  update(id: string, patch: FindingTriagePatch): boolean
   /** Delete findings for the active engagement (or all when none is active). Broadcasts the new list. */
   clear(): void
   /** Detach the IPC handler + window listener. Does NOT close the shared DB. */
   close(): void
 }
+
 
 export interface FindingsStoreOptions {
   /** Static engagement id (legacy callers). Prefer `getEngagementId` for live runs. */
@@ -38,6 +50,26 @@ export interface FindingsStoreOptions {
 }
 
 const SEVERITIES: readonly FindingSeverity[] = ['critical', 'high', 'medium', 'low', 'info']
+
+const STATUSES: readonly FindingStatus[] = ['open', 'confirmed', 'false-positive', 'fixed']
+
+/** Triage state is constrained by the column contract; anything unrecognized
+ *  (agent-authored or hand-edited) reads back as the 'open' default. */
+function asStatus(value: unknown): FindingStatus | undefined {
+  if (typeof value === 'string') {
+    const v = value.toLowerCase()
+    if ((STATUSES as readonly string[]).includes(v)) return v as FindingStatus
+  }
+  return undefined
+}
+
+/** CVSS base scores live in 0..10; out-of-range/non-finite input is dropped
+ *  rather than stored as a nonsense value. */
+function asCvss(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined
+  return Math.min(10, Math.max(0, value))
+}
+
 
 /** record_finding's schema is agent-authored and opaque, so the display fields
  *  are read defensively: an unrecognized severity degrades to 'info' rather
@@ -62,11 +94,23 @@ function asTitle(schema: unknown, id: string): string {
 }
 
 /** StoredFinding -> display row. Exported so the history reader renders findings
- *  identically (one definition of title/severity). */
+ *  identically (one definition of title/severity). Triage fields are only
+ *  attached once they carry information, so an untouched finding keeps the
+ *  minimal `{ id, title, severity }` shape every existing consumer expects
+ *  (`status` absent == 'open'). */
 export function findingSummary(row: StoredFinding): Finding {
   const schema = (row.schema ?? {}) as Record<string, unknown>
-  return { id: row.id, title: asTitle(row.schema, row.id), severity: asSeverity(schema.severity) }
+  const out: Finding = {
+    id: row.id,
+    title: asTitle(row.schema, row.id),
+    severity: asSeverity(schema.severity)
+  }
+  if (row.status && row.status !== 'open') out.status = row.status
+  if (row.notes !== undefined) out.notes = row.notes
+  if (row.cvss !== undefined) out.cvss = row.cvss
+  return out
 }
+
 
 /** Ids are `finding_<n>`; recover the sequence so restored ids never collide. */
 function idSeq(id: string): number {
@@ -85,13 +129,19 @@ function parseSchema(json: unknown): unknown {
 }
 
 function toStored(row: Record<string, unknown>): StoredFinding {
-  return {
+  const out: StoredFinding = {
     id: String(row.id),
     schema: parseSchema(row.schema_json),
     evidenceRef: typeof row.evidence_ref === 'string' ? row.evidence_ref : '',
-    ts: Number(row.ts) || 0
+    ts: Number(row.ts) || 0,
+    status: asStatus(row.status) ?? 'open'
   }
+  if (typeof row.notes === 'string') out.notes = row.notes
+  const cvss = asCvss(row.cvss)
+  if (cvss !== undefined) out.cvss = cvss
+  return out
 }
+
 
 export function createFindingsStore(
   db: Database,
@@ -115,8 +165,11 @@ export function createFindingsStore(
   const readAll = (): StoredFinding[] => {
     const eid = resolveEngagementId()
     const rows = eid
-      ? db.all('SELECT id, schema_json, evidence_ref, ts FROM findings WHERE engagement_id = ? ORDER BY rowid', [eid])
-      : db.all('SELECT id, schema_json, evidence_ref, ts FROM findings ORDER BY rowid')
+      ? db.all(
+          'SELECT id, schema_json, evidence_ref, status, notes, cvss, ts FROM findings WHERE engagement_id = ? ORDER BY rowid',
+          [eid]
+        )
+      : db.all('SELECT id, schema_json, evidence_ref, status, notes, cvss, ts FROM findings ORDER BY rowid')
     return rows.map((row) => toStored(row as Record<string, unknown>))
   }
 
@@ -124,6 +177,35 @@ export function createFindingsStore(
     if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
       win.webContents.send('findings:changed', readAll().map(findingSummary))
     }
+  }
+
+  /** Triage write. Only present keys are touched, so the renderer can send a
+   *  status-only or notes-only patch without clobbering the rest. */
+  const update = (id: string, patch: FindingTriagePatch): boolean => {
+    if (typeof id !== 'string' || !id) return false
+    const sets: string[] = []
+    const params: Array<string | number | null> = []
+
+    if (patch.status !== undefined) {
+      const status = asStatus(patch.status)
+      if (!status) return false // invalid status: refuse rather than store junk
+      sets.push('status = ?')
+      params.push(status)
+    }
+    if (patch.notes !== undefined) {
+      sets.push('notes = ?')
+      params.push(patch.notes === null || patch.notes === '' ? null : String(patch.notes))
+    }
+    if (patch.cvss !== undefined) {
+      sets.push('cvss = ?')
+      params.push(patch.cvss === null ? null : (asCvss(patch.cvss) ?? null))
+    }
+    if (sets.length === 0) return false
+
+    if (!db.get('SELECT id FROM findings WHERE id = ?', [id])) return false
+    db.run(`UPDATE findings SET ${sets.join(', ')} WHERE id = ?`, [...params, id])
+    broadcast()
+    return true
   }
 
   const sink: FindingSink = {
@@ -153,10 +235,18 @@ export function createFindingsStore(
     return true
   })
 
+  ipcMain.removeHandler('findings:update')
+  ipcMain.handle('findings:update', (event, id: unknown, patch: unknown) => {
+    if (event.sender !== win.webContents) return false
+    if (typeof id !== 'string' || !patch || typeof patch !== 'object') return false
+    return update(id, patch as FindingTriagePatch)
+  })
+
   // Called from stop() and again when the window closes; both paths land here.
   const close = (): void => {
     ipcMain.removeHandler('findings:list')
     ipcMain.removeHandler('findings:clear')
+    ipcMain.removeHandler('findings:update')
   }
   win.on('closed', close)
 
@@ -166,5 +256,5 @@ export function createFindingsStore(
     else db.run('DELETE FROM findings')
     broadcast()
   }
-  return { sink, list: readAll, summary: () => readAll().map(findingSummary), clear, close }
+  return { sink, list: readAll, summary: () => readAll().map(findingSummary), update, clear, close }
 }

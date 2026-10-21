@@ -8,6 +8,7 @@ const fakeFindings = (rows: StoredFinding[]): FindingsStore => ({
   sink: { record: async () => 'finding_x' },
   list: () => rows,
   summary: () => [],
+  update: () => false,
   clear: () => undefined,
   close: () => undefined
 })
@@ -16,7 +17,8 @@ const finding = (id: string, ts: number, severity = 'high'): StoredFinding => ({
   id,
   schema: { title: `Finding ${id}`, severity },
   evidenceRef: `trace_${id}`,
-  ts
+  ts,
+  status: 'open'
 })
 
 describe('createHistoryReader', () => {

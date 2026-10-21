@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { Finding } from '../shared/findings'
+import type { Finding, FindingTriagePatch } from '../shared/findings'
 import type {
   CdpNode,
   ConsoleEntry,
@@ -245,6 +245,10 @@ const api = {
     // mount-time readback; the push fires whenever one is recorded. `clear`
     // deletes the active engagement's findings (or all when none is active).
     list: (): Promise<Finding[]> => ipcRenderer.invoke('findings:list'),
+    // Triage write (status/notes/cvss). Only the keys present are applied;
+    // resolves true when the finding existed. The change arrives via onChanged.
+    update: (id: string, patch: FindingTriagePatch): Promise<boolean> =>
+      ipcRenderer.invoke('findings:update', id, patch),
     clear: (): Promise<boolean> => ipcRenderer.invoke('findings:clear'),
     onChanged: (callback: (findings: Finding[]) => void): (() => void) =>
       subscribe('findings:changed', callback)
