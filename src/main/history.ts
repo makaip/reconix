@@ -5,6 +5,7 @@
 import type { Database } from 'node-sqlite3-wasm'
 import type { FindingSeverity } from '../shared/findings'
 import { findingSummary, type FindingsStore } from './findings'
+import { registerCompactionStore } from './compact'
 import type { HistoryReader } from './mcp/tool'
 
 export type LogKind = 'finding' | 'tool_call' | 'approval'
@@ -32,6 +33,9 @@ export type LogRow =
       error?: string
       startedAt: number
       finishedAt?: number
+      /** Present when the row was compacted: the stored one-line summary, so a
+       *  reader doesn't have to reconstruct it (params may have been trimmed). */
+      summary?: string
     }
   | { type: 'approval'; id: string; decision: string; actor?: string; ts: number }
 
@@ -46,9 +50,15 @@ function clampLimit(value: unknown): number {
 const tsOf = (row: LogRow): number => (row.type === 'tool_call' ? row.startedAt : row.ts)
 
 export function createHistoryReader(db: Database, findings: FindingsStore): HistoryReader {
+  // Register the shared SQLite handle + findings store for conversation
+  // compaction: the tool context is reader-only, and this factory already owns
+  // both, so `compact_conversation` gets them here instead of a second wiring
+  // path (see compact.ts). Registering is a no-op side effect for query_log.
+  registerCompactionStore({ db, findings })
+
   const toolCallRows = (since: number, tool: string | undefined): LogRow[] => {
     const raw = db.all(
-      'SELECT id, tool, target, risk_tier, ok, error, started_ts, finished_ts FROM tool_calls WHERE started_ts >= ? AND (? IS NULL OR tool = ?) ORDER BY started_ts DESC',
+      'SELECT id, tool, target, risk_tier, ok, error, started_ts, finished_ts, summary_json, compacted FROM tool_calls WHERE started_ts >= ? AND (? IS NULL OR tool = ?) ORDER BY started_ts DESC',
       [since, tool ?? null, tool ?? null]
     )
     return raw.map((row) => {
@@ -62,7 +72,12 @@ export function createHistoryReader(db: Database, findings: FindingsStore): Hist
         ok: r.ok === 1,
         ...(typeof r.error === 'string' ? { error: r.error } : {}),
         startedAt: Number(r.started_ts) || 0,
-        ...(r.finished_ts == null ? {} : { finishedAt: Number(r.finished_ts) })
+        ...(r.finished_ts == null ? {} : { finishedAt: Number(r.finished_ts) }),
+        // Compacted rows carry their stored one-line summary; the rest of the
+        // fields stay intact so existing consumers keep working.
+        ...(r.compacted === 1 && typeof r.summary_json === 'string'
+          ? { summary: r.summary_json }
+          : {})
       }
     })
   }

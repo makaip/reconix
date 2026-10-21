@@ -77,6 +77,31 @@ const FINDINGS_ADDED_COLUMNS: ReadonlyArray<readonly [string, string]> = [
   ['cvss', 'REAL']
 ]
 
+/** Columns added to `tool_calls` when conversation compaction shipped:
+ *  `summary_json` holds the one-line narrative written for a compacted row and
+ *  `compacted` marks it as already summarized (so a later pass skips it). */
+const TOOL_CALLS_ADDED_COLUMNS: ReadonlyArray<readonly [string, string]> = [
+  ['summary_json', 'TEXT'],
+  ['compacted', 'INTEGER NOT NULL DEFAULT 0']
+]
+
+/** Probe-then-ALTER for tool_calls, shared by legacy databases (table already
+ *  present when migrate() runs) and fresh ones (created by SCHEMA just before
+ *  the call in openDatabase). No `ADD COLUMN IF NOT EXISTS` in SQLite, so the
+ *  pragma probe is the guard — safe to run on every boot. */
+function migrateToolCalls(db: Database): void {
+  try {
+    const cols = db.all('PRAGMA table_info(tool_calls)') as { name: string }[]
+    if (cols.length === 0) return
+    const present = new Set(cols.map((c) => c.name))
+    for (const [name, type] of TOOL_CALLS_ADDED_COLUMNS) {
+      if (!present.has(name)) db.exec(`ALTER TABLE tool_calls ADD COLUMN ${name} ${type}`)
+    }
+  } catch {
+    // ignore
+  }
+}
+
 function migrate(db: Database): void {
   // drop legacy traces shape if present
   try {
@@ -87,6 +112,10 @@ function migrate(db: Database): void {
   } catch {
     // ignore
   }
+
+  // add compaction columns to a tool_calls table created before they existed.
+  // Fresh databases get them after SCHEMA runs (see migrateToolCalls below).
+  migrateToolCalls(db)
 
   // add triage columns to a findings table created before they existed
   try {
@@ -106,5 +135,8 @@ export function openDatabase(dbPath?: string): Database {
   const db = new Database(dbPath ?? ':memory:')
   migrate(db)
   db.exec(SCHEMA)
+  // A fresh database's tool_calls table only exists after SCHEMA; probe again so
+  // the compaction columns land on both new and pre-existing databases.
+  migrateToolCalls(db)
   return db
 }
