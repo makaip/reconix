@@ -121,6 +121,11 @@
       "effect": "ask"
     },
     {
+      "action": "reconix_nuclei_scan",
+      "resource": "*",
+      "effect": "ask"
+    },
+    {
       "action": "bash",
       "resource": "*",
       "effect": "allow"
