@@ -76,6 +76,7 @@ import {
 } from './mcp/cdp'
 import { ScopeChecker, type ScopeEnforcer } from './mcp/scope'
 import type { NetworkReader, ToolContext } from './mcp/tool'
+import { jobStore } from './mcp/jobs'
 import { openDatabase } from './db'
 import { Database } from 'node-sqlite3-wasm'
 import { createFindingsStore } from './findings'
@@ -969,6 +970,11 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
     if (!win.isDestroyed()) win.webContents.send(channel, payload)
   }
 
+  // IPC control commands (including jobs:*) must originate from this window's
+  // renderer. A target page's WebContents, an embedded iframe or a devtools
+  // console must never be able to start or cancel a scan.
+  const fromUi = (event: Electron.IpcMainInvokeEvent): boolean => event.sender === win.webContents
+
   // Usage/latency push. Turn updates arrive in bursts (a delta per token, a
   // rollup per tool), so coalesce them to ~2Hz; `immediate` flushes at
   // boundaries where the UI should react at once (send, turn end, parser done).
@@ -1075,6 +1081,23 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
     })
   }
 
+  /** Runs a tool for a background job through the SAME pipeline a foreground
+   *  call takes: enabled-tool filter → parse → audit intent → scope → execute →
+   *  audit outcome. A job gets no shortcut and no un-audited execution path.
+   *  Failures are flattened to a message because the JobStore only records
+   *  `error: string`; the audit row keeps the structured detail. */
+  async function invokeToolInBackground(
+    name: string,
+    params: unknown
+  ): Promise<{ ok: boolean; output?: unknown; error?: string }> {
+    await ensureMcpServer()
+    if (!capabilityServer) return { ok: false, error: 'tool registry unavailable' }
+    const res = await capabilityServer.callTool(name, params)
+    return res.ok
+      ? { ok: true, output: res.output }
+      : { ok: false, error: res.error?.message ?? 'tool failed' }
+  }
+
   async function ensureMcpServer(): Promise<McpHttpServer> {
     if (mcpServer) return mcpServer
     if (mcpStarting) return mcpStarting
@@ -1093,7 +1116,8 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
         interceptor: getInterceptor?.(),
         websockets: getWebsockets?.(),
         crawler: getCrawler?.(),
-        repeater: getRepeater?.()
+        repeater: getRepeater?.(),
+        invokeTool: invokeToolInBackground
       }
       const registry = buildMcpServer({ audit, context, surface: 'all' })
       try {
@@ -1477,6 +1501,60 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
   ipcMain.removeHandler('copilot:usage-snapshot')
   ipcMain.handle('copilot:usage-snapshot', () => usage.snapshot())
 
+  // ─── Background jobs ──────────────────────────────────────────────────────
+  // Long scans (nmap, nuclei, ffuf, a crawl) run off the agent's turn so the
+  // MCP call returns immediately. The store owns lifecycle; the runner below
+  // is a normal tool call, so scope + audit still gate the work. `jobStore` is
+  // the same singleton the agent-side background tools enqueue into, so a scan
+  // started by either path is visible (and cancellable) from both.
+  ipcMain.removeHandler('jobs:start')
+  ipcMain.handle('jobs:start', async (event, raw: unknown) => {
+    if (!fromUi(event)) return null
+    const req = (typeof raw === 'object' && raw !== null ? raw : {}) as {
+      tool?: unknown
+      args?: unknown
+      target?: unknown
+    }
+    if (typeof req.tool !== 'string' || req.tool.length === 0) {
+      throw new Error('jobs:start requires a tool name')
+    }
+    const tool = req.tool
+    const args = req.args ?? {}
+    const target = typeof req.target === 'string' ? req.target : undefined
+    const job = await jobStore.start(tool, target, async () => {
+      const res = await invokeToolInBackground(tool, args)
+      // Surface a pipeline failure as a failed job. On cancellation the store
+      // has already marked the job 'cancelled' and ignores this rejection.
+      if (!res.ok) throw new Error(res.error ?? `tool failed: ${tool}`)
+      return res.output
+    })
+    return { jobId: job.id, status: job.status }
+  })
+
+  ipcMain.removeHandler('jobs:status')
+  ipcMain.handle('jobs:status', (event, jobId: unknown) => {
+    if (!fromUi(event)) return null
+    return typeof jobId === 'string' ? (jobStore.status(jobId) ?? null) : null
+  })
+
+  ipcMain.removeHandler('jobs:result')
+  ipcMain.handle('jobs:result', async (event, jobId: unknown) => {
+    if (!fromUi(event)) return null
+    // ToolInputError('unknown job') for an id the store has never seen — the
+    // renderer treats a rejected invoke as "no such job", not an empty result.
+    if (typeof jobId !== 'string') throw new Error('jobs:result requires a job id')
+    return jobStore.result(jobId)
+  })
+
+  ipcMain.removeHandler('jobs:cancel')
+  ipcMain.handle('jobs:cancel', async (event, jobId: unknown) => {
+    if (!fromUi(event)) return { cancelled: false }
+    return { cancelled: typeof jobId === 'string' ? await jobStore.cancel(jobId) : false }
+  })
+
+  ipcMain.removeHandler('jobs:list')
+  ipcMain.handle('jobs:list', (event) => (fromUi(event) ? jobStore.list() : []))
+
   return {
     getDatabase() {
       return db
@@ -1508,6 +1586,11 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
       ipcMain.removeHandler('copilot:usage-snapshot')
       ipcMain.removeHandler('copilot:get-restrictions')
       ipcMain.removeHandler('copilot:set-restrictions')
+      ipcMain.removeHandler('jobs:start')
+      ipcMain.removeHandler('jobs:status')
+      ipcMain.removeHandler('jobs:result')
+      ipcMain.removeHandler('jobs:cancel')
+      ipcMain.removeHandler('jobs:list')
       if (usageTimer) {
         clearTimeout(usageTimer)
         usageTimer = null

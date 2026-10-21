@@ -42,6 +42,27 @@ export interface RunToolOptions {
    * raise it; the cap is still a hard memory bound.
    */
   maxOutputBytes?: number
+  /**
+   * Cancellation channel. When aborted the process tree is killed and the run
+   * REJECTS with RunToolAbortError — abort means cancel, never "return the
+   * partial output", because a caller that stopped a scan must not be handed
+   * results it may then act on as if the scan had finished.
+   */
+  signal?: AbortSignal
+}
+
+/**
+ * Raised when a run was cancelled through its AbortSignal. Carries code
+ * 'ABORTED' so the pipeline's audit row and the agent both see a cancellation
+ * rather than a generic execution failure.
+ */
+export class RunToolAbortError extends Error {
+  readonly code = 'ABORTED'
+  readonly retriable = false
+  constructor(message = 'job aborted') {
+    super(message)
+    this.name = 'RunToolAbortError'
+  }
 }
 
 /**
@@ -127,6 +148,13 @@ export function runTool(
 ): Promise<RunToolResult> {
   const timeoutMs = opts.timeoutMs ?? RUN_TOOL_TIMEOUT_MS
   const maxOutputBytes = opts.maxOutputBytes ?? RUN_TOOL_MAX_OUTPUT
+  const signal = opts.signal
+
+  // Already aborted before we spawned anything: nothing to kill, so don't
+  // create a process at all.
+  if (signal?.aborted) {
+    return Promise.reject(new RunToolAbortError('job aborted'))
+  }
 
   return new Promise<RunToolResult>((resolve, reject) => {
     let child: ChildProcess
@@ -151,11 +179,30 @@ export function runTool(
     let timer: NodeJS.Timeout | undefined
     let grace: NodeJS.Timeout | undefined
 
+    const cleanup = (): void => {
+      if (timer) clearTimeout(timer)
+      if (grace) clearTimeout(grace)
+      signal?.removeEventListener('abort', onAbort)
+    }
+
+    const onAbort = (): void => {
+      if (settled) return
+      settled = true
+      cleanup()
+      killProcessTree(child.pid)
+      reject(new RunToolAbortError('job aborted by user'))
+    }
+
+    // Arm cancellation before the child can emit anything. `once` plus the
+    // post-add check covers an abort that lands between the guard above and
+    // this registration.
+    signal?.addEventListener('abort', onAbort, { once: true })
+    if (signal?.aborted) onAbort()
+
     const finish = (exitCode: number | null): void => {
       if (settled) return
       settled = true
-      if (timer) clearTimeout(timer)
-      if (grace) clearTimeout(grace)
+      cleanup()
       // Decode once, after all chunks are in: per-chunk slicing split
       // multi-byte UTF-8 sequences at the cap and produced mojibake.
       resolve({
@@ -183,8 +230,7 @@ export function runTool(
     child.on('error', (err: NodeJS.ErrnoException) => {
       if (settled) return
       settled = true
-      if (timer) clearTimeout(timer)
-      if (grace) clearTimeout(grace)
+      cleanup()
       reject(new RunToolSpawnError(binary, err.code, `failed to spawn "${binary}": ${err.message}`))
     })
     child.on('close', (code) => finish(code))
