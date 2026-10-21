@@ -30,6 +30,7 @@ export const allTools: Tool[] = [
   ...capabilityTools,
   ...crawlerTools,
   ...repeaterTools,
+  ...ffufTools,
   ...nucleiTools,
   ...subfinderTools,
   ...nmapTools

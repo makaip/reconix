@@ -111,6 +111,11 @@
       "effect": "ask"
     },
     {
+      "action": "reconix_ffuf_fuzz",
+      "resource": "*",
+      "effect": "ask"
+    },
+    {
       "action": "reconix_crawl_start",
       "resource": "*",
       "effect": "ask"

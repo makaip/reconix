@@ -397,7 +397,7 @@ const RUN_TOOL_MAX_OUTPUT = 1_000_000
  * detached, which makes it a process-group leader, so a negative pid signals
  * the group; on Windows taskkill /T walks the tree.
  */
-function killProcessTree(child: import('node:child_process').ChildProcess): void {
+export function killProcessTree(child: import('node:child_process').ChildProcess): void {
   const pid = child.pid
   if (pid === undefined) return
   if (process.platform === 'win32') {
