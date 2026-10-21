@@ -32,6 +32,21 @@ Design notes (why this file looks the way it does):
    genuinely requires control characters), and model strings are extracted
    faithfully: Z3 renders NUL as the five-character text '\\u{0}', which would
    otherwise be returned as a bogus candidate.
+8. Additional constraint kinds are all enforced BOTH in the Z3 model and in
+   `verify()`: minimum length, negative substrings (`Not(Contains(...))`),
+   multiple patterns (each `InRe`, i.e. ANDed), an allowed character set, and
+   explicitly forbidden characters. Verification still runs last and is the
+   authority, so a translation bug cannot produce a `success` that violates a
+   constraint the caller asked for.
+9. Numeric mode (`--numeric`) solves an `Int` instead of a `String`. The digit
+   budget from `--max-len` becomes an upper bound (`10**max_len - 1`, capped at
+   10**18 - 1) when `--int-max` is not supplied, and each candidate is
+   re-verified against the numeric constraints with plain Python arithmetic.
+10. Batch mode (`--count N`) blocks each accepted model (`x != previous`) and
+    re-solves, so the returned candidates are guaranteed distinct.
+11. Verification is fail-closed: unsupported patterns, unsatisfiable
+    constraint sets, and exhausted retries are reported distinctly and never
+    degrade into an unverified "success".
 """
 import argparse
 import json
@@ -44,9 +59,11 @@ from z3 import (
     Concat,
     Contains,
     InRe,
+    Int,
     Intersect,
     Length,
     Loop,
+    Not,
     Plus,
     Range,
     Re,
@@ -61,7 +78,10 @@ from z3 import (
 
 ASCII_FLAGS = re.ASCII
 DEFAULT_TIMEOUT_MS = 10_000
+DEFAULT_MAX_LEN = 50
 MAX_ATTEMPTS = 8
+# Sanity cap for the upper bound derived from --max-len in numeric mode.
+INT_CAP = 10**18 - 1
 
 class UnsupportedPattern(Exception):
     """Raised for regex constructs Z3's regex theory cannot express."""
@@ -219,7 +239,36 @@ def pattern_is_supported(pattern):
     except UnsupportedPattern:
         return False
 
-def verify(candidate, max_len, must_contain, pattern):
+def _dedupe(items):
+    """Stable de-duplication that keeps the caller's ordering."""
+    seen = []
+    for item in items or []:
+        if item not in seen:
+            seen.append(item)
+    return seen
+
+def _normalise_patterns(pattern, patterns):
+    """Merge the legacy single `pattern` argument with the repeatable list."""
+    raw = []
+    if isinstance(pattern, (list, tuple)):
+        raw.extend(pattern)
+    elif pattern:
+        raw.append(pattern)
+    if patterns:
+        raw.extend([patterns] if isinstance(patterns, str) else patterns)
+    return [p for p in _dedupe(raw) if isinstance(p, str) and p]
+
+def _charset_regex(chars):
+    """A regex matching strings composed only of `chars` (possibly empty)."""
+    alts = [Re(c) for c in chars]
+    if not alts:
+        # No permitted characters at all: only the empty string can match.
+        return Re("")
+    return Star(alts[0] if len(alts) == 1 else Union(*alts))
+
+def verify(candidate, max_len, must_contain, pattern, min_len=0,
+           must_not_contain=None, patterns=None, charset=None,
+           forbidden_chars=None):
     """Re-check a candidate against the ORIGINAL constraints using Python's engine.
 
     This is the safety net: even if the translation is subtly wrong, no
@@ -227,10 +276,39 @@ def verify(candidate, max_len, must_contain, pattern):
     """
     if max_len is not None and len(candidate) > max_len:
         return False, f"length {len(candidate)} exceeds maxLength {max_len}"
+    if min_len and len(candidate) < min_len:
+        return False, f"length {len(candidate)} is below minLength {min_len}"
     if must_contain and must_contain not in candidate:
         return False, "required substring missing"
-    if pattern and not re.fullmatch(pattern, candidate, ASCII_FLAGS):
-        return False, "candidate does not satisfy the requested pattern"
+    for forbidden in must_not_contain or []:
+        if forbidden and forbidden in candidate:
+            return False, f"forbidden substring present: {forbidden!r}"
+    if charset is not None:
+        allowed = set(charset)
+        if any(ch not in allowed for ch in candidate):
+            return False, "candidate uses characters outside the allowed charset"
+    if forbidden_chars:
+        barred = set(forbidden_chars)
+        if any(ch in barred for ch in candidate):
+            return False, "candidate contains a forbidden character"
+    for pat in _normalise_patterns(pattern, patterns):
+        if not re.fullmatch(pat, candidate, ASCII_FLAGS):
+            return False, "candidate does not satisfy the requested pattern"
+    return True, ""
+
+def verify_number(value, low, high, mod=None, mod_remainder=0,
+                  divisible_by=None, must_equal=None):
+    """Re-check a numeric candidate with plain Python arithmetic."""
+    if low is not None and value < low:
+        return False, f"{value} is below the lower bound {low}"
+    if high is not None and value > high:
+        return False, f"{value} is above the upper bound {high}"
+    if must_equal is not None and value != must_equal:
+        return False, f"{value} does not equal {must_equal}"
+    if mod is not None and value % mod != mod_remainder % mod:
+        return False, f"{value} is not congruent to {mod_remainder} mod {mod}"
+    if divisible_by is not None and value % divisible_by != 0:
+        return False, f"{value} is not divisible by {divisible_by}"
     return True, ""
 
 # Z3 renders some non-printable characters in a lossy escape form: NUL comes
@@ -259,95 +337,399 @@ def _model_string(model, var):
             return decoded
     return rendered
 
-def _solve_with(compiled, max_len, must_contain, pattern, timeout_ms, printable_only):
-    """One solve attempt pass. Returns a result dict."""
+def _solve_with(compiled_patterns, max_len, must_contain, pattern, timeout_ms,
+                printable_only, min_len=0, must_not_contain=None,
+                charset=None, forbidden_chars=None, count=1):
+    """One solve attempt pass. Returns a result dict.
+
+    `compiled_patterns` is a list of Z3 regex terms; every one of them must
+    match (they are ANDed), mirroring repeated `--pattern` arguments.
+    """
     user_input = String("user_input")
     solver = Solver()
     solver.set("timeout", timeout_ms)
 
     solver.add(Length(user_input) <= max_len)
-    if compiled is not None:
+    for compiled in compiled_patterns:
         solver.add(InRe(user_input, compiled))
-    else:
+    if not compiled_patterns and not min_len:
         # Without a pattern nothing pins the string down; an empty answer would
         # be useless, so require at least one character.
         solver.add(Length(user_input) >= 1)
+    if min_len:
+        solver.add(Length(user_input) >= min_len)
     if must_contain:
         solver.add(Contains(user_input, StringVal(must_contain)))
+    for forbidden in must_not_contain or []:
+        if forbidden:
+            solver.add(Not(Contains(user_input, StringVal(forbidden))))
+    if charset is not None:
+        solver.add(InRe(user_input, _charset_regex(_dedupe(charset))))
+    for ch in _dedupe(forbidden_chars or ""):
+        solver.add(Not(Contains(user_input, StringVal(ch))))
     if printable_only:
         solver.add(InRe(user_input, _PRINTABLE_STRING))
 
-    for attempt in range(MAX_ATTEMPTS):
-        result = solver.check()
+    found = []
+    attempts = 0
+    while len(found) < max(count, 1):
+        progressed = False
+        for _ in range(MAX_ATTEMPTS):
+            attempts += 1
+            result = solver.check()
 
-        if result == sat:
-            candidate = _model_string(solver.model(), user_input)
-            ok, _why = verify(candidate, max_len, must_contain, pattern)
-            if ok:
-                return {
-                    "status": "success",
-                    "generated_input": candidate,
-                    "verified": True,
-                    "attempts": attempt + 1,
-                    "printable": printable_only,
-                }
-            # Block this candidate and look for another.
-            solver.add(user_input != StringVal(candidate))
-            continue
+            if result == sat:
+                candidate = _model_string(solver.model(), user_input)
+                # Block this candidate so a batch solve yields distinct values
+                # and a failed verification cannot loop forever.
+                solver.add(user_input != StringVal(candidate))
+                ok, _why = verify(
+                    candidate, max_len, must_contain, pattern,
+                    min_len=min_len, must_not_contain=must_not_contain,
+                    patterns=None, charset=charset,
+                    forbidden_chars=forbidden_chars,
+                )
+                if ok and candidate not in found:
+                    found.append(candidate)
+                    progressed = True
+                    break
+                continue
 
-        if result == Z3_UNKNOWN:
-            return {"status": "unknown",
-                    "reason": "solver could not decide within the time limit"}
+            if result == Z3_UNKNOWN:
+                if found:
+                    return {"status": "success", "candidates": found,
+                            "attempts": attempts, "printable": printable_only}
+                return {"status": "unknown",
+                        "reason": "solver could not decide within the time limit"}
 
-        return {"status": "unsat",
-                "reason": "No string satisfies the given constraints."}
+            # unsat
+            if found:
+                return {"status": "success", "candidates": found,
+                        "attempts": attempts, "printable": printable_only}
+            return {"status": "unsat",
+                    "reason": "No string satisfies the given constraints."}
 
-    return {"status": "error",
-            "reason": f"no candidate survived verification in {MAX_ATTEMPTS} attempts"}
+        if not progressed:
+            if found:
+                return {"status": "success", "candidates": found,
+                        "attempts": attempts, "printable": printable_only}
+            return {"status": "error",
+                    "reason": f"no candidate survived verification in {MAX_ATTEMPTS} attempts"}
 
-def solve_constraints(max_len, must_contain="", pattern=None, timeout_ms=DEFAULT_TIMEOUT_MS):
-    constraints = {"maxLength": max_len, "mustContain": must_contain, "pattern": pattern}
+    return {"status": "success", "candidates": found,
+            "attempts": attempts, "printable": printable_only}
 
-    if pattern:
+def _numeric_bounds(max_len, int_min, int_max):
+    """Resolve the numeric search window.
+
+    Without an explicit `int_max`, --max-len is treated as a digit budget for
+    the field, which is exactly what a `maxlength=3` numeric input means.
+    """
+    low = 0 if int_min is None else int_min
+    if int_max is not None:
+        high = int_max
+    elif max_len is None or max_len <= 0:
+        high = 0
+    elif max_len > 18:
+        high = INT_CAP
+    else:
+        high = min(10**max_len - 1, INT_CAP)
+    return low, high
+
+def _solve_numeric(low, high, int_mod, int_mod_remainder, int_divisible_by,
+                   int_must_equal, timeout_ms, count):
+    """Solve for an integer inside the requested bounds. Returns a result dict."""
+    number = Int("generated_number")
+    solver = Solver()
+    solver.set("timeout", timeout_ms)
+
+    solver.add(number >= low)
+    solver.add(number <= high)
+    if int_must_equal is not None:
+        solver.add(number == int_must_equal)
+    if int_mod is not None:
+        solver.add(number % int_mod == int_mod_remainder)
+    if int_divisible_by is not None:
+        solver.add(number % int_divisible_by == 0)
+
+    found = []
+    attempts = 0
+    while len(found) < max(count, 1):
+        progressed = False
+        for _ in range(MAX_ATTEMPTS):
+            attempts += 1
+            result = solver.check()
+
+            if result == sat:
+                value = solver.model().eval(number).as_long()
+                solver.add(number != value)
+                ok, _why = verify_number(
+                    value, low, high, int_mod, int_mod_remainder,
+                    int_divisible_by, int_must_equal,
+                )
+                if ok and value not in found:
+                    found.append(value)
+                    progressed = True
+                    break
+                continue
+
+            if result == Z3_UNKNOWN:
+                if found:
+                    return {"status": "success", "numbers": found,
+                            "attempts": attempts}
+                return {"status": "unknown",
+                        "reason": "solver could not decide within the time limit"}
+
+            if found:
+                return {"status": "success", "numbers": found,
+                        "attempts": attempts}
+            return {"status": "unsat",
+                    "reason": "No integer satisfies the given constraints."}
+
+        if not progressed:
+            if found:
+                return {"status": "success", "numbers": found,
+                        "attempts": attempts}
+            return {"status": "error",
+                    "reason": f"no candidate survived verification in {MAX_ATTEMPTS} attempts"}
+
+    return {"status": "success", "numbers": found, "attempts": attempts}
+
+def solve_constraints(max_len, must_contain="", pattern=None,
+                      timeout_ms=DEFAULT_TIMEOUT_MS, *, min_len=0,
+                      must_not_contain=None, patterns=None, charset=None,
+                      forbidden_chars=None, numeric=False, int_min=None,
+                      int_max=None, int_mod=None, int_mod_remainder=0,
+                      int_divisible_by=None, int_must_equal=None, count=1):
+    """Solve the requested constraint set.
+
+    The first four parameters keep their historical positional meaning so
+    existing callers (plugin, tests) are unaffected.
+    """
+    try:
+        count = int(count)
+    except (TypeError, ValueError):
+        return {"status": "error", "reason": "count must be an integer"}
+    if count < 1:
+        return {"status": "error", "reason": "count must be >= 1"}
+
+    must_not_contain = [s for s in _dedupe(must_not_contain or []) if s]
+    pats = _normalise_patterns(pattern, patterns)
+    if charset is not None:
+        charset = "".join(_dedupe(charset))
+    if forbidden_chars is not None:
+        forbidden_chars = "".join(_dedupe(forbidden_chars))
+
+    if numeric:
+        return _solve_numeric_mode(
+            max_len, must_contain, pats, timeout_ms, min_len,
+            must_not_contain, charset, forbidden_chars, int_min, int_max,
+            int_mod, int_mod_remainder, int_divisible_by, int_must_equal,
+            count,
+        )
+
+    constraints = {
+        "maxLength": max_len,
+        "mustContain": must_contain,
+        "pattern": pats[0] if len(pats) == 1 else None,
+    }
+    if min_len:
+        constraints["minLength"] = min_len
+    if must_not_contain:
+        constraints["mustNotContain"] = list(must_not_contain)
+    if len(pats) > 1:
+        constraints["patterns"] = list(pats)
+    if charset is not None:
+        constraints["charset"] = charset
+    if forbidden_chars:
+        constraints["forbiddenChars"] = forbidden_chars
+    if count > 1:
+        constraints["count"] = count
+
+    if min_len > max_len:
+        return {
+            "status": "unsat",
+            "reason": f"minLength {min_len} exceeds maxLength {max_len}",
+            "constraints": constraints,
+        }
+
+    compiled_patterns = []
+    for pat in pats:
         try:
-            compiled = compile_regex(pattern)
+            compiled_patterns.append(compile_regex(pat))
         except UnsupportedPattern as exc:
             return {
                 "status": "unsupported_pattern",
-                "reason": str(exc),
+                "reason": f"{pat!r}: {exc}" if len(pats) > 1 else str(exc),
                 "constraints": constraints,
             }
-    else:
-        compiled = None
 
     # Pass 1 prefers printable ASCII; pass 2 is unconstrained, so patterns that
-    # genuinely require control characters still solve.
-    for printable_only in (True, False):
-        result = _solve_with(compiled, max_len, must_contain, pattern,
-                             timeout_ms, printable_only)
+    # genuinely require control characters still solve. A caller-supplied
+    # charset already pins the alphabet, so the printable pass is pointless.
+    passes = [True, False] if charset is None else [False]
+    first = None
+    result = None
+    for printable_only in passes:
+        result = _solve_with(
+            compiled_patterns, max_len, must_contain,
+            pats[0] if len(pats) == 1 else pats, timeout_ms, printable_only,
+            min_len=min_len, must_not_contain=must_not_contain,
+            charset=charset, forbidden_chars=forbidden_chars, count=count,
+        )
         if result["status"] == "success":
-            result["constraints"] = constraints
-            return result
-        if printable_only:
-            first = result  # keep the printable pass verdict as a fallback
+            return _format_string_result(result, constraints, count)
+        if first is None:
+            first = result
 
     # Neither pass succeeded; report the more informative verdict.
+    if result is None:
+        result = first
     if result["status"] == "unsat" and first["status"] == "unknown":
         result = first
     result.pop("printable", None)
     result["constraints"] = constraints
     return result
 
+def _format_string_result(raw, constraints, count):
+    """Shape a successful string solve for the CLI/plugin contract."""
+    candidates = raw["candidates"]
+    output = {"status": "success"}
+    if count > 1:
+        output["generated_inputs"] = candidates
+        output["count"] = len(candidates)
+        output["requested"] = count
+    else:
+        output["generated_input"] = candidates[0]
+    output["verified"] = True
+    output["attempts"] = raw["attempts"]
+    output["printable"] = raw.get("printable", False)
+    output["constraints"] = constraints
+    return output
+
+def _solve_numeric_mode(max_len, must_contain, pats, timeout_ms, min_len,
+                        must_not_contain, charset, forbidden_chars, int_min,
+                        int_max, int_mod, int_mod_remainder, int_divisible_by,
+                        int_must_equal, count):
+    """Numeric branch of `solve_constraints` (see module docstring, note 9)."""
+    ignored = []
+    if pats:
+        ignored.append("pattern")
+    if must_contain:
+        ignored.append("mustContain")
+    if min_len:
+        ignored.append("minLength")
+    if must_not_contain:
+        ignored.append("mustNotContain")
+    if charset is not None:
+        ignored.append("charset")
+    if forbidden_chars:
+        ignored.append("forbiddenChars")
+
+    low, high = _numeric_bounds(max_len, int_min, int_max)
+    constraints = {
+        "numeric": True,
+        "maxLength": max_len,
+        "intMin": low,
+        "intMax": high,
+    }
+    if int_mod is not None:
+        constraints["intMod"] = int_mod
+        constraints["intModRemainder"] = int_mod_remainder
+    if int_divisible_by is not None:
+        constraints["intDivisibleBy"] = int_divisible_by
+    if int_must_equal is not None:
+        constraints["intMustEqual"] = int_must_equal
+    if ignored:
+        constraints["ignored"] = ignored
+    if count > 1:
+        constraints["count"] = count
+
+    if int_mod is not None and int_mod <= 0:
+        return {"status": "error",
+                "reason": "int-mod requires a positive modulus",
+                "constraints": constraints}
+    if int_divisible_by is not None and int_divisible_by <= 0:
+        return {"status": "error",
+                "reason": "int-divisible-by requires a positive divisor",
+                "constraints": constraints}
+    if low > high:
+        return {"status": "unsat",
+                "reason": f"lower bound {low} exceeds upper bound {high}",
+                "constraints": constraints}
+
+    raw = _solve_numeric(low, high, int_mod, int_mod_remainder,
+                         int_divisible_by, int_must_equal, timeout_ms, count)
+    if raw["status"] != "success":
+        raw["constraints"] = constraints
+        return raw
+
+    numbers = raw["numbers"]
+    output = {"status": "success", "generated_number": numbers[0]}
+    if count > 1:
+        output["generated_numbers"] = numbers
+        output["count"] = len(numbers)
+        output["requested"] = count
+    output["verified"] = True
+    output["attempts"] = raw["attempts"]
+    output["constraints"] = constraints
+    return output
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Z3 String Constraint Solver for Web Inputs")
-    parser.add_argument("--max-len", type=int, default=50, help="Maximum allowed length")
+    parser.add_argument("--max-len", type=int, default=DEFAULT_MAX_LEN,
+                        help="Maximum allowed length (digit budget in --numeric mode)")
+    parser.add_argument("--min-len", type=int, default=0,
+                        help="Minimum allowed length (default: 0)")
     parser.add_argument("--contain", type=str, default="", help="Substring that must be present")
-    parser.add_argument("--pattern", type=str, default=None, help="Regex pattern restriction")
+    parser.add_argument("--must-not-contain", type=str, action="append",
+                        dest="must_not_contain", default=None,
+                        help="Substring that must NOT be present (repeatable)")
+    parser.add_argument("--pattern", type=str, action="append", default=None,
+                        help="Regex pattern restriction; repeat to require all patterns")
+    parser.add_argument("--charset", type=str, default=None,
+                        help="Restrict the candidate to these characters")
+    parser.add_argument("--forbidden-chars", type=str, default=None,
+                        help="Characters that must never appear")
+    parser.add_argument("--numeric", action="store_true",
+                        help="Solve for an integer instead of a string")
+    parser.add_argument("--int-min", type=int, default=None,
+                        help="Numeric mode lower bound (default: 0)")
+    parser.add_argument("--int-max", type=int, default=None,
+                        help="Numeric mode upper bound (default: 10**max_len - 1)")
+    parser.add_argument("--int-mod", type=int, default=None,
+                        help="Require n %% modulus == remainder")
+    parser.add_argument("--int-mod-remainder", type=int, default=0,
+                        help="Remainder for --int-mod (default: 0)")
+    parser.add_argument("--int-divisible-by", type=int, default=None,
+                        help="Require n to be divisible by this value")
+    parser.add_argument("--int-must-equal", type=int, default=None,
+                        help="Require n to equal this exact value")
+    parser.add_argument("--count", type=int, default=1,
+                        help="Number of distinct candidates to generate (default: 1)")
     parser.add_argument("--timeout-ms", type=int, default=DEFAULT_TIMEOUT_MS,
                         help="Solver timeout in milliseconds")
     args = parser.parse_args(argv)
 
-    output = solve_constraints(args.max_len, args.contain, args.pattern, args.timeout_ms)
+    output = solve_constraints(
+        args.max_len,
+        args.contain,
+        None,
+        args.timeout_ms,
+        min_len=args.min_len,
+        must_not_contain=args.must_not_contain,
+        patterns=args.pattern,
+        charset=args.charset,
+        forbidden_chars=args.forbidden_chars,
+        numeric=args.numeric,
+        int_min=args.int_min,
+        int_max=args.int_max,
+        int_mod=args.int_mod,
+        int_mod_remainder=args.int_mod_remainder,
+        int_divisible_by=args.int_divisible_by,
+        int_must_equal=args.int_must_equal,
+        count=args.count,
+    )
     print(json.dumps(output))
     return 0
 
