@@ -7,9 +7,10 @@
 // path, or put `nuclei` on PATH; otherwise the tool fails with an actionable
 // message. Argv-only, no shell: template/tag/severity values are validated
 // before they can reach argv, so a value can never smuggle in another flag.
-import { defineTool, type Tool } from '../tool'
+import { defineTool, type Tool, type ToolContext } from '../tool'
 import { ScopeError, ToolExecError, ToolInputError } from '../errors'
-import { urlString } from '../validate'
+import { bool, urlString } from '../validate'
+import { jobStore } from '../jobs'
 import { RunToolSpawnError, runTool, type RunToolResult } from './runTool'
 
 const NUCLEI_TIMEOUT_MS = 300_000
@@ -39,7 +40,12 @@ export interface NucleiScanInput {
   tags?: string[]
   severity?: string[]
   templates?: string[]
+  /** Run detached and return a jobId instead of blocking (see jobs.ts). */
+  background?: boolean
 }
+
+/** Returned in place of the scan result when `background: true`. */
+type BackgroundHandle = { jobId: string; status: string; target?: string }
 
 function nucleiBin(): string {
   const override = (process.env.RECONIX_NUCLEI_BIN ?? '').trim()
@@ -50,9 +56,13 @@ function nucleiBin(): string {
  * Runs nuclei argv-only (no shell) with a hard wall-clock cap through the
  * shared runner; the missing-binary case keeps its install instructions.
  */
-async function runNuclei(args: string[], timeoutMs: number): Promise<RunToolResult> {
+async function runNuclei(
+  args: string[],
+  timeoutMs: number,
+  signal?: AbortSignal
+): Promise<RunToolResult> {
   try {
-    return await runTool(nucleiBin(), args, { timeoutMs, maxOutputBytes: NUCLEI_MAX_OUTPUT })
+    return await runTool(nucleiBin(), args, { timeoutMs, maxOutputBytes: NUCLEI_MAX_OUTPUT, signal })
   } catch (err) {
     if (err instanceof RunToolSpawnError && err.spawnCode === 'ENOENT') {
       throw new ToolExecError(
@@ -114,13 +124,61 @@ export function parseNucleiJsonl(stdout: string): { findings: NucleiFinding[]; s
   return { findings, skipped }
 }
 
+/**
+ * The blocking scan body — scope re-check, argv build, run, parse. Extracted so
+ * `background: true` can hand it to the job store and the inline path can still
+ * run it directly. `signal` kills the spawned scan when the job is cancelled.
+ */
+async function runHeavy(
+  i: NucleiScanInput,
+  ctx: ToolContext,
+  signal?: AbortSignal
+): Promise<Record<string, unknown>> {
+  if (!ctx.scope.isInScope(i.target)) throw new ScopeError(i.target)
+
+  const argv = ['-u', i.target, '-jsonl', '-silent']
+  if (i.tags) argv.push('-tags', i.tags.join(','))
+  if (i.severity) argv.push('-severity', i.severity.join(','))
+  if (i.templates) argv.push('-t', i.templates.join(','))
+
+  const result = await runNuclei(argv, NUCLEI_TIMEOUT_MS, signal)
+
+  // Save the raw stdout even on a failed run: it is the evidence of record.
+  const rawRef = await ctx.traces.save('reqresp', result.stdout)
+  const { findings } = parseNucleiJsonl(result.stdout)
+
+  if (result.timedOut && result.stdout.trim() === '') {
+    throw new ToolExecError(
+      `nuclei_scan: nuclei exceeded ${NUCLEI_TIMEOUT_MS / 1000}s with no output (rawRef ${rawRef}). ` +
+        'Narrow the scan with tags/severity/templates, or raise the budget in code.',
+      true
+    )
+  }
+  if (findings.length === 0 && !result.timedOut && result.exitCode !== 0) {
+    const tail = result.stderr.trim().split(/\r?\n/).slice(-3).join(' | ')
+    throw new ToolExecError(
+      `nuclei_scan: nuclei exited with code ${result.exitCode}${tail ? `: ${tail}` : ''} (rawRef ${rawRef}). ` +
+        'Check the target is reachable and inside scope, and that the requested tags/templates exist.',
+      false
+    )
+  }
+
+  return {
+    target: i.target,
+    findings,
+    count: findings.length,
+    rawRef,
+    timedOut: result.timedOut
+  }
+}
+
 const nuclei_scan = defineTool<NucleiScanInput, unknown>({
   name: 'nuclei_scan',
   description:
     'Run the nuclei template scanner against ONE in-scope URL. Tier M — sends real probe traffic ' +
     '(hundreds of requests depending on tags/templates). Optional filters: tags (e.g. ["cve","xss"]), ' +
     'severity (e.g. ["critical","high"]), templates (template ids or paths). Raw JSONL stdout is saved ' +
-    'as a trace and returned as rawRef.',
+    'as a trace and returned as rawRef. Set background: true to get a jobId immediately and poll get_job_status / get_job_result.',
   riskTier: 'M',
   inputSchema: {
     type: 'object',
@@ -129,13 +187,13 @@ const nuclei_scan = defineTool<NucleiScanInput, unknown>({
       target: { type: 'string', description: 'http(s) URL to scan; must be inside engagement scope' },
       tags: { type: 'array', items: { type: 'string' } },
       severity: { type: 'array', items: { type: 'string' } },
-      templates: { type: 'array', items: { type: 'string' } }
+      templates: { type: 'array', items: { type: 'string' } },
+      background: { type: 'boolean', description: 'Run in the background and return a jobId immediately instead of blocking. Poll get_job_status / get_job_result.' }
     },
     additionalProperties: false
   },
   outputSchema: {
     type: 'object',
-    required: ['target', 'findings', 'count', 'rawRef'],
     properties: {
       target: { type: 'string' },
       findings: {
@@ -154,7 +212,10 @@ const nuclei_scan = defineTool<NucleiScanInput, unknown>({
       },
       count: { type: 'number' },
       rawRef: { type: 'string' },
-      timedOut: { type: 'boolean' }
+      timedOut: { type: 'boolean' },
+      // Background shape (`background: true`): a job handle, no findings yet.
+      jobId: { type: 'string' },
+      status: { type: 'string' }
     }
   },
   parse: (raw) => {
@@ -182,49 +243,24 @@ const nuclei_scan = defineTool<NucleiScanInput, unknown>({
       target,
       tags: list('tags'),
       severity: list('severity'),
-      templates: list('templates')
+      templates: list('templates'),
+      // Only surfaced when set, so the parsed shape stays minimal.
+      ...(bool(raw, 'background', false) ? { background: true } : {})
     }
   },
   // The pipeline gates this target before execute(); the handler re-checks so
   // the tool is safe even if invoked outside the pipeline.
   target: (i) => i.target,
   execute: async (i, ctx) => {
-    if (!ctx.scope.isInScope(i.target)) throw new ScopeError(i.target)
-
-    const argv = ['-u', i.target, '-jsonl', '-silent']
-    if (i.tags) argv.push('-tags', i.tags.join(','))
-    if (i.severity) argv.push('-severity', i.severity.join(','))
-    if (i.templates) argv.push('-t', i.templates.join(','))
-
-    const result = await runNuclei(argv, NUCLEI_TIMEOUT_MS)
-
-    // Save the raw stdout even on a failed run: it is the evidence of record.
-    const rawRef = await ctx.traces.save('reqresp', result.stdout)
-    const { findings } = parseNucleiJsonl(result.stdout)
-
-    if (result.timedOut && result.stdout.trim() === '') {
-      throw new ToolExecError(
-        `nuclei_scan: nuclei exceeded ${NUCLEI_TIMEOUT_MS / 1000}s with no output (rawRef ${rawRef}). ` +
-          'Narrow the scan with tags/severity/templates, or raise the budget in code.',
-        true
+    // Already scope-checked by the pipeline; the label keeps jobs readable.
+    const target = i.target
+    if (i.background === true) {
+      const job = await jobStore.start('nuclei_scan', target, async (handle) =>
+        runHeavy(i, ctx, handle.signal)
       )
+      return { jobId: job.id, status: job.status, target } as BackgroundHandle
     }
-    if (findings.length === 0 && !result.timedOut && result.exitCode !== 0) {
-      const tail = result.stderr.trim().split(/\r?\n/).slice(-3).join(' | ')
-      throw new ToolExecError(
-        `nuclei_scan: nuclei exited with code ${result.exitCode}${tail ? `: ${tail}` : ''} (rawRef ${rawRef}). ` +
-          'Check the target is reachable and inside scope, and that the requested tags/templates exist.',
-        false
-      )
-    }
-
-    return {
-      target: i.target,
-      findings,
-      count: findings.length,
-      rawRef,
-      timedOut: result.timedOut
-    }
+    return runHeavy(i, ctx)
   }
 })
 

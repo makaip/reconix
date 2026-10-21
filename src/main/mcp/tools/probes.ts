@@ -5,9 +5,10 @@
 // shipped with Reconix, so it returns a clear error unless one is allowlisted.
 import { defineTool, type Tool } from '../tool'
 import { ToolExecError, ToolInputError } from '../errors'
-import { str, optStr, strArray, num, urlString } from '../validate'
+import { str, optStr, strArray, num, urlString, bool } from '../validate'
 import { submitForm } from './submitForm'
 import { clampString } from '../limits'
+import { jobStore } from '../jobs'
 import type { HttpRequestSpec } from '../cdp'
 import { RUN_TOOL_MAX_OUTPUT, RUN_TOOL_TIMEOUT_MS, runTool } from './runTool'
 import { ALLOWLIST_ENV_VAR, resolveToolPolicy } from '../../toolSettings'
@@ -393,10 +394,34 @@ const collect_evidence = defineTool<Record<string, never>, unknown>({
 // tools list unioned with the deployment-level RECONIX_RUN_TOOL_ALLOWLIST env
 // var (see toolSettings.ts). Nothing is allowlisted by default.
 
-const run_tool = defineTool<{ binary: string; args?: string[]; timeoutMs?: number }, unknown>({
+interface RunToolInput {
+  binary: string
+  args?: string[]
+  timeoutMs?: number
+  /** Run detached and return a jobId instead of blocking (see jobs.ts). */
+  background?: boolean
+}
+
+/** The blocking body of run_tool. Allowlist gate + argv-only spawn. */
+async function runHeavy(i: RunToolInput, signal?: AbortSignal): Promise<unknown> {
+  const policy = await resolveToolPolicy()
+  if (!policy.allowlist.includes(i.binary)) {
+    throw new ToolExecError(
+      `run_tool: "${i.binary}" is not allowlisted. Add it under Settings ▸ External tools, or set ` +
+        `${ALLOWLIST_ENV_VAR} (comma-separated) to enable it. §8.6 requires a sandboxed broker; ` +
+        'this build runs argv-only with no allowlist by default.'
+    )
+  }
+  // Persisted broker caps, still bounded by the hard ceilings in runTool.ts.
+  const timeout = i.timeoutMs ?? Math.min(policy.timeoutMs, RUN_TOOL_TIMEOUT_MS)
+  const maxOutputBytes = Math.min(policy.maxOutputBytes, RUN_TOOL_MAX_OUTPUT)
+  return runTool(i.binary, i.args ?? [], { timeoutMs: timeout, maxOutputBytes, signal })
+}
+
+const run_tool = defineTool<RunToolInput, unknown>({
   name: 'run_tool',
   description:
-    'Run an allowlisted external binary (argv only, no shell). Tier D — gated. Requires an installed binary and an entry in Settings ▸ External tools (or RECONIX_RUN_TOOL_ALLOWLIST).',
+    'Run an allowlisted external binary (argv only, no shell). Tier D — gated. Requires an installed binary and an entry in Settings ▸ External tools (or RECONIX_RUN_TOOL_ALLOWLIST). Set background: true to get a jobId immediately and poll get_job_status instead of blocking.',
   riskTier: 'D',
   inputSchema: {
     type: 'object',
@@ -404,11 +429,21 @@ const run_tool = defineTool<{ binary: string; args?: string[]; timeoutMs?: numbe
     properties: {
       binary: { type: 'string', minLength: 1 },
       args: { type: 'array', items: { type: 'string' } },
-      timeoutMs: { type: 'number' }
+      timeoutMs: { type: 'number' },
+      background: { type: 'boolean', description: 'Run in the background and return a jobId immediately instead of blocking. Poll get_job_status / get_job_result.' }
     },
     additionalProperties: false
   },
-  outputSchema: { type: 'object' },
+  outputSchema: {
+    type: 'object',
+    properties: {
+      // Background shape (`background: true`); the inline path returns the raw
+      // runner result (stdout/stderr/exitCode/timedOut).
+      jobId: { type: 'string' },
+      status: { type: 'string' },
+      target: { type: 'string' }
+    }
+  },
   parse: (raw) => {
     const binary = str(raw, 'binary')
     const r = raw as Record<string, unknown>
@@ -420,21 +455,17 @@ const run_tool = defineTool<{ binary: string; args?: string[]; timeoutMs?: numbe
     if (timeoutMs !== undefined && (timeoutMs <= 0 || timeoutMs > RUN_TOOL_TIMEOUT_MS)) {
       throw new ToolInputError(`timeoutMs must be between 1 and ${RUN_TOOL_TIMEOUT_MS}`)
     }
-    return { binary, args, timeoutMs }
+    // Only surfaced when set, so the parsed shape stays minimal.
+    return { binary, args, timeoutMs, ...(bool(raw, 'background', false) ? { background: true } : {}) }
   },
   execute: async (i) => {
-    const policy = await resolveToolPolicy()
-    if (!policy.allowlist.includes(i.binary)) {
-      throw new ToolExecError(
-        `run_tool: "${i.binary}" is not allowlisted. Add it under Settings ▸ External tools, or set ` +
-          `${ALLOWLIST_ENV_VAR} (comma-separated) to enable it. §8.6 requires a sandboxed broker; ` +
-          'this build runs argv-only with no allowlist by default.'
-      )
+    // No `target` hook: the binary allowlist is the gate, so a background job
+    // records no target.
+    if (i.background === true) {
+      const job = await jobStore.start('run_tool', undefined, async (handle) => runHeavy(i, handle.signal))
+      return { jobId: job.id, status: job.status }
     }
-    // Persisted broker caps, still bounded by the hard ceilings in runTool.ts.
-    const timeout = i.timeoutMs ?? Math.min(policy.timeoutMs, RUN_TOOL_TIMEOUT_MS)
-    const maxOutputBytes = Math.min(policy.maxOutputBytes, RUN_TOOL_MAX_OUTPUT)
-    return runTool(i.binary, i.args ?? [], { timeoutMs: timeout, maxOutputBytes })
+    return runHeavy(i)
   }
 })
 

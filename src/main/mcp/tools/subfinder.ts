@@ -6,6 +6,7 @@ import { defineTool, type Tool, type ToolContext } from '../tool'
 import { ScopeError, ToolExecError, ToolInputError } from '../errors'
 import { bool, str, strArray } from '../validate'
 import { clampString } from '../limits'
+import { jobStore } from '../jobs'
 import type { ScopeConfig } from '../../../shared/contracts'
 import { RunToolSpawnError, runTool } from './runTool'
 
@@ -27,7 +28,12 @@ export interface SubfinderInput {
   domain: string
   sources?: string[]
   recursive?: boolean
+  /** Run detached and return a jobId instead of blocking (see jobs.ts). */
+  background?: boolean
 }
+
+/** Returned in place of the enumeration result when `background: true`. */
+type BackgroundHandle = { jobId: string; status: string; target?: string }
 
 export interface Subdomain {
   host: string
@@ -139,10 +145,11 @@ function spawnFailure(err: unknown): ToolExecError {
   return new ToolExecError(`subfinder failed to start: ${(err as Error)?.message ?? String(err)}`)
 }
 
-function runSubfinder(args: readonly string[]): Promise<RunResult> {
+function runSubfinder(args: readonly string[], signal?: AbortSignal): Promise<RunResult> {
   return runTool('subfinder', args, {
     timeoutMs: SUBFINDER_TIMEOUT_MS,
-    maxOutputBytes: MAX_CAPTURE_BYTES
+    maxOutputBytes: MAX_CAPTURE_BYTES,
+    signal
   }).catch((err: unknown) => {
     throw spawnFailure(err)
   })
@@ -177,13 +184,75 @@ function parseSubfinderOutput(stdout: string): Subdomain[] {
   return out
 }
 
-const subfinder_enum = defineTool<SubfinderInput, SubfinderOutput>({
+/**
+ * The blocking enumeration body — subtree scope gate, run, parse. Extracted so
+ * `background: true` can hand it to the job store and the inline path can still
+ * run it directly. `signal` kills the spawned run when the job is cancelled.
+ */
+async function runHeavy(
+  i: SubfinderInput,
+  ctx: ToolContext,
+  signal?: AbortSignal
+): Promise<SubfinderOutput> {
+  assertDomainInScope(ctx, i.domain)
+  const args = buildArgs(i)
+  const run = await runSubfinder(args, signal)
+  const found = parseSubfinderOutput(run.stdout)
+
+  // Persist before any error path so a failed/timed-out enumeration is still
+  // evidence the agent (and the operator) can inspect.
+  const rawRef = await ctx.traces.save(
+    'trace',
+    JSON.stringify({
+      tool: 'subfinder_enum',
+      argv: ['subfinder', ...args],
+      exitCode: run.exitCode,
+      timedOut: run.timedOut,
+      stdout: run.stdout,
+      stderr: run.stderr
+    })
+  )
+
+  if (run.timedOut && found.length === 0) {
+    throw new ToolExecError(
+      `subfinder timed out after ${SUBFINDER_TIMEOUT_MS / 1000}s with no output — ` +
+        `narrow the run with "sources" or drop "recursive" and retry (raw: ${rawRef})`
+    )
+  }
+  if (!run.timedOut && run.exitCode !== null && run.exitCode !== 0 && found.length === 0) {
+    const detail = clampString(run.stderr.trim(), 300) || '<no stderr>'
+    throw new ToolExecError(
+      `subfinder exited ${run.exitCode} without results: ${detail} (raw: ${rawRef})`,
+      false
+    )
+  }
+
+  const { items, omitted } = found.length > MAX_SUBDOMAINS
+    ? { items: found.slice(0, MAX_SUBDOMAINS), omitted: found.length - MAX_SUBDOMAINS }
+    : { items: found, omitted: 0 }
+
+  const output: SubfinderOutput = {
+    domain: i.domain,
+    subdomains: items,
+    count: found.length,
+    rawRef
+  }
+  if (omitted > 0) {
+    output.truncated = true
+    output.omitted = omitted
+  }
+  if (run.timedOut) output.timedOut = true // partial list, killed at the cap
+  return output
+}
+
+const subfinder_enum = defineTool<SubfinderInput, SubfinderOutput | BackgroundHandle>({
   name: 'subfinder_enum',
   description:
     'Passively enumerate subdomains of an in-scope domain with subfinder (-json -silent). ' +
     'Runs with a 60s wall-clock cap and 10s per-source timeout; prefer a small "sources" list to keep it fast. ' +
     'Returns { host, source } pairs, the total count and a rawRef to the full output trace. ' +
-    'Only hosts under the engagement scope are enumerated; no traffic is sent to the target itself.',
+    'Only hosts under the engagement scope are enumerated; no traffic is sent to the target itself. ' +
+    'Set background: true to get a jobId immediately and poll get_job_status / get_job_result.',
   riskTier: 'M',
   inputSchema: {
     type: 'object',
@@ -191,13 +260,13 @@ const subfinder_enum = defineTool<SubfinderInput, SubfinderOutput>({
     properties: {
       domain: { type: 'string', minLength: 1, maxLength: 253 },
       sources: { type: 'array', items: { type: 'string' }, maxItems: MAX_SOURCES },
-      recursive: { type: 'boolean' }
+      recursive: { type: 'boolean' },
+      background: { type: 'boolean', description: 'Run in the background and return a jobId immediately instead of blocking. Poll get_job_status / get_job_result.' }
     },
     additionalProperties: false
   },
   outputSchema: {
     type: 'object',
-    required: ['domain', 'subdomains', 'count', 'rawRef'],
     properties: {
       domain: { type: 'string' },
       subdomains: {
@@ -212,64 +281,31 @@ const subfinder_enum = defineTool<SubfinderInput, SubfinderOutput>({
       rawRef: { type: 'string' },
       truncated: { type: 'boolean' },
       omitted: { type: 'number' },
-      timedOut: { type: 'boolean' }
+      timedOut: { type: 'boolean' },
+      // Background shape (`background: true`): a job handle, no results yet.
+      jobId: { type: 'string' },
+      status: { type: 'string' },
+      target: { type: 'string' }
     }
   },
   parse: (raw) => ({
     domain: domainString(raw),
     sources: sourceList(raw),
-    recursive: bool(raw, 'recursive', false)
+    recursive: bool(raw, 'recursive', false),
+    // Only surfaced when set, so the parsed shape stays minimal.
+    ...(bool(raw, 'background', false) ? { background: true } : {})
   }),
   execute: async (i, ctx) => {
-    assertDomainInScope(ctx, i.domain)
-    const args = buildArgs(i)
-    const run = await runSubfinder(args)
-    const found = parseSubfinderOutput(run.stdout)
-
-    // Persist before any error path so a failed/timed-out enumeration is still
-    // evidence the agent (and the operator) can inspect.
-    const rawRef = await ctx.traces.save(
-      'trace',
-      JSON.stringify({
-        tool: 'subfinder_enum',
-        argv: ['subfinder', ...args],
-        exitCode: run.exitCode,
-        timedOut: run.timedOut,
-        stdout: run.stdout,
-        stderr: run.stderr
-      })
-    )
-
-    if (run.timedOut && found.length === 0) {
-      throw new ToolExecError(
-        `subfinder timed out after ${SUBFINDER_TIMEOUT_MS / 1000}s with no output — ` +
-          `narrow the run with "sources" or drop "recursive" and retry (raw: ${rawRef})`
+    // No `target` hook (the subtree gate lives in the body); the domain is only
+    // a label on the job record.
+    const target = i.domain
+    if (i.background === true) {
+      const job = await jobStore.start('subfinder_enum', target, async (handle) =>
+        runHeavy(i, ctx, handle.signal)
       )
+      return { jobId: job.id, status: job.status, target }
     }
-    if (!run.timedOut && run.exitCode !== null && run.exitCode !== 0 && found.length === 0) {
-      const detail = clampString(run.stderr.trim(), 300) || '<no stderr>'
-      throw new ToolExecError(
-        `subfinder exited ${run.exitCode} without results: ${detail} (raw: ${rawRef})`,
-        false
-      )
-    }
-
-    const { items, omitted } = found.length > MAX_SUBDOMAINS
-      ? { items: found.slice(0, MAX_SUBDOMAINS), omitted: found.length - MAX_SUBDOMAINS }
-      : { items: found, omitted: 0 }
-
-    const output: SubfinderOutput = {
-      domain: i.domain,
-      subdomains: items,
-      count: found.length,
-      rawRef
-    }
-    if (omitted > 0) {
-      output.truncated = true
-      output.omitted = omitted
-    }
-    if (run.timedOut) output.timedOut = true // partial list, killed at the cap
-    return output
+    return runHeavy(i, ctx)
   }
 })
 

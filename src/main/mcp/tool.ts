@@ -71,6 +71,15 @@ export interface ToolContext {
     stop(): unknown
     getState(): unknown
   }
+  /** Runs another registered tool through the FULL pipeline (parse → audit
+   *  intent → scope → execute → audit outcome). Backs background jobs: a job's
+   *  work is an ordinary tool call, so it must pass the same gates as a
+   *  foreground one rather than reaching a handler directly. Optional — absent
+   *  on surfaces with no registry (unit tests, smoke). */
+  invokeTool?: (
+    name: string,
+    params: unknown
+  ) => Promise<{ ok: boolean; output?: unknown; error?: string }>
   /** Saved-request store + send core (§11.1). Optional — present in the real app. */
   repeater?: {
     list(): unknown
