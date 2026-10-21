@@ -112,6 +112,26 @@ export type SettingsTestResult = {
   models?: string[]
 }
 
+// Persisted allowlist for brokered external binaries (run_tool). Mirrors
+// src/main/toolSettings.ts; kept structural so the preload never imports
+// node-only main code.
+export type ExternalToolSettings = {
+  /** PATH-resolved binary names the agent may spawn. Never paths. */
+  allowlist: string[]
+  /** Broker default timeout for a run that omits its own cap. */
+  defaultTimeoutMs: number
+  /** Broker default per-stream capture cap. */
+  maxOutputBytes: number
+}
+
+/** Result of one `which`/`where` install check (Settings ▸ External tools). */
+export type ExternalToolProbe = {
+  name: string
+  installed: boolean
+  resolvedPath?: string
+  versionHint?: string
+}
+
 // Reads the app version from main synchronously at preload time so the Settings
 // panel renders it without a placeholder flash. Falls back to '' if the channel
 // isn't up yet (the UI degrades to "unknown version").
@@ -168,6 +188,16 @@ const api = {
     // populate the model dropdowns instead of a hand-maintained list.
     listModels: (): Promise<{ providers: Array<{ id: string; models: string[] }> }> =>
       ipcRenderer.invoke('settings:list-models')
+  },
+  externalTools: {
+    // Persisted external-binary allowlist (readback on modal open).
+    get: (): Promise<ExternalToolSettings> => ipcRenderer.invoke('external-tools:get'),
+    // Persist the full object. Validated in main; never throws, reports in-band.
+    set: (settings: ExternalToolSettings): Promise<SettingsSetResult> =>
+      ipcRenderer.invoke('external-tools:set', settings),
+    // `which`/`where` each candidate (argv-only, 2s cap). Never runs the binary.
+    probe: (candidates: string[]): Promise<ExternalToolProbe[]> =>
+      ipcRenderer.invoke('external-tools:probe', candidates)
   },
   target: {
     setBounds: (bounds: Bounds): Promise<void> => ipcRenderer.invoke('target:set-bounds', bounds),

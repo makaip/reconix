@@ -9,7 +9,12 @@ import { str, optStr, strArray, num, urlString } from '../validate'
 import { submitForm } from './submitForm'
 import { clampString } from '../limits'
 import type { HttpRequestSpec } from '../cdp'
-import { spawn } from 'node:child_process'
+import { RUN_TOOL_MAX_OUTPUT, RUN_TOOL_TIMEOUT_MS, runTool } from './runTool'
+import { ALLOWLIST_ENV_VAR, resolveToolPolicy } from '../../toolSettings'
+
+// Kept as a named export for compatibility: probes.ts used to own the
+// process-tree killer. The implementation now lives in runTool.ts.
+export { killProcessTree, RUN_TOOL_MAX_OUTPUT, RUN_TOOL_TIMEOUT_MS } from './runTool'
 
 function parseRequestSpec(raw: unknown, key: string): HttpRequestSpec {
   const v = (raw as Record<string, unknown>)?.[key]
@@ -380,55 +385,18 @@ const collect_evidence = defineTool<Record<string, never>, unknown>({
 
 // ── run_tool ──────────────────────────────────────────────────────────────────
 // Brokered external binary (§8.6, post-MVP). Implemented as a safe, argv-only
-// runner: no shell, strict allowlist (RECONIX_RUN_TOOL_ALLOWLIST or built-in
-// default), resource/time caps. External binaries are not shipped with Reconix,
-// so this returns a clear error unless an allowlisted binary is installed.
-const RUN_TOOL_ALLOWLIST = (process.env.RECONIX_RUN_TOOL_ALLOWLIST ?? '')
-  .split(',')
-  .map((s) => s.trim())
-  .filter(Boolean)
-const RUN_TOOL_TIMEOUT_MS = 60_000
-const RUN_TOOL_MAX_OUTPUT = 1_000_000
-
-/**
- * Kills the whole process tree. A bare child.kill() only signals the direct
- * child, so a wrapper script (nmap -> sh -> helper, any `sh -c`) leaves
- * grandchildren running past the timeout. On POSIX the child is spawned
- * detached, which makes it a process-group leader, so a negative pid signals
- * the group; on Windows taskkill /T walks the tree.
- */
-export function killProcessTree(child: import('node:child_process').ChildProcess): void {
-  const pid = child.pid
-  if (pid === undefined) return
-  if (process.platform === 'win32') {
-    try {
-      const killer = spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true })
-      killer.on('error', () => {
-        try { child.kill('SIGKILL') } catch { /* already gone */ }
-      })
-    } catch {
-      try { child.kill('SIGKILL') } catch { /* already gone */ }
-    }
-    return
-  }
-  try {
-    process.kill(-pid, 'SIGKILL')
-  } catch {
-    try { child.kill('SIGKILL') } catch { /* already gone */ }
-  }
-}
-
-/** Appends a chunk without exceeding the byte cap; returns the new total. */
-function appendCapped(chunks: Buffer[], total: number, chunk: Buffer): number {
-  if (total >= RUN_TOOL_MAX_OUTPUT) return total
-  const take = Math.min(chunk.length, RUN_TOOL_MAX_OUTPUT - total)
-  chunks.push(chunk.subarray(0, take))
-  return total + take
-}
+// runner: no shell, strict allowlist, resource/time caps. External binaries are
+// not shipped with Reconix, so this returns a clear error unless an allowlisted
+// binary is installed.
+//
+// The allowlist is resolved per call from the persisted Settings ▸ External
+// tools list unioned with the deployment-level RECONIX_RUN_TOOL_ALLOWLIST env
+// var (see toolSettings.ts). Nothing is allowlisted by default.
 
 const run_tool = defineTool<{ binary: string; args?: string[]; timeoutMs?: number }, unknown>({
   name: 'run_tool',
-  description: 'Run an allowlisted external binary (argv only, no shell). Tier D — gated. Post-MVP: requires an installed binary and an entry in RECONIX_RUN_TOOL_ALLOWLIST.',
+  description:
+    'Run an allowlisted external binary (argv only, no shell). Tier D — gated. Requires an installed binary and an entry in Settings ▸ External tools (or RECONIX_RUN_TOOL_ALLOWLIST).',
   riskTier: 'D',
   inputSchema: {
     type: 'object',
@@ -455,70 +423,18 @@ const run_tool = defineTool<{ binary: string; args?: string[]; timeoutMs?: numbe
     return { binary, args, timeoutMs }
   },
   execute: async (i) => {
-    if (RUN_TOOL_ALLOWLIST.length === 0 || !RUN_TOOL_ALLOWLIST.includes(i.binary)) {
+    const policy = await resolveToolPolicy()
+    if (!policy.allowlist.includes(i.binary)) {
       throw new ToolExecError(
-        `run_tool: "${i.binary}" is not allowlisted. Set RECONIX_RUN_TOOL_ALLOWLIST (comma-separated) to enable. ` +
-          '§8.6 requires a sandboxed broker; this build runs argv-only with no allowlist by default.'
+        `run_tool: "${i.binary}" is not allowlisted. Add it under Settings ▸ External tools, or set ` +
+          `${ALLOWLIST_ENV_VAR} (comma-separated) to enable it. §8.6 requires a sandboxed broker; ` +
+          'this build runs argv-only with no allowlist by default.'
       )
     }
-    const timeout = i.timeoutMs ?? RUN_TOOL_TIMEOUT_MS
-    return new Promise((resolve, reject) => {
-      const child = spawn(i.binary, i.args ?? [], {
-        shell: false,
-        stdio: ['ignore', 'pipe', 'pipe'],
-        // POSIX: own process group so timeout can signal the whole tree.
-        detached: process.platform !== 'win32',
-        windowsHide: true
-      })
-      const stdoutChunks: Buffer[] = []
-      const stderrChunks: Buffer[] = []
-      let stdoutBytes = 0
-      let stderrBytes = 0
-      let killed = false
-      let settled = false
-      let grace: NodeJS.Timeout | null = null
-
-      const finish = (code: number | null): void => {
-        if (settled) return
-        settled = true
-        clearTimeout(timer)
-        if (grace) clearTimeout(grace)
-        // Decode once, after all chunks are in: per-chunk slicing split
-        // multi-byte UTF-8 sequences at the cap and produced mojibake.
-        resolve({
-          exitCode: code,
-          stdout: Buffer.concat(stdoutChunks).toString('utf8'),
-          stderr: Buffer.concat(stderrChunks).toString('utf8'),
-          stdoutTruncated: stdoutBytes >= RUN_TOOL_MAX_OUTPUT,
-          stderrTruncated: stderrBytes >= RUN_TOOL_MAX_OUTPUT,
-          timedOut: killed
-        })
-      }
-
-      const timer = setTimeout(() => {
-        killed = true
-        killProcessTree(child)
-        // A grandchild holding the pipes open can delay 'close' forever; report
-        // what we captured rather than leaving the MCP call hanging.
-        grace = setTimeout(() => finish(null), 1_000)
-        grace.unref?.()
-      }, timeout)
-
-      child.stdout.on('data', (chunk: Buffer) => {
-        stdoutBytes = appendCapped(stdoutChunks, stdoutBytes, chunk)
-      })
-      child.stderr.on('data', (chunk: Buffer) => {
-        stderrBytes = appendCapped(stderrChunks, stderrBytes, chunk)
-      })
-      child.on('error', (err) => {
-        if (settled) return
-        settled = true
-        clearTimeout(timer)
-        if (grace) clearTimeout(grace)
-        reject(new ToolExecError(`run_tool: failed to spawn "${i.binary}": ${err.message}`))
-      })
-      child.on('close', (code) => finish(code))
-    })
+    // Persisted broker caps, still bounded by the hard ceilings in runTool.ts.
+    const timeout = i.timeoutMs ?? Math.min(policy.timeoutMs, RUN_TOOL_TIMEOUT_MS)
+    const maxOutputBytes = Math.min(policy.maxOutputBytes, RUN_TOOL_MAX_OUTPUT)
+    return runTool(i.binary, i.args ?? [], { timeoutMs: timeout, maxOutputBytes })
   }
 })
 

@@ -211,3 +211,20 @@
 .settings__row-hint--error {
   color: var(--color-error);
 }
+
+/* External tools: `which`/`where` result next to each binary's toggle. */
+.settings__pill {
+  flex: none;
+  padding: 1px 7px;
+  font-size: var(--text-2xs);
+  line-height: 1.5;
+  color: var(--color-text-faint);
+  background: var(--color-bg-inset);
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+}
+
+.settings__pill--ok {
+  color: var(--color-success);
+  border-color: var(--color-success);
+}
