@@ -147,15 +147,19 @@ for (const port of [4097, 4101]) {
 }
 
 // --- 2. opencode CLI present and runnable ---
+// Warn-only: the packaged app bundles its own copy of OpenCode (downloaded
+// during CI into resources/opencode-<platform>/ by scripts/download-opencode.mjs),
+// and copilot.ts resolves it from process.resourcesPath. A missing binary here
+// only means the dev-mode `opencode serve` spawn will produce a clear
+// runtime error — it does not block the build.
 const opencode = await findOpencode()
 if (opencode.bin) {
   ok(`opencode CLI found (${opencode.version})`)
 } else {
-  fail(
-    'opencode CLI not found on PATH',
-    isWindows
-      ? `install it — https://opencode.ai — then check it with: where opencode  (fix PATH for this shell; tried: ${opencode.tried.join(', ')})`
-      : 'install it — https://opencode.ai — or fix PATH for this shell'
+  warn(
+    'opencode CLI not found on PATH or bundled resources',
+    'install it — https://opencode.ai — or fix PATH for this shell. ' +
+      'The packaged app ships its own copy; this check only affects dev mode.'
   )
 }
 

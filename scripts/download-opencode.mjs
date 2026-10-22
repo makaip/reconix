@@ -16,8 +16,7 @@
  *
  * Windows: upstream does not publish Windows binaries for this repository
  * (only .deb/.rpm/tar.gz), so this script warns and exits 0 there. The app
- * still runs on Windows using a system-installed `opencode` (pre-flight check
- * reports when it is missing).
+ * still runs on Windows using a system-installed `opencode`.
  *
  * Node built-ins only (fetch + fs + child_process); extraction shells out to
  * the system `tar`, which is present on every Linux/macOS CI runner.
@@ -30,7 +29,7 @@
 
 import { execFile } from 'node:child_process'
 import { createWriteStream } from 'node:fs'
-import { chmod, mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { tmpdir } from 'node:os'
@@ -94,9 +93,6 @@ function githubHeaders() {
 function pickAsset(release, target, arch) {
   const wanted =
     target.assets[arch] ||
-    // arm64 Linux CI runners / Apple silicon are the only non-x64 hosts we
-    // expect; anything else falls back to the x86_64 build so the download
-    // still succeeds (Rosetta covers darwin-arm64 in practice anyway).
     target.assets.x64
 
   const asset = (release.assets || []).find((a) => a.name === wanted)
@@ -119,11 +115,43 @@ async function download(url, destPath) {
 }
 
 async function extractTarGz(archive, destDir) {
-  // `tar -xzf <archive> -C <dest> opencode` pulls just the single member we
-  // want, so the release's README.md/LICENSE don't end up as bundled resources.
-  await execFileAsync('tar', ['-xzf', archive, '-C', destDir, 'opencode'], {
+  // Extract the whole tarball, then find the `opencode` binary wherever it
+  // landed inside (GitHub release tarballs often nest it under a
+  // platform-specific subdirectory like opencode-x86_64-unknown-linux-gnu/).
+  await execFileAsync('tar', ['-xzf', archive, '-C', destDir], {
     maxBuffer: 16 * 1024 * 1024,
   })
+
+  // Recursively find a file named 'opencode' or 'opencode.exe' anywhere in destDir.
+  async function findBinary(dir) {
+    const entries = await readdir(dir, { withFileTypes: true })
+    for (const entry of entries) {
+      const full = join(dir, entry.name)
+      if (entry.isDirectory()) {
+        const found = await findBinary(full)
+        if (found) return found
+      } else if (entry.name === 'opencode' || entry.name === 'opencode.exe') {
+        return full
+      }
+    }
+    return null
+  }
+
+  const found = await findBinary(destDir)
+  if (!found) {
+    const listing = (await readdir(destDir, { withFileTypes: true }))
+      .map((e) => `${e.isDirectory() ? 'dir' : 'file '} ${e.name}`)
+      .join('\n  ')
+    fail(`no 'opencode' binary found inside the extracted tarball.\n` +
+      `           contents of ${destDir}:\n  ${listing}`)
+  }
+
+  const destBinary = join(destDir, 'opencode')
+  if (found !== destBinary) {
+    await execFileAsync('mv', [found, destBinary], { windowsHide: true })
+  }
+
+  return destBinary
 }
 
 async function main() {
@@ -145,7 +173,6 @@ async function main() {
   const asset = pickAsset(release, target, arch)
 
   const destDir = join(REPO_ROOT, 'resources', `opencode-${target.key}`)
-  const destBinary = join(destDir, target.binary)
   await mkdir(destDir, { recursive: true })
 
   const tmpDir = await mkdtemp(join(tmpdir(), 'reconix-opencode-'))
@@ -161,6 +188,7 @@ async function main() {
     await rm(tmpDir, { recursive: true, force: true })
   }
 
+  const destBinary = join(destDir, target.binary)
   const info = await stat(destBinary).catch(() => null)
   if (!info || info.size === 0) {
     fail(`extraction produced no binary at ${destBinary}`)
