@@ -345,13 +345,9 @@ class ActiveTabCdpDriver implements CdpDriver {
   }
 }
 
-// There's no "start engagement" flow wiring a real scope config yet (the
-// renderer's agent:start IPC — src/main/session.ts — is UI-side demo
-// scaffolding with a fake task graph, not a real scope). Rather than default
-// to allow-all (which would gut the whole point of scope enforcement) or a
-// hardcoded placeholder host, this scopes every tool call to whatever site
-// is actually open in the active tab right now — re-derived on every check,
-// so switching tabs re-scopes automatically.
+// Scopes every tool call to whatever site is actually open in the active
+// tab right now — re-derived on every check, so switching tabs re-scopes
+// automatically.
 class ActiveTabScope implements ScopeEnforcer {
   private host: string | null = null
 

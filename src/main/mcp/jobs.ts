@@ -1,4 +1,4 @@
-// Background job store (ARCHITECTURE §8.6 / §6.2).
+// Background job store (ARCHITECTURE §8 item 6 / §6.2).
 //
 // A long-running tool (an nmap sweep, a nuclei run, a crawl) must not block the
 // agent's MCP call for minutes. The store turns such a call into a Job with an
