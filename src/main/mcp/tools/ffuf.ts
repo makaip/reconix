@@ -1,4 +1,4 @@
-// External-binary wrapper: ffuf content discovery (ARCHITECTURE §8.6 — brokered
+// External-binary wrapper: ffuf content discovery (ARCHITECTURE §8 item 6 — brokered
 // external binaries). Same rules as run_tool: argv-only (no shell), scope-checked
 // before spawn, hard wall-clock cap, and no wordlist/URL value is ever
 // interpolated into a command line. ffuf is not shipped with Reconix, so a

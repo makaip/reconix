@@ -1,4 +1,4 @@
-// Shared argv-only external-binary runner (ARCHITECTURE §8.6).
+// Shared argv-only external-binary runner (ARCHITECTURE §8 item 6).
 //
 // Every CLI wrapper (run_tool, nuclei_scan, ffuf_fuzz, nmap_scan,
 // subfinder_enum) used to carry its own near-identical spawn/kill/capture
