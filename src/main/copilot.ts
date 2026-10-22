@@ -38,8 +38,8 @@
 // versioned source of truth, and get synced into the global config dir on
 // every app start — cwd becomes the sandbox.
 
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { execFileSync, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { existsSync, readFileSync } from 'node:fs'
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import { resolveQuestion, setQuestionSender } from './questionBridge'
 import { homedir } from 'node:os'
@@ -121,6 +121,106 @@ const MCP_PORT = 4102
 // `opencode serve` being up says nothing about the model being up, so without
 // this the indicator would sit on "ready" against a dead backend.
 const PROVIDER_PROBE_INTERVAL_MS = 15_000
+
+// ── OpenCode binary resolution ───────────────────────────────────────────────
+// A shipped build carries its own OpenCode binary under resources/ so the app
+// never depends on the user's PATH (or on npm being installed at all). Dev
+// runs fall back to a PATH lookup, which is what has always worked there.
+//
+// Layouts accepted, in preference order — the per-platform directory is what
+// packaging should emit; the flat `resources/opencode/` variant matches the
+// simplest `extraResources` glob and older packaged trees:
+//   resources/opencode-linux/opencode      resources/opencode/opencode
+//   resources/opencode-mac/opencode        resources/opencode/opencode
+//   resources/opencode-win/opencode.exe    resources/opencode/opencode.exe
+export class OpenCodeNotFoundError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'OpenCodeNotFoundError'
+  }
+}
+
+/** Bundled binary paths for this platform, in preference order. */
+export function bundledOpenCodePaths(): string[] {
+  const layouts: Array<[string, string]> =
+    process.platform === 'win32'
+      ? [
+          ['opencode-win', 'opencode.exe'],
+          ['opencode', 'opencode.exe']
+        ]
+      : process.platform === 'darwin'
+        ? [
+            ['opencode-mac', 'opencode'],
+            ['opencode', 'opencode']
+          ]
+        : [
+            ['opencode-linux', 'opencode'],
+            ['opencode', 'opencode']
+          ]
+  // process.resourcesPath is undefined outside Electron (e.g. vitest); joining
+  // would throw, so resolve each path defensively.
+  return layouts.map(([dir, file]) =>
+    process.resourcesPath ? join(process.resourcesPath, dir, file) : join(dir, file)
+  )
+}
+
+/** PATH candidates for this platform, in preference order. */
+export function pathOpenCodeCandidates(): string[] {
+  return process.platform === 'win32'
+    ? ['opencode', 'opencode.cmd', 'opencode.exe']
+    : ['opencode']
+}
+
+/** True when a binary shipped with the app exists — never throws, so callers
+ *  (and tests) can probe availability without handling OpenCodeNotFoundError. */
+export function isBundledBinaryAvailable(): boolean {
+  try {
+    return bundledOpenCodePaths().some((candidate) => existsSync(candidate))
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Absolute path (or PATH name) of the OpenCode CLI to spawn. Synchronous by
+ * design: it runs on the `opencode serve` startup path, where the caller wants
+ * a plain value, and the probes are a stat plus one cheap `--version` run.
+ */
+export function resolveOpenCodeBinary(): string {
+  const bundled = bundledOpenCodePaths()
+  for (const candidate of bundled) {
+    if (existsSync(candidate)) return candidate
+  }
+
+  const onPath = pathOpenCodeCandidates()
+  for (const candidate of onPath) {
+    try {
+      // Trust only a binary that actually runs: a stale/partial file on PATH or
+      // a .cmd shim without a backing node process would otherwise blow up at
+      // spawn time with a far less actionable error.
+      execFileSync(candidate, ['--version'], {
+        stdio: 'ignore',
+        timeout: 5_000,
+        windowsHide: true
+      })
+      return candidate
+    } catch {
+      // Not on PATH (or not runnable) — try the next candidate.
+    }
+  }
+
+  const lines = [
+    'OpenCode is required but not found. Install it: https://opencode.ai — or fix PATH for this shell.'
+  ]
+  if (process.platform === 'win32') {
+    lines.push(
+      'On Windows: run `npm install -g opencode`, then `where opencode` to confirm it is on PATH.'
+    )
+  }
+  lines.push('Bundled paths tried:', ...bundled.map((p) => `  - ${p}`))
+  lines.push('PATH candidates tried:', ...onPath.map((p) => `  - ${p}`))
+  throw new OpenCodeNotFoundError(lines.join('\n'))
+}
 
 // ── spawned `opencode serve` lifecycle ───────────────────────────────────────
 // Processes we've spawned and must not leave behind. A module-level set plus a
@@ -997,6 +1097,10 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
   }
 
   async function spawnServer(): Promise<{ baseUrl: string; password: string }> {
+    // Pre-flight: resolve before any of the (slower) config/env work so a build
+    // with no binary fails with the install/path message, not a spawn ENOENT.
+    const bin = resolveOpenCodeBinary()
+    console.log('[copilot] using OpenCode binary:', bin)
     await syncGlobalOpenCodeConfig()
     const sandboxDir = await resolveSandboxDir()
     // reconix.env carries the remote-vLLM connection. Parse it in Node and hand
@@ -1030,7 +1134,7 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
     delete envFromFile.OPENCODE_PORT
     return new Promise((resolve, reject) => {
       const proc = spawn(
-        'opencode',
+        bin,
         ['serve', '--hostname', HOST, '--port', String(OPENCODE_PORT)],
         {
           // The scratch sandbox, NOT app.getAppPath() (the Reconix repo) and
@@ -1044,8 +1148,9 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
           // (see signalGroup); without this a clean quit can leave it dangling.
           // Windows has no such concept, hence the platform guard.
           detached: process.platform !== 'win32',
-          // Windows only finds `opencode` via its npm .cmd shim through the
-          // shell; on POSIX the executable is resolved from PATH directly.
+          // Windows only launches a bare `opencode` (its npm .cmd shim) through
+          // the shell, and a bundled .exe is fine there too; on POSIX `bin` is
+          // an absolute path or a PATH name that execs directly.
           shell: process.platform === 'win32'
         }
       )
