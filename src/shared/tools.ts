@@ -9,9 +9,8 @@
 
 import type { JsonSchema } from '../tools/schema'
 
-// Legacy tier vocabulary from the removed mock session manager (§5.E): capability
-// tools declare these string tiers, and ToolTier adds the pure-compute 'processing'
-// tier. Kept local now that src/shared/agent.ts is gone.
+// Capability risk tiers for pure-compute tools. ToolTier adds the pure-compute
+// 'processing' tier.
 export type CapabilityRiskTier = 'read-only' | 'mutating' | 'destructive'
 
 /** The tier vocabulary §5.E allows for pure-compute tools: R (read-only) or P (processing). */
