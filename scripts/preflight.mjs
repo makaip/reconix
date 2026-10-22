@@ -91,10 +91,28 @@ async function pidsOnPort(port) {
 // Windows ships npm CLI shims (`opencode.cmd`) as well as native binaries
 // (`opencode.exe`), and the bare name only resolves through cmd.exe, hence
 // shell:true on win32. On Unix a single `opencode` lookup is enough.
+//
+// During CI the download-opencode.mjs step pre-fetches the standalone binary
+// into resources/opencode-<platform>/ (Linux/macOS only — Windows has no
+// standalone release), so check that bundled location before falling back to PATH.
 async function findOpencode() {
   const candidates = isWindows ? ['opencode', 'opencode.cmd', 'opencode.exe'] : ['opencode']
   const opts = isWindows ? { windowsHide: true, shell: true } : { windowsHide: true }
   const tried = []
+
+  // 1. Bundled binary downloaded by scripts/download-opencode.mjs during CI.
+  const bundled = join(repoRoot, 'resources', `opencode-${isWindows ? 'win' : process.platform === 'darwin' ? 'mac' : 'linux'}`, isWindows ? 'opencode.exe' : 'opencode')
+  if (existsSync(bundled)) {
+    tried.push(`bundled: ${bundled}`)
+    try {
+      const { stdout } = await execFileAsync(bundled, ['--version'], opts)
+      return { bin: bundled, version: stdout.trim() }
+    } catch (e) {
+      tried.push(`bundled ${bundled} (${e?.code ?? 'failed'})`)
+    }
+  }
+
+  // 2. PATH lookup.
   for (const bin of candidates) {
     try {
       const { stdout } = await execFileAsync(bin, ['--version'], opts)
@@ -151,7 +169,7 @@ if (!envKeyPresent && existsSync(envPath)) {
 if (envKeyPresent) {
   ok('GOOGLE_GENERATIVE_AI_API_KEY is set (env or .env)')
 } else {
-  fail('GOOGLE_GENERATIVE_AI_API_KEY is missing', `add it to ${envPath} (gitignored) — GOOGLE_GENERATIVE_AI_API_KEY=<key>`)
+  warn('GOOGLE_GENERATIVE_AI_API_KEY is missing', `add it to ${envPath} (gitignored) — GOOGLE_GENERATIVE_AI_API_KEY=<key>. Needed only at runtime for the dom-analyzer/evaluator; not required for build or typecheck.`)
 }
 
 // --- 4. opencode.json parses and references real agent files ---
