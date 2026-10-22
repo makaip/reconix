@@ -35,6 +35,10 @@ jobs:
 
       - run: npm ci
 
+      - name: Download OpenCode binary (bundle into app)
+        if: runner.os != 'Windows'
+        run: node scripts/download-opencode.mjs
+
       - name: Typecheck
         run: npm run typecheck
 

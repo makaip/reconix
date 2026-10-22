@@ -6,6 +6,15 @@ directories:
 files:
   - out/**/*
   - package.json
+extraResources:
+  # Bundled OpenCode standalone binary (downloaded by scripts/download-opencode.mjs
+  # during CI). Copilot's resolveOpenCodeBinary() checks these paths first,
+  # falling back to PATH. Windows has no standalone binary published, so only
+  # Linux and macOS entries exist here.
+  - from: "resources/opencode-linux/opencode"
+    to: "opencode/linux/opencode"
+  - from: "resources/opencode-mac/opencode"
+    to: "opencode/mac/opencode"
   # Runtime config/assets read via app.getAppPath() at runtime. glob patterns
   # (no leading ./) so electron-builder resolves them from the project root on
   # every platform.
