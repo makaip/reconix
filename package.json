@@ -1,7 +1,7 @@
 {
   "name": "reconix",
   "productName": "Reconix",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "AI-driven penetration testing browser",
   "main": "./out/main/index.cjs",
   "author": "",
