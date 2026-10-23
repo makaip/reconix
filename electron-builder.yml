@@ -41,9 +41,12 @@ publish:
   owner: makaip
   repo: reconix
   releaseType: release
-  # Never publish implicitly on `electron-builder` runs; use `--publish always`
-  # (or the dist:* scripts) explicitly to upload.
-  publishAutoUpdate: false
+  # NOTE: do not set `publishAutoUpdate: false` here. It suppresses
+  # latest.yml / latest-mac.yml / latest-linux.yml, which electron-updater
+  # needs to see new versions. Metadata is written during the build and
+  # uploaded by the release workflow's publish job.
+  # Uploads are never triggered implicitly: the workflow builds with
+  # `--publish never` and does the upload itself (with retries).
 
 mac:
   category: public.app-category.developer-tools
@@ -67,6 +70,15 @@ win:
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
+  # The global artifactName would give the installer and the portable build the
+  # SAME filename (both are .exe), so one silently overwrote the other and the
+  # release shipped a single ambiguous executable. Give each target its own
+  # name. latest.yml points at the NSIS installer, so that name is what
+  # electron-updater downloads.
+  artifactName: ${productName}-${version}-${os}-${arch}-Setup.${ext}
+
+portable:
+  artifactName: ${productName}-${version}-${os}-${arch}-Portable.${ext}
 
 linux:
   category: Development

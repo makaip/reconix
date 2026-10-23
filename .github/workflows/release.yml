@@ -1,12 +1,23 @@
 name: Release
 
 # Builds and publishes a GitHub Release (with auto-update metadata) whenever a
-# version tag is pushed. Each OS runner produces its own installer; electron-
-# builder uploads them all to the same release, so the in-app auto-updater
-# (electron-updater) can pick the right artifact per platform.
+# version tag is pushed.
+#
+# Build and publish are deliberately split into two jobs:
+#   - `build` (per OS) only compiles installers and uploads them as workflow
+#     artifacts. It never touches the GitHub API.
+#   - `publish` (single job, after all builds succeed) downloads every
+#     artifact and uploads them to one release with `gh release upload
+#     --clobber`, retrying each file.
+#
+# Why: letting electron-builder upload directly from each runner meant three
+# processes racing on the same release, and a single slow/large upload (the
+# Windows .exe) killed the whole job with `408 Request Timeout` *after* it had
+# already created a half-populated release. Centralising the upload gives
+# per-file retries and deterministic asset replacement.
 #
 # Usage:
-#   git tag v0.0.2 && git push origin v0.0.2
+#   git tag v0.2.0 && git push origin v0.2.0
 #
 # The version comes from package.json — bump it before tagging.
 
@@ -15,17 +26,22 @@ on:
     tags:
       - 'v*'
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: write
 
 jobs:
   build:
-    name: Build & publish (${{ matrix.os }})
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
         os: [windows-latest, macos-latest, ubuntu-latest]
-    runs-on: ${{ matrix.os }}
 
     steps:
       - name: Checkout
@@ -34,7 +50,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       - name: Install dependencies
@@ -49,7 +65,91 @@ jobs:
       - name: Preflight
         run: node scripts/preflight.mjs
 
-      - name: Build & publish
+      # Build only — publishing is the `publish` job's responsibility.
+      - name: Build installers
+        run: npm run dist -- --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+
+      - name: Upload installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: installers-${{ matrix.os }}
+          path: |
+            release/*.exe
+            release/*.dmg
+            release/*.zip
+            release/*.AppImage
+            release/*.blockmap
+            release/latest*.yml
+          if-no-files-found: error
+          retention-days: 3
+
+  publish:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout (for package.json version guard)
+        uses: actions/checkout@v4
+
+      - name: Verify tag matches package.json
+        run: |
+          pkg="v$(node -p "require('./package.json').version")"
+          if [ "$pkg" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match package.json version $pkg" >&2
+            exit 1
+          fi
+
+      - name: Download all installers
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List assets
+        run: ls -lh dist
+
+      - name: Publish assets to GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npm run dist -- --publish always
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          # Start from a clean release: a previous attempt may have left a
+          # partially uploaded (or zero-byte) asset behind — deleting the tag
+          # to re-run this workflow also leaves the old release pointing at a
+          # now-missing tag, which GitHub surfaces as a draft. Delete either
+          # way; the tag itself is never removed without --cleanup-tag.
+          echo "Removing any existing release for $TAG (if present)"
+          gh release delete "$TAG" --yes 2>/dev/null || true
+
+          gh release create "$TAG" \
+            --title "Reconix $TAG" \
+            --generate-notes \
+            --verify-tag
+
+          for file in dist/*; do
+            [ -f "$file" ] || continue
+            name="$(basename "$file")"
+            uploaded=0
+            for attempt in 1 2 3 4 5; do
+              echo "Uploading $name (attempt $attempt)..."
+              if gh release upload "$TAG" "$file" --clobber; then
+                uploaded=1
+                break
+              fi
+              echo "Upload of $name failed; retrying in $((attempt * 10))s" >&2
+              sleep $((attempt * 10))
+            done
+            if [ "$uploaded" -ne 1 ]; then
+              echo "Giving up on $name after 5 attempts" >&2
+              exit 1
+            fi
+          done
+
+          echo "Published assets:"
+          gh release view "$TAG" --json assets --jq '.assets[].name'
