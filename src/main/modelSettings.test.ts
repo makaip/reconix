@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import {
   DEFAULT_MODEL_SETTINGS,
   getModelSpec,
+  getOrchestratorFallbackModel,
   load,
   save,
   testConnection,
@@ -17,6 +18,7 @@ const tempDir = (): string => mkdtempSync(join(tmpdir(), 'reconix-settings-'))
 const configured: ModelSettings = {
   orchestrator: { provider: 'gemini', model: 'gemini-2.5-pro' },
   domAnalyzer: { provider: 'opencode', model: 'glm-5.3-flash-free' },
+  orchestratorFallback: { provider: 'opencode', model: 'glm-5.3-flash-free' },
   reasoning: 'high',
   customBackends: [
     { id: 'my-openai', baseUrl: 'https://api.example.test/v1', apiKey: 'sk-secret', model: 'gpt-4o' }
@@ -96,6 +98,45 @@ describe('modelSettings', () => {
     })
     expect(result.ok).toBe(true)
     expect(result.settings?.orchestrator.baseUrl).toBe('http://127.0.0.1:8000/v1')
+  })
+})
+
+describe('orchestratorFallback', () => {
+  it('getOrchestratorFallbackModel returns the fallback spec', () => {
+    expect(getOrchestratorFallbackModel(configured)).toBe('opencode/glm-5.3-flash-free')
+  })
+
+  it('getOrchestratorFallbackModel returns undefined when no fallback is set', () => {
+    const { orchestratorFallback, ...noFallback } = configured
+    expect(getOrchestratorFallbackModel(noFallback as ModelSettings)).toBeUndefined()
+  })
+
+  it('validateModelSettings rejects an invalid fallback target', () => {
+    const result = validateModelSettings({
+      ...configured,
+      orchestratorFallback: { provider: '', model: 'x' }
+    })
+    expect(result.ok).toBe(false)
+    expect(result.error).toMatch(/provider/)
+  })
+
+  it('load migrates settings missing orchestratorFallback onto the default', async () => {
+    const dir = tempDir()
+    // Write settings without orchestratorFallback
+    writeFileSync(
+      join(dir, 'model-settings.json'),
+      JSON.stringify({
+        orchestrator: { provider: 'vllm-orchestrator', model: 'orchestrator-model' },
+        domAnalyzer: { provider: 'opencode', model: 'glm-5.3-flash-free' },
+        reasoning: 'medium',
+        customBackends: []
+      })
+    )
+    const settings = await load(dir)
+    expect(settings.orchestratorFallback).toEqual({
+      provider: 'opencode',
+      model: 'glm-5.3-flash-free'
+    })
   })
 })
 

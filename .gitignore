@@ -45,3 +45,4 @@ CLAUDE.md
 site/node_modules
 site/.next
 site/out
+resources/ .gitignore
