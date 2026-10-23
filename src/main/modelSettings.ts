@@ -39,6 +39,10 @@ export interface CustomBackend {
 export interface ModelSettings {
   orchestrator: ModelTarget
   domAnalyzer: ModelTarget
+  /** Fallback model used when the orchestrator's primary backend is unavailable
+   *  (e.g. provider.no-route, dead vLLM server). Keep it a free OpenCode model
+   *  so reconix never loses its orchestrator to a third-party outage. */
+  orchestratorFallback?: ModelTarget
   reasoning: ReasoningEffort
   customBackends: CustomBackend[]
 }
@@ -58,6 +62,8 @@ const SETTINGS_FILE = 'model-settings.json'
 export const DEFAULT_MODEL_SETTINGS: ModelSettings = {
   orchestrator: { provider: 'vllm-orchestrator', model: 'orchestrator-model' },
   domAnalyzer: { provider: 'opencode', model: 'glm-5.3-flash-free' },
+  /** Free OpenCode Zen model — proven routable, good tool-calling, zero cost. */
+  orchestratorFallback: { provider: 'opencode', model: 'glm-5.3-flash-free' },
   reasoning: 'medium',
   customBackends: []
 }
@@ -107,6 +113,15 @@ export function getModelSpec(settings: ModelSettings, role: ModelRole): string {
   return `${target.provider}/${target.model}`
 }
 
+/** Returns the orchestrator fallback model spec (`${provider}/${model}`), or
+ *  undefined when no fallback is configured. Used by the copilot to retry a
+ *  failed session against a known-good free model. */
+export function getOrchestratorFallbackModel(settings: ModelSettings): string | undefined {
+  const fb = settings.orchestratorFallback
+  if (!fb) return undefined
+  return `${fb.provider}/${fb.model}`
+}
+
 function validateTarget(raw: unknown, label: string): ModelTarget | string {
   if (!isRecord(raw)) return `${label} must be an object`
   if (!isNonEmptyString(raw.provider)) return `${label}.provider must be a non-empty string`
@@ -133,6 +148,13 @@ export function validateModelSettings(input: unknown): SettingsResult {
   if (typeof orchestrator === 'string') return { ok: false, error: orchestrator }
   const domAnalyzer = validateTarget(input.domAnalyzer, 'domAnalyzer')
   if (typeof domAnalyzer === 'string') return { ok: false, error: domAnalyzer }
+
+  let orchestratorFallback: ModelTarget | undefined
+  if (input.orchestratorFallback !== undefined) {
+    const fb = validateTarget(input.orchestratorFallback, 'orchestratorFallback')
+    if (typeof fb === 'string') return { ok: false, error: fb }
+    orchestratorFallback = fb
+  }
 
   if (!REASONING_LEVELS.includes(input.reasoning as ReasoningEffort)) {
     return { ok: false, error: `reasoning must be one of ${REASONING_LEVELS.join('|')}` }
@@ -168,6 +190,7 @@ export function validateModelSettings(input: unknown): SettingsResult {
     settings: {
       orchestrator,
       domAnalyzer,
+      orchestratorFallback,
       reasoning: input.reasoning as ReasoningEffort,
       customBackends
     }
@@ -207,6 +230,15 @@ export async function load(userDataPath: string): Promise<ModelSettings> {
   // onto a working default so the DomSummaryWatcher stops failing every page.
   if (settings.domAnalyzer.provider === 'opencode' && settings.domAnalyzer.model === 'grok-code') {
     settings.domAnalyzer = { provider: 'opencode', model: 'glm-5.3-flash-free' }
+  }
+  // Migration: installs written before the fallback field existed get a free
+  // OpenCode model so the orchestrator never loses its backend to a third-party
+  // outage (provider.no-route, dead vLLM, etc.).
+  if (!settings.orchestratorFallback) {
+    settings.orchestratorFallback = {
+      provider: DEFAULT_MODEL_SETTINGS.orchestratorFallback!.provider,
+      model: DEFAULT_MODEL_SETTINGS.orchestratorFallback!.model
+    }
   }
   return settings
 }

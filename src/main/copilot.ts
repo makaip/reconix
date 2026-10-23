@@ -86,6 +86,7 @@ import { createAuditLogger } from './auditLog'
 import { createHistoryReader } from './history'
 import {
   getModelSpec,
+  getOrchestratorFallbackModel,
   invalidateModelSettingsCache,
   loadModelSettings,
   peekModelSettings,
@@ -1454,65 +1455,87 @@ export function createCopilotBridge(win: BrowserWindow, getNetwork: () => Networ
       // Resolved per session: a model swap applies to the next new chat, never
       // mid-session (the plan's v1 semantics).
       const orchestratorModel = await getOrchestratorModel()
-      const c = createOpenCodeConnector(
-        { baseUrl, password, agent: 'pentest-orchestrator', model: orchestratorModel, requiredMcpServer: 'reconix', requiredMcpUrl: `http://127.0.0.1:${MCP_PORT}/mcp` },
-        {
-          onAgentEvent: (ev: AgentEvent) => {
-            if (responseStartedAt !== null) {
-              const elapsedMs = Math.round(performance.now() - responseStartedAt)
-              if (!firstOutputSeen && (ev.kind === 'message.delta' || ev.kind === 'reasoning.delta' || ev.kind === 'tool.call')) {
-                firstOutputSeen = true
-                console.info('[copilot:latency]', { phase: 'first-output', kind: ev.kind, elapsedMs })
+      const fallbackModel = await getOrchestratorFallbackModel(await loadModelSettings(app.getPath('userData')))
+
+      /** Build a connector for a given model spec and start its session. */
+      const startWithModel = async (model: string): Promise<{ connector: OpenCodeConnector; sessionId: string }> => {
+        const c = createOpenCodeConnector(
+          { baseUrl, password, agent: 'pentest-orchestrator', model, requiredMcpServer: 'reconix', requiredMcpUrl: `http://127.0.0.1:${MCP_PORT}/mcp` },
+          {
+            onAgentEvent: (ev: AgentEvent) => {
+              if (responseStartedAt !== null) {
+                const elapsedMs = Math.round(performance.now() - responseStartedAt)
+                if (!firstOutputSeen && (ev.kind === 'message.delta' || ev.kind === 'reasoning.delta' || ev.kind === 'tool.call')) {
+                  firstOutputSeen = true
+                  console.info('[copilot:latency]', { phase: 'first-output', kind: ev.kind, elapsedMs })
+                }
+                if (ev.kind === 'turn.done' || ev.kind === 'error') {
+                  console.info('[copilot:latency]', { phase: 'turn-finished', elapsedMs })
+                  responseStartedAt = null
+                }
               }
-              if (ev.kind === 'turn.done' || ev.kind === 'error') {
-                console.info('[copilot:latency]', { phase: 'turn-finished', elapsedMs })
-                responseStartedAt = null
+              // A turn boundary is when a run can start or stop, so drop the cached
+              // engagement id here (outside the latency guard: subagent/ambient
+              // turns end without a responseStartedAt window too).
+              if (ev.kind === 'turn.done' || ev.kind === 'error') cachedEngagementId = undefined
+              usage.recordAgentEvent(ev)
+              emitUsage(ev.kind === 'turn.done' || ev.kind === 'error')
+              send('copilot:event', ev)
+              // Fail-flip: a turn erroring out is the first sign the model backend
+              // may have dropped. Probe immediately rather than waiting for the
+              // next poll — the probe is the arbiter, so a non-connectivity error
+              // (e.g. a tool failure) simply confirms 'ready' and nothing changes.
+              if (ev.kind === 'error') void refreshProviderHealth()
+            },
+            persist: (raw: RawEvent, _normalized: AgentEvent | null) => {
+              usage.recordRaw(raw)
+              emitUsage()
+              // Streaming deltas are reconstructable from the durable turn rows and
+              // arrive per token; persisting them would mean one SQLite write per
+              // delta for no audit value. Metering above still sees them.
+              if (TRANSIENT_DELTA_EVENT_TYPES.has(raw.type)) return
+              // Write-through to the §6.4 store: append the raw event verbatim so
+              // the stream has a durable audit record. Best-effort and non-fatal —
+              // a store failure must never re-enter or stall the streaming loop
+              // that owns this callback, so it's swallowed, not thrown.
+              try {
+                db.run(
+                  'INSERT INTO raw_events (id, engagement_id, session_id, type, data_json, ts) VALUES (?, ?, ?, ?, ?, ?)',
+                  [`re_${++rawEventSeq}`, rawEventEngagementId(), rawEventSessionId(raw), raw.type, JSON.stringify(raw), Date.now()]
+                )
+                rawEventWriteFailing = false // burst over — warn again if it recurs
+              } catch (err) {
+                if (!rawEventWriteFailing) {
+                  rawEventWriteFailing = true
+                  console.warn('[copilot:persist] raw event dropped (further drops until the next successful write are not logged)', err)
+                }
               }
-            }
-            // A turn boundary is when a run can start or stop, so drop the cached
-            // engagement id here (outside the latency guard: subagent/ambient
-            // turns end without a responseStartedAt window too).
-            if (ev.kind === 'turn.done' || ev.kind === 'error') cachedEngagementId = undefined
-            usage.recordAgentEvent(ev)
-            emitUsage(ev.kind === 'turn.done' || ev.kind === 'error')
-            send('copilot:event', ev)
-            // Fail-flip: a turn erroring out is the first sign the model backend
-            // may have dropped. Probe immediately rather than waiting for the
-            // next poll — the probe is the arbiter, so a non-connectivity error
-            // (e.g. a tool failure) simply confirms 'ready' and nothing changes.
-            if (ev.kind === 'error') void refreshProviderHealth()
-          },
-          persist: (raw: RawEvent, _normalized: AgentEvent | null) => {
-            usage.recordRaw(raw)
-            emitUsage()
-            // Streaming deltas are reconstructable from the durable turn rows and
-            // arrive per token; persisting them would mean one SQLite write per
-            // delta for no audit value. Metering above still sees them.
-            if (TRANSIENT_DELTA_EVENT_TYPES.has(raw.type)) return
-            // Write-through to the §6.4 store: append the raw event verbatim so
-            // the stream has a durable audit record. Best-effort and non-fatal —
-            // a store failure must never re-enter or stall the streaming loop
-            // that owns this callback, so it's swallowed, not thrown.
-            try {
-              db.run(
-                'INSERT INTO raw_events (id, engagement_id, session_id, type, data_json, ts) VALUES (?, ?, ?, ?, ?, ?)',
-                [`re_${++rawEventSeq}`, rawEventEngagementId(), rawEventSessionId(raw), raw.type, JSON.stringify(raw), Date.now()]
-              )
-              rawEventWriteFailing = false // burst over — warn again if it recurs
-            } catch (err) {
-              if (!rawEventWriteFailing) {
-                rawEventWriteFailing = true
-                console.warn('[copilot:persist] raw event dropped (further drops until the next successful write are not logged)', err)
-              }
-            }
-          },
-          onStatus: (status: ServerStatus) => send('copilot:status', status)
+            },
+            onStatus: (status: ServerStatus) => send('copilot:status', status)
+          }
+        )
+        const sessionId = await c.start()
+        usage.registerSession(sessionId, 'orchestrator')
+        return { connector: c, sessionId }
+      }
+
+      let result: { connector: OpenCodeConnector; sessionId: string }
+      try {
+        result = await startWithModel(orchestratorModel)
+        console.info(`[copilot] orchestrator session using primary model: ${orchestratorModel}`)
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err)
+        console.warn(`[copilot] primary orchestrator model ${orchestratorModel} failed to start session: ${reason}`)
+        if (!fallbackModel) {
+          throw err
         }
-      )
-      const sessionId = await c.start()
+        console.info(`[copilot] falling back to orchestrator model: ${fallbackModel}`)
+        result = await startWithModel(fallbackModel)
+      }
+
+      const { connector: c } = result
       restrictionsInjected = false // fresh session — re-send restrictions on next message
       cachedEngagementId = undefined // fresh session — re-resolve attribution lazily
-      usage.registerSession(sessionId, 'orchestrator')
       connector = c
       return c
     })()
