@@ -37,6 +37,8 @@ jobs:
 
       - name: Download OpenCode binary (bundle into app)
         if: runner.os != 'Windows'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: node scripts/download-opencode.mjs
 
       - name: Typecheck
